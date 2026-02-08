@@ -23,10 +23,12 @@ This project depends on the main branch of the [BeamAI core library](https://git
   - Event-driven with state snapshots
 
 - **Simple Agent**: ReAct Agent based on tool loop
-  - Custom tools and system prompts
-  - Built-in Memory persistence
-  - Complete callback system
-  - Interrupt and resume support
+  - Pure functional API (`new/1` -> `run/2` -> new state)
+  - Custom tools, Plugin loading, system prompts
+  - 8 callback hooks (turn/llm/tool/token/interrupt/resume)
+  - Streaming output (`stream/2`)
+  - Interrupt and resume support (Human-in-the-Loop)
+  - Built-in Memory persistence (`save/1`, `restore/2`)
 
 - **Deep Agent**: Recursive planning Agent based on SubAgent architecture
   - Planner → Executor → Reflector pipeline
@@ -69,70 +71,73 @@ LLM = beamai_chat_completion:create(anthropic, #{
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>
 }),
 
-%% Create Agent state (pure function API)
-{ok, State} = beamai_agent:new(#{
+%% Create Agent (pure functional API, returns immutable state)
+{ok, Agent0} = beamai_agent:new(#{
     system_prompt => <<"You are a helpful assistant.">>,
     llm => LLM
 }),
 
-%% Run Agent
-{ok, Result, _NewState} = beamai_agent:run(State, <<"Hello!">>),
+%% Run Agent (returns result and new state)
+{ok, Result, _Agent1} = beamai_agent:run(Agent0, <<"Hello!">>),
 
 %% View result
-Response = maps:get(final_response, Result).
+Content = maps:get(content, Result).
 ```
 
 ### 3. Simple Agent (Multi-turn Conversation)
 
 ```erlang
-%% Multi-turn conversation through state passing
-{ok, State0} = beamai_agent:new(#{
+%% Multi-turn conversation through state passing, message history auto-accumulates
+{ok, Agent0} = beamai_agent:new(#{
     llm => LLM,
     system_prompt => <<"You are a memory assistant.">>
 }),
-{ok, _, State1} = beamai_agent:run(State0, <<"My name is John">>),
-{ok, Result, _State2} = beamai_agent:run(State1, <<"What's my name?">>).
+{ok, _, Agent1} = beamai_agent:run(Agent0, <<"My name is John">>),
+{ok, Result, _Agent2} = beamai_agent:run(Agent1, <<"What's my name?">>).
 %% Agent will remember user's name is John
+
+%% Query conversation state
+beamai_agent:turn_count(Agent1).    %% => 1
+beamai_agent:messages(Agent1).      %% => message history list
+beamai_agent:last_response(Agent1). %% => last assistant reply
 ```
 
 ### 4. Simple Agent (Using Kernel + Tools)
 
 ```erlang
-%% Create Kernel
-Kernel = beamai_kernel:new(),
-
-%% Register tools via Tool module
-Kernel1 = beamai_kernel:add_tool_module(Kernel, beamai_tool_shell),
-
-%% Or manually define tool functions
-SearchTool = beamai_tool:new(<<"search">>,
-    fun(#{<<"query">> := Query}, _Context) ->
-        {ok, <<"Search result: ", Query/binary>>}
-    end,
-    #{
-        description => <<"Search for information">>,
-        parameters => #{
-            type => object,
-            properties => #{
-                <<"query">> => #{type => string, description => <<"Search keywords">>}
-            },
-            required => [<<"query">>]
-        }
-    }),
-
-Kernel2 = beamai_kernel:add_tools(Kernel1, [SearchTool]),
-
-%% Get tool specs for Agent use
-Tools = beamai_kernel:get_tool_specs(Kernel2),
-
-%% Create Agent with tools
-{ok, State} = beamai_agent:new(#{
-    system_prompt => <<"You are a search assistant.">>,
-    tools => Tools,
-    llm => LLM
+%% Method 1: Define tools via Kernel (pre-built Kernel)
+Kernel0 = beamai_kernel:new(),
+LlmConfig = beamai_chat_completion:create(anthropic, #{
+    api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
+    base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
+    model => <<"glm-4.7">>
+}),
+K1 = beamai_kernel:add_service(Kernel0, LlmConfig),
+K2 = beamai_kernel:add_tool(K1, #{
+    name => <<"get_weather">>,
+    description => <<"Get weather for a city">>,
+    parameters => #{
+        <<"city">> => #{type => string, required => true, description => <<"City name">>}
+    },
+    handler => fun(#{<<"city">> := City}, _Ctx) ->
+        {ok, #{city => City, temp => 25, condition => <<"Sunny">>}}
+    end
 }),
 
-{ok, Result, _} = beamai_agent:run(State, <<"Search for Erlang tutorials">>).
+%% Create Agent with pre-built Kernel
+{ok, Agent0} = beamai_agent:new(#{
+    kernel => K2,
+    system_prompt => <<"You are a weather assistant.">>
+}),
+{ok, Result, _} = beamai_agent:run(Agent0, <<"What's the weather in Beijing?">>).
+
+%% Method 2: Load built-in tool modules via plugins
+{ok, Agent0} = beamai_agent:new(#{
+    llm => LlmConfig,
+    plugins => [beamai_tool_file],
+    system_prompt => <<"You are a file assistant.">>
+}),
+{ok, Result, _} = beamai_agent:run(Agent0, <<"List .erl files in src/">>).
 ```
 
 ### 5. Simple Agent (With Memory Persistence)
@@ -142,20 +147,24 @@ Tools = beamai_kernel:get_tool_specs(Kernel2),
 {ok, _} = beamai_store_ets:start_link(my_store, #{}),
 {ok, Memory} = beamai_memory:new(#{context_store => {beamai_store_ets, my_store}}),
 
-%% Create Agent with Memory (checkpoint auto-saved)
-{ok, State0} = beamai_agent:new(#{
+%% Create Agent with Memory (auto_save enables per-turn auto-save)
+{ok, Agent0} = beamai_agent:new(#{
     llm => LLM,
     system_prompt => <<"You are a persistent assistant.">>,
-    storage => Memory
+    memory => Memory,
+    auto_save => true
 }),
 
-%% Conversation (checkpoint auto-saved)
-{ok, _, State1} = beamai_agent:run(State0, <<"Remember: the password is 12345">>),
-{ok, _, _State2} = beamai_agent:run(State1, <<"OK">>),
+%% Conversation (auto-saved)
+{ok, _, Agent1} = beamai_agent:run(Agent0, <<"Remember: the password is 12345">>),
+{ok, _, _Agent2} = beamai_agent:run(Agent1, <<"OK">>),
+
+%% Manual save
+ok = beamai_agent:save(Agent1),
 
 %% Later restore session
-{ok, RestoredState} = beamai_agent:restore_from_memory(#{llm => LLM}, Memory),
-{ok, Result, _} = beamai_agent:run(RestoredState, <<"What's the password?">>).
+{ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory),
+{ok, Result, _} = beamai_agent:run(RestoredAgent, <<"What's the password?">>).
 %% Agent will remember the password is 12345
 ```
 
@@ -396,31 +405,50 @@ Use beamai_memory for session persistence and time travel:
 {ok, _} = beamai_store_ets:start_link(my_store, #{}),
 {ok, Memory} = beamai_memory:new(#{context_store => {beamai_store_ets, my_store}}),
 
-%% Create Agent with storage (checkpoint auto-saved)
-{ok, State} = beamai_agent:new(#{llm => LLM, storage => Memory}),
-{ok, _, NewState} = beamai_agent:run(State, <<"Hello">>),
+%% Create Agent with memory (auto_save enables per-turn auto-save)
+{ok, Agent0} = beamai_agent:new(#{llm => LLM, memory => Memory, auto_save => true}),
+{ok, _, Agent1} = beamai_agent:run(Agent0, <<"Hello">>),
+
+%% Manual save
+ok = beamai_agent:save(Agent1),
 
 %% Restore session from Memory
-{ok, RestoredState} = beamai_agent:restore_from_memory(#{llm => LLM}, Memory).
+{ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory).
 ```
 
 ### 5. Callbacks
 
-Listen to Agent execution events:
+Listen to 8 events during Agent execution:
 
 ```erlang
-{ok, State} = beamai_agent:new(#{
+{ok, Agent0} = beamai_agent:new(#{
     llm => LLM,
     system_prompt => <<"You are an assistant">>,
     callbacks => #{
-        on_llm_start => fun(Prompts, Meta) ->
-            io:format("LLM call started~n")
+        on_turn_start => fun(Meta) ->
+            io:format("Turn started: ~p~n", [maps:get(turn_count, Meta)])
         end,
-        on_tool_start => fun(ToolName, Args, Meta) ->
-            io:format("Executing tool: ~ts~n", [ToolName])
+        on_turn_end => fun(Meta) ->
+            io:format("Turn ended~n")
         end,
-        on_agent_finish => fun(Result, Meta) ->
-            io:format("Agent completed~n")
+        on_turn_error => fun(Reason, Meta) ->
+            io:format("Turn error: ~p~n", [Reason])
+        end,
+        on_llm_call => fun(Messages, Meta) ->
+            io:format("LLM call: ~B messages~n", [length(Messages)])
+        end,
+        on_tool_call => fun(Name, Args) ->
+            io:format("Tool call: ~s~n", [Name])
+            %% Return {interrupt, Reason} to trigger interrupt
+        end,
+        on_token => fun(Token, Meta) ->
+            io:format("~s", [Token])  %% Streaming token
+        end,
+        on_interrupt => fun(InterruptState, Meta) ->
+            io:format("Agent interrupted~n")
+        end,
+        on_resume => fun(InterruptState, Meta) ->
+            io:format("Agent resumed~n")
         end
     }
 }).
@@ -438,12 +466,12 @@ LLM = beamai_chat_completion:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
-    temperature => 0.7
+    max_tokens => 2048
 }),
 
 %% Configuration can be reused across multiple Agents
-{ok, State1} = beamai_agent:new(#{llm => LLM, system_prompt => <<"Research assistant">>}),
-{ok, State2} = beamai_agent:new(#{llm => LLM, system_prompt => <<"Writing assistant">>}).
+{ok, Agent1} = beamai_agent:new(#{llm => LLM, system_prompt => <<"Research assistant">>}),
+{ok, Agent2} = beamai_agent:new(#{llm => LLM, system_prompt => <<"Writing assistant">>}).
 ```
 
 **Supported Providers:**
@@ -456,6 +484,7 @@ LLM = beamai_chat_completion:create(anthropic, #{
 | `zhipu` | llm_provider_zhipu | OpenAI compatible | Zhipu AI (GLM series) |
 | `bailian` | llm_provider_bailian | DashScope native | Alibaba Cloud Bailian (Qwen series) |
 | `ollama` | llm_provider_ollama | OpenAI compatible | Ollama local models |
+| `mock` | llm_provider_mock | Built-in | Mock LLM for testing |
 
 ### HTTP Backend Configuration
 
@@ -519,8 +548,8 @@ rebar3 shell
 |--------|-------|
 | **OTP Applications (Project)** | 6 |
 | **Core Dependencies (BeamAI)** | 3 |
-| **Source Modules (Project)** | ~70 |
-| **Test Files (Project)** | ~20 |
+| **Source Modules (Project)** | ~80 |
+| **Test Files (Project)** | ~23 |
 
 **Project Applications:**
 - beamai_tools

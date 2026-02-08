@@ -24,188 +24,195 @@ This document provides the main API reference for each module of the BeamAI Fram
 
 ## beamai_agent - Simple Agent
 
-Simple Agent implementation using the ReAct pattern.
+Pure functional ReAct Agent implementation using immutable state passing for multi-turn conversations.
 
-### Lifecycle Management
+### Creating Agent
 
 ```erlang
-%% Start Agent (process mode)
--spec start_link(binary(), map()) -> {ok, pid()} | {error, term()}.
-beamai_agent:start_link(AgentId, Config).
-
-%% Stop Agent
--spec stop(pid()) -> ok.
-beamai_agent:stop(Agent).
+%% Create Agent (returns immutable state)
+-spec new(map()) -> {ok, agent_state()} | {error, term()}.
+beamai_agent:new(Config).
 ```
 
 ### Execution API
 
 ```erlang
-%% Run Agent (process mode)
--spec run(pid(), binary()) -> {ok, map()} | {error, term()}.
-beamai_agent:run(Agent, Input).
+%% Run one conversation turn (returns result and new state)
+-spec run(agent_state(), binary()) ->
+    {ok, run_result(), agent_state()} | {error, term()}.
+beamai_agent:run(Agent, UserMessage).
 
-%% Single execution (pure function mode)
--spec run_once(map(), binary()) -> {ok, map()} | {error, term()}.
-beamai_agent:run_once(Config, Input).
+%% Run with options
+-spec run(agent_state(), binary(), map()) ->
+    {ok, run_result(), agent_state()} | {error, term()}.
+beamai_agent:run(Agent, UserMessage, Opts).
 
-%% Execute with state
--spec run_with_state(state(), binary(), map()) -> {ok, map(), state()} | {error, term()}.
-beamai_agent:run_with_state(State, Input, Opts).
+%% Streaming output
+-spec stream(agent_state(), binary()) ->
+    {ok, run_result(), agent_state()} | {error, term()}.
+beamai_agent:stream(Agent, UserMessage).
+
+-spec stream(agent_state(), binary(), map()) ->
+    {ok, run_result(), agent_state()} | {error, term()}.
+beamai_agent:stream(Agent, UserMessage, Opts).
 ```
 
-### State Management
+### Interrupt and Resume (Human-in-the-Loop)
 
 ```erlang
-%% Create state
--spec create_state(map()) -> {ok, state()}.
--spec create_state(binary(), map()) -> {ok, state()}.
-beamai_agent:create_state(Config).
-beamai_agent:create_state(AgentId, Config).
+%% Resume interrupted Agent
+-spec resume(agent_state(), term()) ->
+    {ok, run_result(), agent_state()} |
+    {interrupt, interrupt_info(), agent_state()} |
+    {error, term()}.
+beamai_agent:resume(Agent, HumanInput).
 
-%% Export/Import state
--spec export_state(state()) -> map().
--spec import_state(map(), map()) -> {ok, state()}.
-beamai_agent:export_state(State).
-beamai_agent:import_state(ExportedData, Config).
+%% Load from Memory and resume
+-spec resume_from_memory(map(), term(), term()) ->
+    {ok, run_result(), agent_state()} |
+    {interrupt, interrupt_info(), agent_state()} |
+    {error, term()}.
+beamai_agent:resume_from_memory(Config, Memory, HumanInput).
+
+%% Check interrupt status
+-spec is_interrupted(agent_state()) -> boolean().
+beamai_agent:is_interrupted(Agent).
+
+-spec get_interrupt_info(agent_state()) -> interrupt_info() | undefined.
+beamai_agent:get_interrupt_info(Agent).
 ```
 
-### Checkpoint Management
+### State Queries
 
 ```erlang
-%% Save checkpoint
--spec save_checkpoint(pid()) -> {ok, binary()} | {error, term()}.
--spec save_checkpoint(pid(), map()) -> {ok, binary()} | {error, term()}.
-beamai_agent:save_checkpoint(Agent).
-beamai_agent:save_checkpoint(Agent, Metadata).
+%% Get Agent ID
+-spec id(agent_state()) -> binary().
+beamai_agent:id(Agent).
 
-%% Load checkpoint
--spec load_checkpoint(pid(), binary()) -> {ok, map()} | {error, term()}.
--spec load_latest_checkpoint(pid()) -> {ok, map()} | {error, term()}.
-beamai_agent:load_checkpoint(Agent, CheckpointId).
-beamai_agent:load_latest_checkpoint(Agent).
+%% Get Agent name
+-spec name(agent_state()) -> binary().
+beamai_agent:name(Agent).
 
-%% Restore from checkpoint
--spec restore_from_checkpoint(pid(), binary()) -> ok | {error, term()}.
-beamai_agent:restore_from_checkpoint(Agent, CheckpointId).
+%% Get conversation message history
+-spec messages(agent_state()) -> [map()].
+beamai_agent:messages(Agent).
 
-%% List checkpoints
--spec list_checkpoints(pid()) -> {ok, [map()]} | {error, term()}.
-beamai_agent:list_checkpoints(Agent).
+%% Get last assistant response
+-spec last_response(agent_state()) -> binary() | undefined.
+beamai_agent:last_response(Agent).
+
+%% Get completed conversation turn count
+-spec turn_count(agent_state()) -> non_neg_integer().
+beamai_agent:turn_count(Agent).
+
+%% Get internal Kernel instance
+-spec kernel(agent_state()) -> beamai_kernel:kernel().
+beamai_agent:kernel(Agent).
 ```
 
-### Callback Management
+### State Modification
 
 ```erlang
-%% Get/Set callbacks
--spec get_callbacks(pid()) -> map().
--spec set_callbacks(pid(), map()) -> ok.
-beamai_agent:get_callbacks(Agent).
-beamai_agent:set_callbacks(Agent, Callbacks).
+%% Set system prompt
+-spec set_system_prompt(agent_state(), binary()) -> agent_state().
+beamai_agent:set_system_prompt(Agent, Prompt).
 
-%% Emit custom event
--spec emit_custom_event(pid(), atom(), map()) -> ok.
-beamai_agent:emit_custom_event(Agent, EventName, Data).
+%% Manually add message to history
+-spec add_message(agent_state(), map()) -> agent_state().
+beamai_agent:add_message(Agent, Message).
+
+%% Clear message history
+-spec clear_messages(agent_state()) -> agent_state().
+beamai_agent:clear_messages(Agent).
+
+%% Update user metadata (merge mode)
+-spec update_metadata(agent_state(), map()) -> agent_state().
+beamai_agent:update_metadata(Agent, Updates).
 ```
 
-### Context API (User-defined Context)
-
-Context is used to store user-defined data, which participates in conversations and checkpoint persistence.
+### Persistence
 
 ```erlang
-%% Get complete Context
--spec get_context(pid()) -> map().
-beamai_agent:get_context(Agent).
+%% Save Agent state to Memory
+-spec save(agent_state()) -> ok | {error, term()}.
+beamai_agent:save(Agent).
 
-%% Get Context value
--spec get_context(pid(), atom() | binary()) -> term() | undefined.
--spec get_context(pid(), atom() | binary(), term()) -> term().
-beamai_agent:get_context(Agent, Key).
-beamai_agent:get_context(Agent, Key, Default).
-
-%% Set Context
--spec set_context(pid(), map()) -> ok.
--spec update_context(pid(), map()) -> ok.
--spec put_context(pid(), atom() | binary(), term()) -> ok.
-beamai_agent:set_context(Agent, NewContext).
-beamai_agent:update_context(Agent, Updates).
-beamai_agent:put_context(Agent, Key, Value).
+%% Restore Agent state from Memory
+-spec restore(map(), term()) -> {ok, agent_state()} | {error, term()}.
+beamai_agent:restore(Config, Memory).
 ```
-
-### Meta API (Process-level Metadata)
-
-Meta is used to store process-level metadata, **does not participate in conversations**, suitable for storing coordinator information and other runtime data.
-
-```erlang
-%% Get complete Meta
--spec get_meta(pid()) -> map().
-beamai_agent:get_meta(Agent).
-
-%% Get Meta value
--spec get_meta(pid(), atom() | binary()) -> term() | undefined.
--spec get_meta(pid(), atom() | binary(), term()) -> term().
-beamai_agent:get_meta(Agent, Key).
-beamai_agent:get_meta(Agent, Key, Default).
-
-%% Set Meta
--spec set_meta(pid(), map()) -> ok.
--spec put_meta(pid(), atom() | binary(), term()) -> ok.
-beamai_agent:set_meta(Agent, NewMeta).
-beamai_agent:put_meta(Agent, Key, Value).
-```
-
-**Context vs Meta Comparison:**
-
-| Feature | Context | Meta |
-|---------|---------|------|
-| Participates in conversation | Yes | No |
-| Checkpoint persistence | Yes | No |
-| Typical use cases | User data, conversation state | Coordinator info, runtime config |
 
 ### Configuration Options
 
 ```erlang
 Config = #{
-    system_prompt => binary(),           %% System prompt
-    tools => [tool_def()],               %% Tool list
-    llm => llm_config(),                 %% LLM configuration
-    max_iterations => integer(),         %% Maximum iterations, default 10
-    storage => beamai_memory(),          %% Optional: storage instance
-    callbacks => callback_map(),         %% Optional: callback functions
-    middleware => [middleware_spec()],   %% Optional: middleware
-    context => map(),                    %% Optional: user context initial values
-    context_reducers => field_reducers() %% Optional: context field reducer configuration
+    %% Kernel construction (Method 1: pre-built Kernel, mutually exclusive with llm/plugins)
+    kernel => beamai_kernel:kernel(),
+
+    %% Kernel construction (Method 2: auto-build from components)
+    llm => beamai_chat_completion:config(),  %% LLM configuration
+    plugins => [module()],                   %% Plugin module list (e.g., beamai_tool_file)
+    middlewares => [{module(), map()}],       %% Middleware configuration
+
+    %% Agent configuration
+    system_prompt => binary(),               %% System prompt
+    max_tool_iterations => pos_integer(),    %% Tool loop max iterations, default 10
+    callbacks => callbacks(),                %% Callback function map
+    memory => term(),                        %% Persistence backend instance
+    auto_save => boolean(),                  %% Auto-save after each turn, default false
+    id => binary(),                          %% Agent ID (default auto-generated)
+    name => binary(),                        %% Agent name (default <<"agent">>)
+    metadata => map(),                       %% User-defined metadata
+    kernel_settings => map(),                %% Kernel settings
+    interrupt_tools => [map()]               %% Interrupt-related tool definitions
 }.
 ```
 
-### Context Reducers Configuration
-
-Context Reducers allow configuring custom merge strategies for user context fields.
+### Callback System (8 Hooks)
 
 ```erlang
-%% Reducer types
--type field_reducer() ::
-    fun((Old :: term(), New :: term()) -> Merged :: term())  %% Normal reducer
-    | {transform, TargetKey :: binary(), ReducerFun :: function()}.  %% Transform reducer
-
-%% Configuration example
-context_reducers => #{
-    %% Normal reducer: items field uses append strategy
-    <<"items">> => fun graph_state_reducer:append_reducer/2,
-
-    %% Transform reducer: counter_incr accumulates to counter, counter_incr not retained
-    <<"counter_incr">> => {transform, <<"counter">>, fun graph_state_reducer:increment_reducer/2}
+-type callbacks() :: #{
+    on_turn_start  => fun((Meta :: map()) -> ok),
+    on_turn_end    => fun((Meta :: map()) -> ok),
+    on_turn_error  => fun((Reason :: term(), Meta :: map()) -> ok),
+    on_llm_call    => fun((Messages :: [map()], Meta :: map()) -> ok),
+    on_tool_call   => fun((Name :: binary(), Args :: map()) -> ok | {interrupt, term()}),
+    on_token       => fun((Token :: binary(), Meta :: map()) -> ok),
+    on_interrupt   => fun((InterruptState :: map(), Meta :: map()) -> ok),
+    on_resume      => fun((InterruptState :: map(), Meta :: map()) -> ok)
 }.
 ```
 
-**Built-in Reducers:**
+| Callback | Trigger | Special Behavior |
+|----------|---------|------------------|
+| `on_turn_start` | New turn begins | - |
+| `on_turn_end` | Turn completes normally | - |
+| `on_turn_error` | Turn error occurs | - |
+| `on_llm_call` | Before each LLM call | Injected via pre_chat filter |
+| `on_tool_call` | Before each tool call | Can return `{interrupt, Reason}` to trigger interrupt |
+| `on_token` | Streaming mode receives token | Stream mode only |
+| `on_interrupt` | Agent enters interrupted state | - |
+| `on_resume` | Agent resumes from interrupt | - |
 
-| Reducer | Behavior |
-|---------|----------|
-| `append_reducer` | List append |
-| `merge_reducer` | Deep map merge |
-| `increment_reducer` | Numeric accumulation |
-| `last_write_win_reducer` | New value overwrites old (default) |
+### Return Value Types
+
+```erlang
+-type run_result() :: #{
+    content := binary(),               %% LLM final reply text
+    tool_calls_made => [map()],        %% All tool call records from this turn
+    finish_reason => binary(),         %% LLM stop reason
+    usage => map(),                    %% Token usage statistics
+    iterations => non_neg_integer()    %% Tool loop iteration count
+}.
+
+-type interrupt_info() :: #{
+    reason := term(),                  %% Interrupt reason
+    interrupt_type := tool_request | tool_result | callback,
+    interrupted_tool_call => map(),
+    completed_results => [map()],
+    created_at := integer()
+}.
+```
 
 ---
 
@@ -285,7 +292,7 @@ beamai_coordinator:delegate_parallel(CoordinatorPid, WorkerNames, Task).
 
 ```erlang
 %% Pipeline example: Translation pipeline
-LLM = llm_client:create(bailian, #{model => <<"qwen-plus">>, api_key => ApiKey}),
+LLM = beamai_chat_completion:create(bailian, #{model => <<"qwen-plus">>, api_key => ApiKey}),
 
 {ok, Pipeline} = beamai_coordinator:start_pipeline(<<"translator">>, #{
     agents => [
@@ -532,72 +539,65 @@ beamai_deepagent_tool_provider:find_tool(Name, Opts). %% Find tool
 
 ## beamai_llm - LLM Client
 
-LLM client with multi-provider support.
+LLM client with multi-provider support and unified chat completion interface.
 
 ### LLM Configuration Management
 
-LLM configuration must be created using `llm_client:create/2`, achieving separation of configuration from Agent:
+LLM configuration is created using `beamai_chat_completion:create/2`:
 
 ```erlang
-%% Create LLM configuration (must use llm_client:create/2)
-LLM = llm_client:create(anthropic, #{
+%% Create LLM configuration
+LLM = beamai_chat_completion:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
-    temperature => 0.7
+    max_tokens => 2048
 }).
 
 %% Configuration reuse: multiple Agents share the same configuration
-{ok, Agent1} = beamai_agent:start_link(<<"agent1">>, #{llm => LLM, ...}),
-{ok, Agent2} = beamai_agent:start_link(<<"agent2">>, #{llm => LLM, ...}).
-
-%% Configuration merging: create new configuration based on existing one
-HighTempLLM = llm_client:merge_config(LLM, #{temperature => 0.9}).
-
-%% Validate configuration
-true = llm_client:is_valid_config(LLM).
+{ok, Agent1} = beamai_agent:new(#{llm => LLM, system_prompt => <<"Assistant 1">>}),
+{ok, Agent2} = beamai_agent:new(#{llm => LLM, system_prompt => <<"Assistant 2">>}).
 ```
 
 **Advantages:**
 - Configuration reuse: multiple Agents share the same LLM configuration
 - Centralized management: API Key, model parameters unified configuration
-- Type safety: Agent validates configuration at startup
-- Easy testing: LLM configuration can be validated independently
+- Provider abstraction: 7 built-in providers + custom provider support
+- Automatic retry: built-in exponential backoff retry mechanism
 
 ### Configuration and Chat
 
 ```erlang
 %% Create configuration
--spec create(provider(), map()) -> llm_config().
-llm_client:create(Provider, Opts).
+-spec create(provider(), map()) -> config().
+beamai_chat_completion:create(Provider, Opts).
 
-%% Validate configuration
--spec is_valid_config(term()) -> boolean().
-llm_client:is_valid_config(Config).
+%% Chat completion
+-spec chat(config(), [map()]) -> {ok, map()} | {error, term()}.
+beamai_chat_completion:chat(Config, Messages).
 
-%% Chat
--spec chat(llm_config(), [message()]) -> {ok, response()} | {error, term()}.
-llm_client:chat(Config, Messages).
+%% Chat completion with options (supports tools, tool_choice, max_retries, etc.)
+-spec chat(config(), [map()], map()) -> {ok, map()} | {error, term()}.
+beamai_chat_completion:chat(Config, Messages, Opts).
 
 %% Streaming chat
--spec stream_chat(llm_config(), [message()], callback()) -> {ok, response()} | {error, term()}.
-llm_client:stream_chat(Config, Messages, Callback).
+-spec stream_chat(config(), [map()], fun()) -> {ok, map()} | {error, term()}.
+beamai_chat_completion:stream_chat(Config, Messages, Callback).
 
-%% Chat with tools
--spec with_tools(llm_config(), [message()], [tool()]) -> {ok, response()} | {error, term()}.
-llm_client:with_tools(Config, Messages, Tools).
+-spec stream_chat(config(), [map()], fun(), map()) -> {ok, map()} | {error, term()}.
+beamai_chat_completion:stream_chat(Config, Messages, Callback, Opts).
 ```
 
-### Provider Management
+### Chat Options
 
 ```erlang
-%% List Providers
--spec list_providers() -> [atom()].
-llm_client:list_providers().
-
-%% Provider info
--spec provider_info(atom()) -> map().
-llm_client:provider_info(Provider).
+Opts = #{
+    tools => [tool_spec()],           %% Tool definition list
+    tool_choice => auto | none | required, %% Tool selection strategy
+    max_retries => integer(),         %% Retry count (default 3)
+    retry_delay => integer(),         %% Base retry delay in ms (default 1000)
+    on_retry => fun(RetryState) -> ok %% Retry callback
+}.
 ```
 
 ### Supported Providers
@@ -610,6 +610,8 @@ llm_client:provider_info(Provider).
 | `zhipu` | llm_provider_zhipu | OpenAI compatible | Chat, streaming, tool calling, async |
 | `bailian` | llm_provider_bailian | DashScope native | Chat, streaming, tool calling, web search |
 | `ollama` | llm_provider_ollama | OpenAI compatible | Chat, streaming |
+| `mock` | llm_provider_mock | Built-in | Mock LLM for testing |
+| `{custom, Module}` | Custom | Custom | User-defined provider |
 
 ### DeepSeek Detailed Description
 
@@ -621,11 +623,10 @@ DeepSeek Provider uses OpenAI compatible API, supporting `deepseek-chat` and `de
 
 **Configuration Example:**
 ```erlang
-LLM = llm_client:create(deepseek, #{
+LLM = beamai_chat_completion:create(deepseek, #{
     model => <<"deepseek-chat">>,
     api_key => list_to_binary(os:getenv("DEEPSEEK_API_KEY")),
-    max_tokens => 4096,
-    temperature => 1.0
+    max_tokens => 4096
 }).
 ```
 
@@ -645,12 +646,12 @@ Bailian Provider uses DashScope native API, automatically selecting endpoints ba
 
 ### LLM Configuration Parameters
 
-`llm_client:create/2` supports the following parameters:
+`beamai_chat_completion:create/2` supports the following parameters:
 
 ```erlang
-LLM = llm_client:create(Provider, #{
+LLM = beamai_chat_completion:create(Provider, #{
     model => binary(),                   %% Model name (required)
-    api_key => binary(),                 %% API Key (required, except ollama)
+    api_key => binary(),                 %% API Key (required, except ollama/mock)
     base_url => binary(),                %% Optional: custom URL
     timeout => integer(),                %% Optional: timeout (milliseconds)
     max_tokens => integer(),             %% Optional: maximum tokens
@@ -658,7 +659,9 @@ LLM = llm_client:create(Provider, #{
 }).
 ```
 
-**Provider Types:** `openai | anthropic | deepseek | zhipu | bailian | ollama`
+**Provider Types:** `openai | anthropic | deepseek | zhipu | bailian | ollama | mock | {custom, module()}`
+
+**Config Type Marker:** The returned config map includes `'__llm_config__' => true` marker for internal validation.
 
 ---
 
@@ -1089,16 +1092,30 @@ beamai_rag:query(State, Question).
 
 ## Common Types
 
-### Tool Definition
+### Tool Definition (tool_spec)
 
 ```erlang
--type tool_def() :: #{
-    name := binary(),
-    description := binary(),
-    parameters := json_schema(),
-    handler := fun((map()) -> {ok, term()} | {error, term()})
-                | fun((map(), map()) -> {ok, term()} | {error, term()})
+-type tool_spec() :: #{
+    name := binary(),                    % Required: tool name
+    handler := handler(),                % Required: handler function
+    description => binary(),             % Optional: description (for LLM understanding)
+    parameters => parameters_schema(),   % Optional: parameter definitions
+    tag => binary() | [binary()],        % Optional: classification tags
+    timeout => pos_integer(),            % Optional: timeout (milliseconds)
+    retry => #{max => integer(), delay => integer()},  % Optional: retry strategy
+    metadata => map()                    % Optional: custom metadata
 }.
+
+-type handler() ::
+    fun((args()) -> tool_result())                        % fun/1: args only
+    | fun((args(), beamai_context:t()) -> tool_result())  % fun/2: args + context
+    | {module(), atom()}                                  % {M, F}: module function
+    | {module(), atom(), [term()]}.                       % {M, F, ExtraArgs}
+
+-type tool_result() ::
+    {ok, term()}                          % Success with result
+    | {ok, term(), beamai_context:t()}    % Success with result and updated context
+    | {error, term()}.                    % Failure
 ```
 
 ### Message Types
