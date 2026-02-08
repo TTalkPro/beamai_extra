@@ -1,0 +1,34 @@
+{application, beamai_deepagent, [
+    {description, "BeamAI Deep Agent - Sub-agent Orchestrator"},
+    {vsn, "2.0.0"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        jsx,
+        beamai_core,
+        beamai_agent,
+        beamai_tools
+    ]},
+    {optional_applications, [beamai_llm]},
+    {env, [
+        {default_max_depth, 3},
+        {default_max_parallel, 5},
+        {enable_reflection, true}
+    ]},
+    {modules, [
+        beamai_deepagent,
+        beamai_deepagent_coordinator,
+        beamai_deepagent_planner,
+        beamai_deepagent_executor,
+        beamai_deepagent_reflector,
+        beamai_deepagent_parallel,
+        beamai_deepagent_plan_plugin,
+        beamai_deepagent_utils,
+        beamai_deepagent_plan,
+        beamai_deepagent_trace,
+        beamai_deepagent_dependencies
+    ]},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+]}.

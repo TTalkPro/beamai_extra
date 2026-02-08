@@ -1,0 +1,30 @@
+{application, beamai_examples, [
+    {description, "BeamAI Kernel Examples"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        jsx,
+        hackney,
+        poolboy
+    ]},
+    {env, []},
+    {modules, [
+        example_llm_config,
+        example_kernel_chat,
+        example_weather_plugin,
+        example_streaming,
+        example_filter,
+        example_prompt,
+        example_process_steps,
+        example_process_simple,
+        example_process_tools,
+        example_process_hooks,
+        example_process_parallel,
+        example_process_agent_test,
+        test_anthropic_agent
+    ]},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+]}.

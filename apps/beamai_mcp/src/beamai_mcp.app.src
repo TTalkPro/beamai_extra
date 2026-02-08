@@ -1,0 +1,59 @@
+{application, beamai_mcp, [
+    {description, "MCP (Model Context Protocol) Client and Server"},
+    {vsn, "0.1.0"},
+    {registered, [
+        beamai_mcp_sup,
+        beamai_mcp_client_sup,
+        beamai_mcp_server_sup
+    ]},
+    {mod, {beamai_mcp_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        jsx,
+        hackney,
+        beamai_core
+    ]},
+    %% 可选依赖：
+    %% - cowboy: 仅在使用 beamai_mcp_cowboy_handler 时需要
+    %% - gun: 使用 Gun 作为 HTTP 后端时需要
+    {optional_applications, [cowboy, gun]},
+    {env, [
+        {default_timeout, 30000},
+        {tool_call_timeout, 60000},
+        {init_timeout, 10000}
+    ]},
+    {modules, [
+        %% Application
+        beamai_mcp_app,
+        beamai_mcp_sup,
+        %% Types
+        beamai_mcp_types,
+        beamai_mcp_jsonrpc,
+        %% Transport (Client)
+        beamai_mcp_transport,
+        beamai_mcp_transport_stdio,
+        %% Hackney 后端（默认）
+        beamai_mcp_transport_sse,
+        beamai_mcp_transport_http,
+        %% Gun 后端（可选，支持 HTTP/2）
+        beamai_mcp_transport_sse_gun,
+        beamai_mcp_transport_http_gun,
+        %% Client
+        beamai_mcp_client,
+        beamai_mcp_client_sup,
+        beamai_mcp_client_registry,
+        %% Server
+        beamai_mcp_server,
+        beamai_mcp_server_sup,
+        beamai_mcp_handler,
+        beamai_mcp_cowboy_handler,
+        %% Adapter
+        beamai_mcp_adapter,
+        beamai_mcp_tool_proxy,
+        %% Provider
+        beamai_tool_provider_mcp
+    ]},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+]}.
