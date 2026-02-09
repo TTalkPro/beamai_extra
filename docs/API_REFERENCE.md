@@ -24,188 +24,195 @@
 
 ## beamai_agent - Simple Agent
 
-ReAct 模式的简单 Agent 实现。
+纯函数式 ReAct Agent 实现，通过不可变状态传递实现多轮对话。
 
-### 生命周期管理
+### 创建 Agent
 
 ```erlang
-%% 启动 Agent（进程模式）
--spec start_link(binary(), map()) -> {ok, pid()} | {error, term()}.
-beamai_agent:start_link(AgentId, Config).
-
-%% 停止 Agent
--spec stop(pid()) -> ok.
-beamai_agent:stop(Agent).
+%% 创建 Agent（返回不可变状态）
+-spec new(map()) -> {ok, agent_state()} | {error, term()}.
+beamai_agent:new(Config).
 ```
 
 ### 执行 API
 
 ```erlang
-%% 运行 Agent（进程模式）
--spec run(pid(), binary()) -> {ok, map()} | {error, term()}.
-beamai_agent:run(Agent, Input).
+%% 运行一轮对话（返回结果和新状态）
+-spec run(agent_state(), binary()) ->
+    {ok, run_result(), agent_state()} | {error, term()}.
+beamai_agent:run(Agent, UserMessage).
 
-%% 单次执行（纯函数模式）
--spec run_once(map(), binary()) -> {ok, map()} | {error, term()}.
-beamai_agent:run_once(Config, Input).
+%% 带选项运行
+-spec run(agent_state(), binary(), map()) ->
+    {ok, run_result(), agent_state()} | {error, term()}.
+beamai_agent:run(Agent, UserMessage, Opts).
 
-%% 使用状态执行
--spec run_with_state(state(), binary(), map()) -> {ok, map(), state()} | {error, term()}.
-beamai_agent:run_with_state(State, Input, Opts).
+%% 流式输出
+-spec stream(agent_state(), binary()) ->
+    {ok, run_result(), agent_state()} | {error, term()}.
+beamai_agent:stream(Agent, UserMessage).
+
+-spec stream(agent_state(), binary(), map()) ->
+    {ok, run_result(), agent_state()} | {error, term()}.
+beamai_agent:stream(Agent, UserMessage, Opts).
 ```
 
-### 状态管理
+### 中断和恢复（Human-in-the-Loop）
 
 ```erlang
-%% 创建状态
--spec create_state(map()) -> {ok, state()}.
--spec create_state(binary(), map()) -> {ok, state()}.
-beamai_agent:create_state(Config).
-beamai_agent:create_state(AgentId, Config).
+%% 恢复被中断的 Agent
+-spec resume(agent_state(), term()) ->
+    {ok, run_result(), agent_state()} |
+    {interrupt, interrupt_info(), agent_state()} |
+    {error, term()}.
+beamai_agent:resume(Agent, HumanInput).
 
-%% 导出/导入状态
--spec export_state(state()) -> map().
--spec import_state(map(), map()) -> {ok, state()}.
-beamai_agent:export_state(State).
-beamai_agent:import_state(ExportedData, Config).
+%% 从 Memory 加载并恢复
+-spec resume_from_memory(map(), term(), term()) ->
+    {ok, run_result(), agent_state()} |
+    {interrupt, interrupt_info(), agent_state()} |
+    {error, term()}.
+beamai_agent:resume_from_memory(Config, Memory, HumanInput).
+
+%% 检查中断状态
+-spec is_interrupted(agent_state()) -> boolean().
+beamai_agent:is_interrupted(Agent).
+
+-spec get_interrupt_info(agent_state()) -> interrupt_info() | undefined.
+beamai_agent:get_interrupt_info(Agent).
 ```
 
-### Checkpoint 管理
+### 状态查询
 
 ```erlang
-%% 保存检查点
--spec save_checkpoint(pid()) -> {ok, binary()} | {error, term()}.
--spec save_checkpoint(pid(), map()) -> {ok, binary()} | {error, term()}.
-beamai_agent:save_checkpoint(Agent).
-beamai_agent:save_checkpoint(Agent, Metadata).
+%% 获取 Agent ID
+-spec id(agent_state()) -> binary().
+beamai_agent:id(Agent).
 
-%% 加载检查点
--spec load_checkpoint(pid(), binary()) -> {ok, map()} | {error, term()}.
--spec load_latest_checkpoint(pid()) -> {ok, map()} | {error, term()}.
-beamai_agent:load_checkpoint(Agent, CheckpointId).
-beamai_agent:load_latest_checkpoint(Agent).
+%% 获取 Agent 名称
+-spec name(agent_state()) -> binary().
+beamai_agent:name(Agent).
 
-%% 从检查点恢复
--spec restore_from_checkpoint(pid(), binary()) -> ok | {error, term()}.
-beamai_agent:restore_from_checkpoint(Agent, CheckpointId).
+%% 获取对话消息历史
+-spec messages(agent_state()) -> [map()].
+beamai_agent:messages(Agent).
 
-%% 列出检查点
--spec list_checkpoints(pid()) -> {ok, [map()]} | {error, term()}.
-beamai_agent:list_checkpoints(Agent).
+%% 获取上一次助手回复
+-spec last_response(agent_state()) -> binary() | undefined.
+beamai_agent:last_response(Agent).
+
+%% 获取已完成的对话轮数
+-spec turn_count(agent_state()) -> non_neg_integer().
+beamai_agent:turn_count(Agent).
+
+%% 获取内部 Kernel 实例
+-spec kernel(agent_state()) -> beamai_kernel:kernel().
+beamai_agent:kernel(Agent).
 ```
 
-### 回调管理
+### 状态修改
 
 ```erlang
-%% 获取/设置回调
--spec get_callbacks(pid()) -> map().
--spec set_callbacks(pid(), map()) -> ok.
-beamai_agent:get_callbacks(Agent).
-beamai_agent:set_callbacks(Agent, Callbacks).
+%% 设置系统提示词
+-spec set_system_prompt(agent_state(), binary()) -> agent_state().
+beamai_agent:set_system_prompt(Agent, Prompt).
 
-%% 触发自定义事件
--spec emit_custom_event(pid(), atom(), map()) -> ok.
-beamai_agent:emit_custom_event(Agent, EventName, Data).
+%% 手动添加消息到历史
+-spec add_message(agent_state(), map()) -> agent_state().
+beamai_agent:add_message(Agent, Message).
+
+%% 清除消息历史
+-spec clear_messages(agent_state()) -> agent_state().
+beamai_agent:clear_messages(Agent).
+
+%% 更新用户元数据（合并模式）
+-spec update_metadata(agent_state(), map()) -> agent_state().
+beamai_agent:update_metadata(Agent, Updates).
 ```
 
-### Context API（用户自定义上下文）
-
-Context 用于存储用户自定义数据，会参与对话和检查点持久化。
+### 持久化
 
 ```erlang
-%% 获取完整 Context
--spec get_context(pid()) -> map().
-beamai_agent:get_context(Agent).
+%% 保存 Agent 状态到 Memory
+-spec save(agent_state()) -> ok | {error, term()}.
+beamai_agent:save(Agent).
 
-%% 获取 Context 值
--spec get_context(pid(), atom() | binary()) -> term() | undefined.
--spec get_context(pid(), atom() | binary(), term()) -> term().
-beamai_agent:get_context(Agent, Key).
-beamai_agent:get_context(Agent, Key, Default).
-
-%% 设置 Context
--spec set_context(pid(), map()) -> ok.
--spec update_context(pid(), map()) -> ok.
--spec put_context(pid(), atom() | binary(), term()) -> ok.
-beamai_agent:set_context(Agent, NewContext).
-beamai_agent:update_context(Agent, Updates).
-beamai_agent:put_context(Agent, Key, Value).
+%% 从 Memory 恢复 Agent 状态
+-spec restore(map(), term()) -> {ok, agent_state()} | {error, term()}.
+beamai_agent:restore(Config, Memory).
 ```
-
-### Meta API（进程级元数据）
-
-Meta 用于存储进程级元数据，**不参与对话**，适用于存储协调器信息等运行时数据。
-
-```erlang
-%% 获取完整 Meta
--spec get_meta(pid()) -> map().
-beamai_agent:get_meta(Agent).
-
-%% 获取 Meta 值
--spec get_meta(pid(), atom() | binary()) -> term() | undefined.
--spec get_meta(pid(), atom() | binary(), term()) -> term().
-beamai_agent:get_meta(Agent, Key).
-beamai_agent:get_meta(Agent, Key, Default).
-
-%% 设置 Meta
--spec set_meta(pid(), map()) -> ok.
--spec put_meta(pid(), atom() | binary(), term()) -> ok.
-beamai_agent:set_meta(Agent, NewMeta).
-beamai_agent:put_meta(Agent, Key, Value).
-```
-
-**Context vs Meta 对比：**
-
-| 特性 | Context | Meta |
-|------|---------|------|
-| 参与对话 | 是 | 否 |
-| 检查点持久化 | 是 | 否 |
-| 典型用途 | 用户数据、对话状态 | 协调器信息、运行时配置 |
 
 ### 配置选项
 
 ```erlang
 Config = #{
-    system_prompt => binary(),           %% 系统提示词
-    tools => [tool_def()],               %% 工具列表
-    llm => llm_config(),                 %% LLM 配置
-    max_iterations => integer(),         %% 最大迭代次数，默认 10
-    storage => beamai_memory(),          %% 可选：存储实例
-    callbacks => callback_map(),         %% 可选：回调函数
-    middleware => [middleware_spec()],   %% 可选：中间件
-    context => map(),                    %% 可选：用户上下文初始值
-    context_reducers => field_reducers() %% 可选：上下文字段 Reducer 配置
+    %% Kernel 构建（方式一：预构建 Kernel，与 llm/plugins 互斥）
+    kernel => beamai_kernel:kernel(),
+
+    %% Kernel 构建（方式二：从组件自动构建）
+    llm => beamai_chat_completion:config(),  %% LLM 配置
+    plugins => [module()],                   %% Plugin 模块列表（如 beamai_tool_file）
+    middlewares => [{module(), map()}],       %% Middleware 配置
+
+    %% Agent 配置
+    system_prompt => binary(),               %% 系统提示词
+    max_tool_iterations => pos_integer(),    %% 工具循环最大迭代次数，默认 10
+    callbacks => callbacks(),                %% 回调函数 map
+    memory => term(),                        %% 持久化后端实例
+    auto_save => boolean(),                  %% 每轮后自动保存，默认 false
+    id => binary(),                          %% Agent ID（默认自动生成）
+    name => binary(),                        %% Agent 名称（默认 <<"agent">>）
+    metadata => map(),                       %% 用户自定义元数据
+    kernel_settings => map(),                %% Kernel 设置项
+    interrupt_tools => [map()]               %% 中断相关 Tool 定义
 }.
 ```
 
-### Context Reducers 配置
-
-Context Reducers 允许为用户上下文的字段配置自定义合并策略。
+### 回调系统（8 个钩子）
 
 ```erlang
-%% Reducer 类型
--type field_reducer() ::
-    fun((Old :: term(), New :: term()) -> Merged :: term())  %% 普通 reducer
-    | {transform, TargetKey :: binary(), ReducerFun :: function()}.  %% 转换型 reducer
-
-%% 配置示例
-context_reducers => #{
-    %% 普通 reducer：items 字段使用追加策略
-    <<"items">> => fun graph_state_reducer:append_reducer/2,
-
-    %% 转换型 reducer：counter_incr 累加到 counter，counter_incr 不保留
-    <<"counter_incr">> => {transform, <<"counter">>, fun graph_state_reducer:increment_reducer/2}
+-type callbacks() :: #{
+    on_turn_start  => fun((Meta :: map()) -> ok),
+    on_turn_end    => fun((Meta :: map()) -> ok),
+    on_turn_error  => fun((Reason :: term(), Meta :: map()) -> ok),
+    on_llm_call    => fun((Messages :: [map()], Meta :: map()) -> ok),
+    on_tool_call   => fun((Name :: binary(), Args :: map()) -> ok | {interrupt, term()}),
+    on_token       => fun((Token :: binary(), Meta :: map()) -> ok),
+    on_interrupt   => fun((InterruptState :: map(), Meta :: map()) -> ok),
+    on_resume      => fun((InterruptState :: map(), Meta :: map()) -> ok)
 }.
 ```
 
-**内置 Reducer：**
+| 回调 | 触发时机 | 特殊行为 |
+|------|----------|----------|
+| `on_turn_start` | 新 turn 开始 | - |
+| `on_turn_end` | turn 正常完成 | - |
+| `on_turn_error` | turn 出错 | - |
+| `on_llm_call` | 每次 LLM 调用前 | 通过 pre_chat filter 注入 |
+| `on_tool_call` | 每次工具调用前 | 可返回 `{interrupt, Reason}` 触发中断 |
+| `on_token` | 流式模式收到 token | 仅 stream 模式 |
+| `on_interrupt` | Agent 进入中断状态 | - |
+| `on_resume` | Agent 从中断恢复 | - |
 
-| Reducer | 行为 |
-|---------|------|
-| `append_reducer` | 列表追加 |
-| `merge_reducer` | Map 深度合并 |
-| `increment_reducer` | 数值累加 |
-| `last_write_win_reducer` | 新值覆盖旧值（默认） |
+### 返回值类型
+
+```erlang
+-type run_result() :: #{
+    content := binary(),               %% LLM 最终回复文本
+    tool_calls_made => [map()],        %% 本轮执行的所有工具调用记录
+    finish_reason => binary(),         %% LLM 停止原因
+    usage => map(),                    %% Token 使用统计
+    iterations => non_neg_integer()    %% 工具循环迭代次数
+}.
+
+-type interrupt_info() :: #{
+    reason := term(),                  %% 中断原因
+    interrupt_type := tool_request | tool_result | callback,
+    interrupted_tool_call => map(),
+    completed_results => [map()],
+    created_at := integer()
+}.
+```
 
 ---
 
@@ -285,7 +292,7 @@ beamai_coordinator:delegate_parallel(CoordinatorPid, WorkerNames, Task).
 
 ```erlang
 %% Pipeline 示例：翻译流水线
-LLM = llm_client:create(bailian, #{model => <<"qwen-plus">>, api_key => ApiKey}),
+LLM = beamai_chat_completion:create(bailian, #{model => <<"qwen-plus">>, api_key => ApiKey}),
 
 {ok, Pipeline} = beamai_coordinator:start_pipeline(<<"translator">>, #{
     agents => [
@@ -532,72 +539,65 @@ beamai_deepagent_tool_provider:find_tool(Name, Opts). %% 查找工具
 
 ## beamai_llm - LLM 客户端
 
-多 Provider 支持的 LLM 客户端。
+多 Provider 支持的 LLM 客户端，统一的聊天补全接口。
 
 ### LLM 配置管理
 
-LLM 配置必须使用 `llm_client:create/2` 创建，实现配置与 Agent 分离：
+LLM 配置使用 `beamai_chat_completion:create/2` 创建：
 
 ```erlang
-%% 创建 LLM 配置（必须使用 llm_client:create/2）
-LLM = llm_client:create(anthropic, #{
+%% 创建 LLM 配置
+LLM = beamai_chat_completion:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
-    temperature => 0.7
+    max_tokens => 2048
 }).
 
 %% 配置复用：多个 Agent 共享同一配置
-{ok, Agent1} = beamai_agent:start_link(<<"agent1">>, #{llm => LLM, ...}),
-{ok, Agent2} = beamai_agent:start_link(<<"agent2">>, #{llm => LLM, ...}).
-
-%% 配置合并：基于现有配置创建新配置
-HighTempLLM = llm_client:merge_config(LLM, #{temperature => 0.9}).
-
-%% 验证配置有效性
-true = llm_client:is_valid_config(LLM).
+{ok, Agent1} = beamai_agent:new(#{llm => LLM, system_prompt => <<"助手1"/utf8>>}),
+{ok, Agent2} = beamai_agent:new(#{llm => LLM, system_prompt => <<"助手2"/utf8>>}).
 ```
 
 **优势：**
 - 配置复用：多个 Agent 共享同一 LLM 配置
 - 集中管理：API Key、模型参数统一配置
-- 类型安全：Agent 启动时验证配置有效性
-- 易于测试：可独立验证 LLM 配置
+- Provider 抽象：7 种内置 Provider + 自定义 Provider 支持
+- 自动重试：内置指数退避重试机制
 
 ### 配置和聊天
 
 ```erlang
 %% 创建配置
--spec create(provider(), map()) -> llm_config().
-llm_client:create(Provider, Opts).
+-spec create(provider(), map()) -> config().
+beamai_chat_completion:create(Provider, Opts).
 
-%% 验证配置
--spec is_valid_config(term()) -> boolean().
-llm_client:is_valid_config(Config).
+%% 聊天补全
+-spec chat(config(), [map()]) -> {ok, map()} | {error, term()}.
+beamai_chat_completion:chat(Config, Messages).
 
-%% 聊天
--spec chat(llm_config(), [message()]) -> {ok, response()} | {error, term()}.
-llm_client:chat(Config, Messages).
+%% 带选项的聊天补全（支持 tools, tool_choice, max_retries 等）
+-spec chat(config(), [map()], map()) -> {ok, map()} | {error, term()}.
+beamai_chat_completion:chat(Config, Messages, Opts).
 
 %% 流式聊天
--spec stream_chat(llm_config(), [message()], callback()) -> {ok, response()} | {error, term()}.
-llm_client:stream_chat(Config, Messages, Callback).
+-spec stream_chat(config(), [map()], fun()) -> {ok, map()} | {error, term()}.
+beamai_chat_completion:stream_chat(Config, Messages, Callback).
 
-%% 带工具的聊天
--spec with_tools(llm_config(), [message()], [tool()]) -> {ok, response()} | {error, term()}.
-llm_client:with_tools(Config, Messages, Tools).
+-spec stream_chat(config(), [map()], fun(), map()) -> {ok, map()} | {error, term()}.
+beamai_chat_completion:stream_chat(Config, Messages, Callback, Opts).
 ```
 
-### Provider 管理
+### Chat 选项
 
 ```erlang
-%% 列出 Provider
--spec list_providers() -> [atom()].
-llm_client:list_providers().
-
-%% Provider 信息
--spec provider_info(atom()) -> map().
-llm_client:provider_info(Provider).
+Opts = #{
+    tools => [tool_spec()],           %% 工具定义列表
+    tool_choice => auto | none | required, %% 工具选择策略
+    max_retries => integer(),         %% 重试次数（默认 3）
+    retry_delay => integer(),         %% 基础重试延迟（毫秒，默认 1000）
+    on_retry => fun(RetryState) -> ok %% 重试回调
+}.
 ```
 
 ### 支持的 Provider
@@ -610,6 +610,8 @@ llm_client:provider_info(Provider).
 | `zhipu` | llm_provider_zhipu | OpenAI 兼容 | 聊天、流式、工具调用、异步 |
 | `bailian` | llm_provider_bailian | DashScope 原生 | 聊天、流式、工具调用、联网搜索 |
 | `ollama` | llm_provider_ollama | OpenAI 兼容 | 聊天、流式 |
+| `mock` | llm_provider_mock | 内置 | 测试用 Mock LLM |
+| `{custom, Module}` | 自定义 | 自定义 | 用户自定义 Provider |
 
 ### Provider 公共模块 (llm_provider_common)
 
@@ -648,11 +650,10 @@ DeepSeek Provider 使用 OpenAI 兼容 API，支持 `deepseek-chat` 和 `deepsee
 
 **配置示例：**
 ```erlang
-LLM = llm_client:create(deepseek, #{
+LLM = beamai_chat_completion:create(deepseek, #{
     model => <<"deepseek-chat">>,
     api_key => list_to_binary(os:getenv("DEEPSEEK_API_KEY")),
-    max_tokens => 4096,
-    temperature => 1.0
+    max_tokens => 4096
 }).
 ```
 
@@ -672,12 +673,12 @@ LLM = llm_client:create(deepseek, #{
 
 ### LLM 配置参数
 
-`llm_client:create/2` 支持以下参数：
+`beamai_chat_completion:create/2` 支持以下参数：
 
 ```erlang
-LLM = llm_client:create(Provider, #{
+LLM = beamai_chat_completion:create(Provider, #{
     model => binary(),                   %% 模型名称（必需）
-    api_key => binary(),                 %% API Key（必需，ollama 除外）
+    api_key => binary(),                 %% API Key（必需，ollama/mock 除外）
     base_url => binary(),                %% 可选：自定义 URL
     timeout => integer(),                %% 可选：超时时间（毫秒）
     max_tokens => integer(),             %% 可选：最大 token
@@ -685,7 +686,9 @@ LLM = llm_client:create(Provider, #{
 }).
 ```
 
-**Provider 类型：** `openai | anthropic | deepseek | zhipu | bailian | ollama`
+**Provider 类型：** `openai | anthropic | deepseek | zhipu | bailian | ollama | mock | {custom, module()}`
+
+**Config 类型标记：** 返回的 config map 包含 `'__llm_config__' => true` 标记，用于内部验证。
 
 ---
 
@@ -811,31 +814,63 @@ Tools = beamai_tool_registry:from_config(#{
 
 ### Kernel 和 Tool 系统
 
-Kernel 是 BeamAI 的核心抽象，管理 Tool 的注册与调用。
+Kernel 是 BeamAI 的核心抽象，管理 Tool 注册、LLM 服务配置和 Filter 管道。
 
 ```erlang
 %% 创建 Kernel
-beamai_kernel:new() -> kernel().
-beamai_kernel:new(Opts) -> kernel().
+-spec new() -> kernel().
+-spec new(kernel_settings()) -> kernel().
+beamai_kernel:new().
+beamai_kernel:new(Settings).
+
+%% 添加 LLM 服务
+-spec add_service(kernel(), beamai_chat_completion:config()) -> kernel().
+beamai_kernel:add_service(Kernel, LlmConfig).
 
 %% 添加工具
-beamai_kernel:add_tool(Kernel, ToolSpec) -> kernel().
-beamai_kernel:add_tools(Kernel, [ToolSpec]) -> kernel().
-beamai_kernel:add_tool_module(Kernel, Module) -> kernel().
+-spec add_tool(kernel(), tool_spec()) -> kernel().
+-spec add_tools(kernel(), [tool_spec()]) -> kernel().
+-spec add_tool_module(kernel(), module()) -> kernel().
+beamai_kernel:add_tool(Kernel, ToolSpec).
+beamai_kernel:add_tools(Kernel, ToolSpecs).
+beamai_kernel:add_tool_module(Kernel, Module).
 
-%% 添加服务和过滤器
-beamai_kernel:add_service(Kernel, Service) -> kernel().
-beamai_kernel:add_filter(Kernel, Filter) -> kernel().
+%% 添加过滤器
+-spec add_filter(kernel(), filter_def()) -> kernel().
+beamai_kernel:add_filter(Kernel, Filter).
 
-%% 调用工具
-beamai_kernel:invoke(Kernel, ToolName, Args, Context) -> {ok, Result, NewContext} | {error, Reason}.
-beamai_kernel:invoke_chat(Kernel, Messages, Opts) -> {ok, Response} | {error, Reason}.
-beamai_kernel:invoke_chat_with_tools(Kernel, Messages, Opts) -> {ok, Response} | {error, Reason}.
+%% 聊天（不含工具循环）
+-spec invoke_chat(kernel(), [map()], chat_opts()) ->
+    {ok, map(), beamai_context:t()} | {error, term()}.
+beamai_kernel:invoke_chat(Kernel, Messages, Opts).
+
+%% 聊天（含工具调用循环，自动执行工具直到获得文本回复）
+-spec invoke(kernel(), [map()], chat_opts()) ->
+    {ok, map(), beamai_context:t()} | {error, term()}.
+beamai_kernel:invoke(Kernel, Messages, Opts).
+
+%% 调用单个工具
+-spec invoke_tool(kernel(), binary(), map(), beamai_context:t()) ->
+    {ok, term(), beamai_context:t()} | {error, term()}.
+beamai_kernel:invoke_tool(Kernel, ToolName, Args, Context).
 
 %% 查询工具
-beamai_kernel:find_tool(Kernel, Name) -> {ok, ToolSpec} | error.
-beamai_kernel:get_tool_specs(Kernel) -> [ToolSpec].
-beamai_kernel:tools_by_tag(Kernel, Tag) -> [ToolSpec].
+-spec get_tool(kernel(), binary()) -> {ok, tool_spec()} | error.
+-spec list_tools(kernel()) -> [tool_spec()].
+-spec get_tools_by_tag(kernel(), binary()) -> [tool_spec()].
+-spec get_tool_specs(kernel()) -> [map()].
+-spec get_tool_schemas(kernel()) -> [map()].
+-spec get_tool_schemas(kernel(), atom()) -> [map()].
+beamai_kernel:get_tool(Kernel, Name).
+beamai_kernel:list_tools(Kernel).
+beamai_kernel:get_tools_by_tag(Kernel, Tag).
+beamai_kernel:get_tool_specs(Kernel).
+beamai_kernel:get_tool_schemas(Kernel).          %% 默认 OpenAI 格式
+beamai_kernel:get_tool_schemas(Kernel, Provider). %% 指定 Provider 格式
+
+%% 获取 LLM 服务配置
+-spec get_service(kernel()) -> beamai_chat_completion:config() | undefined.
+beamai_kernel:get_service(Kernel).
 ```
 
 **Tool 定义示例：**

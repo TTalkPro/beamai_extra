@@ -23,10 +23,12 @@
   - 事件驱动和状态快照
 
 - **Simple Agent**: 基于工具循环的 ReAct Agent
-  - 支持自定义工具和系统提示词
-  - 内置 Memory 持久化
-  - 完整的回调系统
-  - 中断和恢复支持
+  - 纯函数式 API（`new/1` → `run/2` → 新状态）
+  - 支持自定义工具、Plugin 加载、系统提示词
+  - 8 个回调钩子（turn/llm/tool/token/interrupt/resume）
+  - 流式输出（`stream/2`）
+  - 中断和恢复支持（Human-in-the-Loop）
+  - 内置 Memory 持久化（`save/1`, `restore/2`）
 
 - **Deep Agent**: 基于 SubAgent 架构的递归规划 Agent
   - Planner（规划器）→ Executor（执行器）→ Reflector（反思器）
@@ -69,66 +71,73 @@ LLM = beamai_chat_completion:create(anthropic, #{
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>
 }),
 
-%% 创建 Agent 状态（纯函数 API）
-{ok, State} = beamai_agent:new(#{
+%% 创建 Agent（纯函数 API，返回不可变状态）
+{ok, Agent0} = beamai_agent:new(#{
     system_prompt => <<"你是一个有帮助的助手。"/utf8>>,
     llm => LLM
 }),
 
-%% 运行 Agent
-{ok, Result, _NewState} = beamai_agent:run(State, <<"你好！"/utf8>>),
+%% 运行 Agent（返回结果和新状态）
+{ok, Result, _Agent1} = beamai_agent:run(Agent0, <<"你好！"/utf8>>),
 
 %% 查看结果
-Response = maps:get(final_response, Result).
+Content = maps:get(content, Result).
 ```
 
 ### 3. Simple Agent（多轮对话）
 
 ```erlang
-%% 多轮对话通过状态传递实现
-{ok, State0} = beamai_agent:new(#{
+%% 多轮对话通过状态传递实现，消息历史自动累积
+{ok, Agent0} = beamai_agent:new(#{
     llm => LLM,
     system_prompt => <<"你是一个记忆助手。"/utf8>>
 }),
-{ok, _, State1} = beamai_agent:run(State0, <<"我叫张三"/utf8>>),
-{ok, Result, _State2} = beamai_agent:run(State1, <<"我叫什么名字？"/utf8>>).
-%% Result 中 Agent 会记得用户叫张三
+{ok, _, Agent1} = beamai_agent:run(Agent0, <<"我叫张三"/utf8>>),
+{ok, Result, _Agent2} = beamai_agent:run(Agent1, <<"我叫什么名字？"/utf8>>).
+%% Agent 会记得用户叫张三
+
+%% 查看对话状态
+beamai_agent:turn_count(Agent1).    %% => 1
+beamai_agent:messages(Agent1).      %% => 消息历史列表
+beamai_agent:last_response(Agent1). %% => 上一次助手回复
 ```
 
 ### 4. Simple Agent（使用 Kernel + Tool 注册工具）
 
 ```erlang
-%% 创建 Kernel
-Kernel = beamai_kernel:new(),
-
-%% 从 Tool 模块加载工具
-Kernel1 = beamai_kernel:add_tool_module(Kernel, beamai_tool_shell),
-
-%% 或直接定义 Tool
-SearchTool = #{
-    name => <<"search">>,
-    description => <<"搜索信息"/utf8>>,
+%% 方式一：直接在 Agent 中定义工具（通过 Kernel 自动构建）
+Kernel0 = beamai_kernel:new(),
+LlmConfig = beamai_chat_completion:create(anthropic, #{
+    api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
+    base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
+    model => <<"glm-4.7">>
+}),
+K1 = beamai_kernel:add_service(Kernel0, LlmConfig),
+K2 = beamai_kernel:add_tool(K1, #{
+    name => <<"get_weather">>,
+    description => <<"获取城市天气"/utf8>>,
     parameters => #{
-        <<"query">> => #{type => string, required => true, description => <<"搜索关键词"/utf8>>}
+        <<"city">> => #{type => string, required => true, description => <<"城市名称"/utf8>>}
     },
-    handler => fun(#{<<"query">> := Query}, _Context) ->
-        {ok, <<"搜索结果: ", Query/binary>>}
+    handler => fun(#{<<"city">> := City}, _Ctx) ->
+        {ok, #{city => City, temp => 25, condition => <<"Sunny">>}}
     end
-},
-
-Kernel2 = beamai_kernel:add_tool(Kernel1, SearchTool),
-
-%% 获取工具规格供 Agent 使用
-Tools = beamai_kernel:get_tool_specs(Kernel2),
-
-%% 创建带工具的 Agent
-{ok, State} = beamai_agent:new(#{
-    system_prompt => <<"你是搜索助手。"/utf8>>,
-    tools => Tools,
-    llm => LLM
 }),
 
-{ok, Result, _} = beamai_agent:run(State, <<"搜索 Erlang 教程"/utf8>>).
+%% 使用预构建 Kernel 创建 Agent
+{ok, Agent0} = beamai_agent:new(#{
+    kernel => K2,
+    system_prompt => <<"你是天气助手。"/utf8>>
+}),
+{ok, Result, _} = beamai_agent:run(Agent0, <<"北京天气怎么样？"/utf8>>).
+
+%% 方式二：使用 plugins 加载内置工具模块
+{ok, Agent0} = beamai_agent:new(#{
+    llm => LlmConfig,
+    plugins => [beamai_tool_file],
+    system_prompt => <<"你是文件助手。"/utf8>>
+}),
+{ok, Result, _} = beamai_agent:run(Agent0, <<"列出 src 目录下的文件"/utf8>>).
 ```
 
 ### 5. Simple Agent（带 Memory 持久化）
@@ -138,20 +147,24 @@ Tools = beamai_kernel:get_tool_specs(Kernel2),
 {ok, _} = beamai_store_ets:start_link(my_store, #{}),
 {ok, Memory} = beamai_memory:new(#{context_store => {beamai_store_ets, my_store}}),
 
-%% 创建带 Memory 的 Agent（checkpoint 自动保存）
-{ok, State0} = beamai_agent:new(#{
+%% 创建带 Memory 的 Agent（auto_save 启用后每轮自动保存）
+{ok, Agent0} = beamai_agent:new(#{
     llm => LLM,
     system_prompt => <<"你是持久化助手。"/utf8>>,
-    storage => Memory
+    memory => Memory,
+    auto_save => true
 }),
 
-%% 对话（checkpoint 自动保存）
-{ok, _, State1} = beamai_agent:run(State0, <<"记住：密码是 12345"/utf8>>),
-{ok, _, _State2} = beamai_agent:run(State1, <<"好的"/utf8>>),
+%% 对话（自动保存）
+{ok, _, Agent1} = beamai_agent:run(Agent0, <<"记住：密码是 12345"/utf8>>),
+{ok, _, _Agent2} = beamai_agent:run(Agent1, <<"好的"/utf8>>),
+
+%% 手动保存
+ok = beamai_agent:save(Agent1),
 
 %% 稍后恢复会话
-{ok, RestoredState} = beamai_agent:restore_from_memory(#{llm => LLM}, Memory),
-{ok, Result, _} = beamai_agent:run(RestoredState, <<"密码是多少？"/utf8>>).
+{ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory),
+{ok, Result, _} = beamai_agent:run(RestoredAgent, <<"密码是多少？"/utf8>>).
 %% Agent 会记得密码是 12345
 ```
 
@@ -406,31 +419,50 @@ Builder5 = graph_builder:set_finish_point(Builder4, finish),
 {ok, _} = beamai_store_ets:start_link(my_store, #{}),
 {ok, Memory} = beamai_memory:new(#{context_store => {beamai_store_ets, my_store}}),
 
-%% 创建带 storage 的 Agent（checkpoint 自动保存）
-{ok, State} = beamai_agent:new(#{llm => LLM, storage => Memory}),
-{ok, _, NewState} = beamai_agent:run(State, <<"你好"/utf8>>),
+%% 创建带 memory 的 Agent（auto_save 启用后每轮自动保存）
+{ok, Agent0} = beamai_agent:new(#{llm => LLM, memory => Memory, auto_save => true}),
+{ok, _, Agent1} = beamai_agent:run(Agent0, <<"你好"/utf8>>),
+
+%% 手动保存
+ok = beamai_agent:save(Agent1),
 
 %% 从 Memory 恢复会话
-{ok, RestoredState} = beamai_agent:restore_from_memory(#{llm => LLM}, Memory).
+{ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory).
 ```
 
 ### 5. Callbacks（回调系统）
 
-监听 Agent 执行事件：
+监听 Agent 执行过程中的 8 个事件：
 
 ```erlang
-{ok, State} = beamai_agent:new(#{
+{ok, Agent0} = beamai_agent:new(#{
     llm => LLM,
     system_prompt => <<"你是助手"/utf8>>,
     callbacks => #{
-        on_llm_start => fun(Prompts, Meta) ->
-            io:format("LLM 调用开始~n")
+        on_turn_start => fun(Meta) ->
+            io:format("Turn 开始: ~p~n", [maps:get(turn_count, Meta)])
         end,
-        on_tool_start => fun(ToolName, Args, Meta) ->
-            io:format("执行工具: ~ts~n", [ToolName])
+        on_turn_end => fun(Meta) ->
+            io:format("Turn 结束~n")
         end,
-        on_agent_finish => fun(Result, Meta) ->
-            io:format("Agent 完成~n")
+        on_turn_error => fun(Reason, Meta) ->
+            io:format("Turn 出错: ~p~n", [Reason])
+        end,
+        on_llm_call => fun(Messages, Meta) ->
+            io:format("LLM 调用: ~B 条消息~n", [length(Messages)])
+        end,
+        on_tool_call => fun(Name, Args) ->
+            io:format("工具调用: ~s~n", [Name])
+            %% 返回 {interrupt, Reason} 可触发中断
+        end,
+        on_token => fun(Token, Meta) ->
+            io:format("~s", [Token])  %% 流式 token
+        end,
+        on_interrupt => fun(InterruptState, Meta) ->
+            io:format("Agent 中断~n")
+        end,
+        on_resume => fun(InterruptState, Meta) ->
+            io:format("Agent 恢复~n")
         end
     }
 }).
@@ -448,12 +480,12 @@ LLM = beamai_chat_completion:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
-    temperature => 0.7
+    max_tokens => 2048
 }),
 
 %% 配置可在多个 Agent 间复用
-{ok, State1} = beamai_agent:new(#{llm => LLM, system_prompt => <<"研究助手"/utf8>>}),
-{ok, State2} = beamai_agent:new(#{llm => LLM, system_prompt => <<"写作助手"/utf8>>}).
+{ok, Agent1} = beamai_agent:new(#{llm => LLM, system_prompt => <<"研究助手"/utf8>>}),
+{ok, Agent2} = beamai_agent:new(#{llm => LLM, system_prompt => <<"写作助手"/utf8>>}).
 ```
 
 **支持的 Provider：**
@@ -466,6 +498,7 @@ LLM = beamai_chat_completion:create(anthropic, #{
 | `zhipu` | llm_provider_zhipu | OpenAI 兼容 | 智谱 AI (GLM 系列) |
 | `bailian` | llm_provider_bailian | DashScope 原生 | 阿里云百炼 (通义千问系列) |
 | `ollama` | llm_provider_ollama | OpenAI 兼容 | Ollama 本地模型 |
+| `mock` | llm_provider_mock | 内置 | 测试用 Mock LLM |
 
 ### HTTP 后端配置
 
@@ -529,8 +562,8 @@ rebar3 shell
 |------|------|
 | **OTP 应用（本项目）** | 6 个 |
 | **核心依赖（BeamAI）** | 3 个 |
-| **源代码模块（本项目）** | ~70 个 |
-| **测试文件（本项目）** | ~20 个 |
+| **源代码模块（本项目）** | ~80 个 |
+| **测试文件（本项目）** | ~23 个 |
 
 **本项目应用：**
 - beamai_tools
