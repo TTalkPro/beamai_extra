@@ -97,7 +97,7 @@
     max_entries => pos_integer() | infinity
 }.
 
--export_type([url/0, card/0, ttl/0, options/0]).
+-export_type([url/0, card/0, ttl/0, cache_entry/0, options/0]).
 
 %%====================================================================
 %% 常量定义
