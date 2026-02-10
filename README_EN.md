@@ -8,7 +8,7 @@ English | [中文](README.md)
 
 A high-performance AI Agent extension framework based on [BeamAI](https://github.com/TTalkPro/beamai), providing a complete Agent development toolkit.
 
-This project depends on the r1.0.0 branch of the [BeamAI core library](https://github.com/TTalkPro/beamai) and includes the following extension features:
+This project depends on the main branch of the [BeamAI core library](https://github.com/TTalkPro/beamai) and includes the following extension features:
 
 ## Features
 
@@ -277,7 +277,7 @@ apps/
 ```
 
 **Dependency Notes:**
-- This project depends on the r1.0.0 branch of [BeamAI](https://github.com/TTalkPro/beamai) via `rebar.config`
+- This project depends on the main branch of [BeamAI](https://github.com/TTalkPro/beamai) via `rebar.config`
 - Core functionality (Kernel, Process Framework, Graph, LLM, Memory) is provided by BeamAI
 - This project focuses on Agent implementation, protocol support (A2A, MCP), tool system, and RAG features
 

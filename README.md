@@ -8,7 +8,7 @@
 
 基于 [BeamAI](https://github.com/TTalkPro/beamai) 的高性能 AI Agent 扩展框架，提供完整的 Agent 开发工具链。
 
-本项目依赖 [BeamAI 核心库](https://github.com/TTalkPro/beamai) 的 r1.0.0 分支，包含以下扩展功能：
+本项目依赖 [BeamAI 核心库](https://github.com/TTalkPro/beamai) 的 main 分支，包含以下扩展功能：
 
 ## 特性
 
@@ -278,7 +278,7 @@ apps/
 ```
 
 **依赖说明：**
-- 本项目通过 `rebar.config` 依赖 [BeamAI](https://github.com/TTalkPro/beamai) 的 r1.0.0 分支
+- 本项目通过 `rebar.config` 依赖 [BeamAI](https://github.com/TTalkPro/beamai) 的 main 分支
 - 核心功能（Kernel、Process Framework、Graph、LLM、Memory）由 BeamAI 提供
 - 本项目专注于 Agent 实现、协议支持（A2A、MCP）、工具系统和 RAG 功能
 
