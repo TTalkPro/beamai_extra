@@ -261,7 +261,15 @@ run_with_reflection_live() ->
                     ok;
                 Trace ->
                     io:format("~n--- Execution Trace ---~n"),
-                    io:format("~ts~n", [beamai_deepagent_trace:format(Trace)])
+                    try
+                        io:format("~ts~n", [beamai_deepagent_trace:format(Trace)])
+                    catch _:_ ->
+                        %% format/1 内部使用 jsx:encode，可能在 UTF-8 数据上失败
+                        Entries = beamai_deepagent_trace:get_recent(Trace, 10),
+                        lists:foreach(fun(Entry) ->
+                            io:format("  ~p~n", [Entry])
+                        end, Entries)
+                    end
             end;
         skip ->
             io:format("Skipped: ZHIPU_API_KEY not set~n")
