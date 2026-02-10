@@ -127,7 +127,7 @@ create(Config) ->
 %%
 %% @param Config 配置 map
 %% @returns 构建完成的 kernel 实例
--spec build_kernel(map()) -> beamai_kernel:kernel().
+-spec build_kernel(map()) -> map().
 build_kernel(#{kernel := Kernel}) when is_map(Kernel) ->
     Kernel;
 build_kernel(Config) ->

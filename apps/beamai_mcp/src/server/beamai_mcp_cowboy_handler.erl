@@ -127,11 +127,6 @@ handle_streamable_http(Req, Config) ->
             Req3 = cowboy_req:stream_reply(200, RespHeaders, Req2),
             cowboy_req:stream_body(iolist_to_binary(Response), fin, Req3),
             beamai_mcp_handler:close(NewState),
-            {ok, Req3, undefined};
-
-        {no_content, _, NewState} ->
-            Req3 = cowboy_req:reply(204, #{}, <<>>, Req2),
-            beamai_mcp_handler:close(NewState),
             {ok, Req3, undefined}
     end.
 
@@ -143,8 +138,16 @@ handle_streamable_http(Req, Config) ->
 handle_sse_init(Req, Config) ->
     Headers = maps:to_list(cowboy_req:headers(Req)),
 
+    %% 确保 sse_endpoint 存在于配置中，如果没有则从请求路径推导
+    ConfigWithEndpoint = case maps:is_key(sse_endpoint, Config) of
+        true -> Config;
+        false ->
+            Path = cowboy_req:path(Req),
+            Config#{sse_endpoint => <<Path/binary, "/message">>}
+    end,
+
     %% 初始化 handler
-    HandlerState = beamai_mcp_handler:init(Config),
+    HandlerState = beamai_mcp_handler:init(ConfigWithEndpoint),
 
     case beamai_mcp_handler:handle_sse_init(Headers, HandlerState) of
         {ok, InitialData, NewState} ->

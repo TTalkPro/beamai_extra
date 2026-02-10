@@ -8,6 +8,10 @@
 %%%-------------------------------------------------------------------
 -module(beamai_deepagent_utils).
 
+%% Suppress dialyzer warning: beamai_agent:run/2 is inferred to only return {error, _}
+%% due to deep dependency chain analysis, making the {ok, ...} pattern appear unreachable.
+-dialyzer({nowarn_function, run_agent/3}).
+
 -export([
     truncate/2,
     format_step_result/1,

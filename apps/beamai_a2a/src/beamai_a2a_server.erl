@@ -208,9 +208,7 @@ handle_json_with_auth(Server, JsonBin, Headers) ->
                 {ok, Response, RateLimitInfo} ->
                     {ok, jsx:encode(Response, []), RateLimitInfo};
                 {error, Type, Response} when is_map(Response) ->
-                    {error, Type, jsx:encode(Response, [])};
-                {error, Reason, RateLimitInfo} ->
-                    {error, Reason, RateLimitInfo}
+                    {error, Type, jsx:encode(Response, [])}
             end;
         {error, parse_error} ->
             %% 解析错误不需要认证检查
@@ -333,12 +331,8 @@ init(Opts) ->
 
 %% @private 处理同步调用
 handle_call({handle_request, Request}, _From, State) ->
-    case do_handle_request(Request, State) of
-        {ok, Response, NewState} ->
-            {reply, {ok, Response}, NewState};
-        {error, Reason, NewState} ->
-            {reply, {error, Reason}, NewState}
-    end;
+    {ok, Response, NewState} = do_handle_request(Request, State),
+    {reply, {ok, Response}, NewState};
 
 handle_call(get_agent_card, _From, #state{agent_card = Card} = State) ->
     {reply, {ok, Card}, State};
@@ -385,20 +379,12 @@ do_handle_request(#{<<"method">> := Method} = Request, State) ->
     },
 
     %% 调用处理器
-    case beamai_a2a_handler:dispatch(Method, Params, Context) of
-        {ok, Response, NewContext} ->
-            NewState = State#state{
-                tasks = maps:get(tasks, NewContext, State#state.tasks),
-                contexts = maps:get(contexts, NewContext, State#state.contexts)
-            },
-            {ok, Response, NewState};
-        {error, Reason, NewContext} ->
-            NewState = State#state{
-                tasks = maps:get(tasks, NewContext, State#state.tasks),
-                contexts = maps:get(contexts, NewContext, State#state.contexts)
-            },
-            {error, Reason, NewState}
-    end;
+    {ok, Response, NewContext} = beamai_a2a_handler:dispatch(Method, Params, Context),
+    NewState = State#state{
+        tasks = maps:get(tasks, NewContext, State#state.tasks),
+        contexts = maps:get(contexts, NewContext, State#state.contexts)
+    },
+    {ok, Response, NewState};
 
 do_handle_request(Request, State) when is_map(Request) ->
     %% 请求缺少 method 字段
@@ -417,10 +403,8 @@ do_handle_request({batch, Requests}, State) ->
     %% 批处理请求
     {Responses, FinalState} = lists:foldl(
         fun(Req, {Acc, S}) ->
-            case do_handle_request(Req, S) of
-                {ok, Resp, NewS} -> {[Resp | Acc], NewS};
-                {error, _, NewS} -> {Acc, NewS}
-            end
+            {ok, Resp, NewS} = do_handle_request(Req, S),
+            {[Resp | Acc], NewS}
         end,
         {[], State},
         Requests

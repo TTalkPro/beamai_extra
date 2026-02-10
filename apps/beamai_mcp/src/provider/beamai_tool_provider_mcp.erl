@@ -129,14 +129,10 @@ list_tools(Opts) ->
 %% @doc 按名称查找工具
 %%
 %% 优先从缓存查找，如果没有缓存则获取完整列表。
--spec find_tool(binary(), map()) -> {ok, tool_def()} | {error, not_found | term()}.
+-spec find_tool(binary(), map()) -> {ok, tool_def()} | {error, not_found}.
 find_tool(Name, Opts) ->
-    case list_tools(Opts) of
-        {ok, Tools} ->
-            find_tool_by_name(Name, Tools);
-        {error, Reason} ->
-            {error, Reason}
-    end.
+    {ok, Tools} = list_tools(Opts),
+    find_tool_by_name(Name, Tools).
 
 %% @private 按名称查找工具
 -spec find_tool_by_name(binary(), [tool_def()]) -> {ok, tool_def()} | {error, not_found}.

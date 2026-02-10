@@ -146,12 +146,6 @@ handle_jsonrpc(Req, Config) ->
             %% 解析错误 - 400
             Req3 = cowboy_req:reply(400, RespHeaders, ResponseJson, Req2),
             beamai_a2a_http_handler:close(NewState),
-            {ok, Req3, undefined};
-
-        {error, _, ResponseJson, RespHeaders, NewState} ->
-            %% 其他错误 - 500
-            Req3 = cowboy_req:reply(500, RespHeaders, ResponseJson, Req2),
-            beamai_a2a_http_handler:close(NewState),
             {ok, Req3, undefined}
     end.
 

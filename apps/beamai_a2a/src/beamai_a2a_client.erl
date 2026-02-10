@@ -382,25 +382,20 @@ generate_request_id() ->
 handle_sse_chunk(Chunk, Acc, Callback) ->
     %% 解析 SSE 事件
     #{events := Events, last_task := LastTask} = Acc,
-    case parse_sse_events(Chunk) of
-        {ok, ParsedEvents} ->
-            %% 处理每个事件
-            {NewLastTask, Done} = process_sse_events(ParsedEvents, LastTask, Callback),
-            NewAcc = Acc#{
-                events => Events ++ ParsedEvents,
-                last_task => NewLastTask
-            },
-            case Done of
-                true -> {done, NewAcc};
-                false -> {continue, NewAcc}
-            end;
-        {error, _} ->
-            %% 忽略解析错误，继续接收
-            {continue, Acc}
+    {ok, ParsedEvents} = parse_sse_events(Chunk),
+    %% 处理每个事件
+    {NewLastTask, Done} = process_sse_events(ParsedEvents, LastTask, Callback),
+    NewAcc = Acc#{
+        events => Events ++ ParsedEvents,
+        last_task => NewLastTask
+    },
+    case Done of
+        true -> {done, NewAcc};
+        false -> {continue, NewAcc}
     end.
 
 %% @private 解析 SSE 事件
--spec parse_sse_events(binary()) -> {ok, [map()]} | {error, term()}.
+-spec parse_sse_events(binary()) -> {ok, [map()]}.
 parse_sse_events(Chunk) ->
     %% SSE 格式: event: <type>\ndata: <json>\n\n
     Lines = binary:split(Chunk, <<"\n">>, [global]),

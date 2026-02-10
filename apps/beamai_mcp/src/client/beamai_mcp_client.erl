@@ -158,11 +158,11 @@ ping(Pid) ->
     gen_statem:call(Pid, ping).
 
 %% @doc 列出工具
--spec list_tools(pid()) -> {ok, [map()]} | {error, term()}.
+-spec list_tools(pid()) -> {ok, map()} | {error, term()}.
 list_tools(Pid) ->
     list_tools(Pid, undefined).
 
--spec list_tools(pid(), binary() | undefined) -> {ok, [map()]} | {error, term()}.
+-spec list_tools(pid(), binary() | undefined) -> {ok, map()} | {error, term()}.
 list_tools(Pid, Cursor) ->
     gen_statem:call(Pid, {list_tools, Cursor}).
 

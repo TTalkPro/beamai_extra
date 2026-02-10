@@ -352,9 +352,7 @@ do_authenticate(Headers, Opts, State) ->
                 {error, no_key} when AllowAnonymous ->
                     {ok, #{anonymous => true}};
                 {error, no_key} ->
-                    {error, missing_api_key};
-                {error, Reason} ->
-                    {error, Reason}
+                    {error, missing_api_key}
             end
     end.
 

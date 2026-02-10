@@ -58,6 +58,8 @@
 
 ```bash
 export ZHIPU_API_KEY=your_key_here
+# 可选：自定义 Anthropic 兼容 API 地址（默认: https://open.bigmodel.cn/api/anthropic）
+export ZHIPU_ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic
 rebar3 shell
 ```
 
@@ -475,7 +477,7 @@ ok = beamai_agent:save(Agent1),
 LLM 配置使用 `beamai_chat_completion:create/2` 创建：
 
 ```erlang
-%% 创建 LLM 配置
+%% 方式一：直接创建 LLM 配置
 LLM = beamai_chat_completion:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
@@ -483,10 +485,31 @@ LLM = beamai_chat_completion:create(anthropic, #{
     max_tokens => 2048
 }),
 
+%% 方式二：使用 example_llm_config 辅助模块（从环境变量自动读取配置）
+LLM = example_llm_config:anthropic().     %% Zhipu Anthropic 兼容 API（ZHIPU_API_KEY）
+LLM = example_llm_config:claude().        %% Anthropic 原生 API（ANTHROPIC_API_KEY）
+LLM = example_llm_config:zhipu().         %% Zhipu 原生 API（ZHIPU_API_KEY）
+LLM = example_llm_config:openai_glm().    %% Zhipu OpenAI 兼容 API（ZHIPU_API_KEY）
+LLM = example_llm_config:deepseek().      %% DeepSeek API（DEEPSEEK_API_KEY）
+LLM = example_llm_config:openai().        %% OpenAI API（OPENAI_API_KEY）
+
+%% 方式三：使用 test_zhipu_anthropic 模块（支持 ZHIPU_ANTHROPIC_BASE_URL 环境变量）
+LLM = test_zhipu_anthropic:create_llm().  %% 从 ZHIPU_API_KEY + ZHIPU_ANTHROPIC_BASE_URL 构建
+
 %% 配置可在多个 Agent 间复用
 {ok, Agent1} = beamai_agent:new(#{llm => LLM, system_prompt => <<"研究助手"/utf8>>}),
 {ok, Agent2} = beamai_agent:new(#{llm => LLM, system_prompt => <<"写作助手"/utf8>>}).
 ```
+
+**环境变量：**
+
+| 环境变量 | 说明 | 必填 |
+|----------|------|------|
+| `ZHIPU_API_KEY` | 智谱 API Key | 使用智谱相关 Provider 时必填 |
+| `ZHIPU_ANTHROPIC_BASE_URL` | Zhipu Anthropic 兼容 API 地址（默认 `https://open.bigmodel.cn/api/anthropic`） | 可选 |
+| `ANTHROPIC_API_KEY` | Anthropic 原生 API Key | 使用 Claude 时必填 |
+| `DEEPSEEK_API_KEY` | DeepSeek API Key | 使用 DeepSeek 时必填 |
+| `OPENAI_API_KEY` | OpenAI API Key | 使用 OpenAI 时必填 |
 
 **支持的 Provider：**
 
@@ -554,6 +577,29 @@ rebar3 compile
 
 # 启动 Shell
 rebar3 shell
+```
+
+### 集成测试（Agent + DeepAgent）
+
+使用 `test_zhipu_anthropic` 模块对 Agent 和 DeepAgent 进行端到端测试：
+
+```bash
+export ZHIPU_API_KEY=your_key_here
+# 可选：自定义 Anthropic 兼容 API 地址
+export ZHIPU_ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic
+rebar3 shell
+```
+
+```erlang
+%% 运行所有集成测试（5 个测试用例）
+test_zhipu_anthropic:run_all().
+
+%% 或单独运行
+test_zhipu_anthropic:test_agent_simple().       %% Agent 单轮对话
+test_zhipu_anthropic:test_agent_multi_turn().   %% Agent 多轮对话（上下文记忆）
+test_zhipu_anthropic:test_agent_with_tools().   %% Agent 工具调用
+test_zhipu_anthropic:test_deepagent_simple().   %% DeepAgent 简单任务
+test_zhipu_anthropic:test_deepagent_planned().  %% DeepAgent 规划执行
 ```
 
 ## 项目统计

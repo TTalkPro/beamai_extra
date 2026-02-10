@@ -546,7 +546,7 @@ LLM client with multi-provider support and unified chat completion interface.
 LLM configuration is created using `beamai_chat_completion:create/2`:
 
 ```erlang
-%% Create LLM configuration
+%% Create LLM configuration directly
 LLM = beamai_chat_completion:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
@@ -554,10 +554,31 @@ LLM = beamai_chat_completion:create(anthropic, #{
     max_tokens => 2048
 }).
 
+%% Use helper modules (auto-read from environment variables)
+LLM = example_llm_config:anthropic().     %% Zhipu Anthropic-compatible API
+LLM = example_llm_config:claude().        %% Anthropic native API
+LLM = example_llm_config:zhipu().         %% Zhipu native API
+LLM = example_llm_config:openai_glm().    %% Zhipu OpenAI-compatible API
+LLM = example_llm_config:deepseek().      %% DeepSeek API
+LLM = example_llm_config:openai().        %% OpenAI API
+
+%% Supports ZHIPU_ANTHROPIC_BASE_URL env var for custom API endpoint
+LLM = test_zhipu_anthropic:create_llm().
+
 %% Configuration reuse: multiple Agents share the same configuration
 {ok, Agent1} = beamai_agent:new(#{llm => LLM, system_prompt => <<"Assistant 1">>}),
 {ok, Agent2} = beamai_agent:new(#{llm => LLM, system_prompt => <<"Assistant 2">>}).
 ```
+
+**Environment Variables:**
+
+| Variable | Description |
+|----------|-------------|
+| `ZHIPU_API_KEY` | Zhipu API Key |
+| `ZHIPU_ANTHROPIC_BASE_URL` | Zhipu Anthropic-compatible API URL (default: `https://open.bigmodel.cn/api/anthropic`) |
+| `ANTHROPIC_API_KEY` | Anthropic native API Key |
+| `DEEPSEEK_API_KEY` | DeepSeek API Key |
+| `OPENAI_API_KEY` | OpenAI API Key |
 
 **Advantages:**
 - Configuration reuse: multiple Agents share the same LLM configuration

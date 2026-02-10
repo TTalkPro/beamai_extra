@@ -58,6 +58,8 @@ This project depends on the main branch of the [BeamAI core library](https://git
 
 ```bash
 export ZHIPU_API_KEY=your_key_here
+# Optional: custom Anthropic-compatible API base URL (default: https://open.bigmodel.cn/api/anthropic)
+export ZHIPU_ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic
 rebar3 shell
 ```
 
@@ -461,7 +463,7 @@ Listen to 8 events during Agent execution:
 LLM configuration is created using `beamai_chat_completion:create/2`:
 
 ```erlang
-%% Create LLM configuration
+%% Method 1: Create LLM configuration directly
 LLM = beamai_chat_completion:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
@@ -469,10 +471,31 @@ LLM = beamai_chat_completion:create(anthropic, #{
     max_tokens => 2048
 }),
 
+%% Method 2: Use example_llm_config helper (reads from environment variables)
+LLM = example_llm_config:anthropic().     %% Zhipu Anthropic-compatible API (ZHIPU_API_KEY)
+LLM = example_llm_config:claude().        %% Anthropic native API (ANTHROPIC_API_KEY)
+LLM = example_llm_config:zhipu().         %% Zhipu native API (ZHIPU_API_KEY)
+LLM = example_llm_config:openai_glm().    %% Zhipu OpenAI-compatible API (ZHIPU_API_KEY)
+LLM = example_llm_config:deepseek().      %% DeepSeek API (DEEPSEEK_API_KEY)
+LLM = example_llm_config:openai().        %% OpenAI API (OPENAI_API_KEY)
+
+%% Method 3: Use test_zhipu_anthropic module (supports ZHIPU_ANTHROPIC_BASE_URL env var)
+LLM = test_zhipu_anthropic:create_llm().  %% Built from ZHIPU_API_KEY + ZHIPU_ANTHROPIC_BASE_URL
+
 %% Configuration can be reused across multiple Agents
 {ok, Agent1} = beamai_agent:new(#{llm => LLM, system_prompt => <<"Research assistant">>}),
 {ok, Agent2} = beamai_agent:new(#{llm => LLM, system_prompt => <<"Writing assistant">>}).
 ```
+
+**Environment Variables:**
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `ZHIPU_API_KEY` | Zhipu API Key | Required for Zhipu-related providers |
+| `ZHIPU_ANTHROPIC_BASE_URL` | Zhipu Anthropic-compatible API URL (default: `https://open.bigmodel.cn/api/anthropic`) | Optional |
+| `ANTHROPIC_API_KEY` | Anthropic native API Key | Required for Claude |
+| `DEEPSEEK_API_KEY` | DeepSeek API Key | Required for DeepSeek |
+| `OPENAI_API_KEY` | OpenAI API Key | Required for OpenAI |
 
 **Supported Providers:**
 
@@ -540,6 +563,29 @@ rebar3 compile
 
 # Start Shell
 rebar3 shell
+```
+
+### Integration Tests (Agent + DeepAgent)
+
+Use the `test_zhipu_anthropic` module for end-to-end testing of Agent and DeepAgent:
+
+```bash
+export ZHIPU_API_KEY=your_key_here
+# Optional: custom Anthropic-compatible API base URL
+export ZHIPU_ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic
+rebar3 shell
+```
+
+```erlang
+%% Run all integration tests (5 test cases)
+test_zhipu_anthropic:run_all().
+
+%% Or run individually
+test_zhipu_anthropic:test_agent_simple().       %% Agent single-turn conversation
+test_zhipu_anthropic:test_agent_multi_turn().   %% Agent multi-turn (context memory)
+test_zhipu_anthropic:test_agent_with_tools().   %% Agent tool calling
+test_zhipu_anthropic:test_deepagent_simple().   %% DeepAgent simple task
+test_zhipu_anthropic:test_deepagent_planned().  %% DeepAgent planned execution
 ```
 
 ## Project Statistics

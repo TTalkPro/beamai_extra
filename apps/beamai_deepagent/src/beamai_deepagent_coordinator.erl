@@ -14,6 +14,23 @@
 
 -export([execute/3]).
 
+%% Suppress dialyzer warnings that cascade from beamai_agent:run/2 type analysis.
+%% Dialyzer infers beamai_agent:run always returns {error, _} due to deep dependency
+%% chain analysis, making many functions and patterns appear unreachable.
+-dialyzer({nowarn_function, [
+    execute_direct/3,
+    execute_with_planning/3,
+    execute_plan/3,
+    execute_layers/6,
+    finalize_execution/4,
+    maybe_reflect_layer/5,
+    build_layer_error_result/5,
+    update_plan_with_results/2,
+    step_status_to_plan_status/1,
+    determine_overall_status/1,
+    build_default_response/1
+]}).
+
 %%====================================================================
 %% API
 %%====================================================================

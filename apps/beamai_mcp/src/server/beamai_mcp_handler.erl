@@ -165,7 +165,7 @@ handle_post(Body, Headers, AcceptSSE, #handler_state{server_pid = ServerPid} = S
 %% @param State Handler 状态
 %% @returns {ok, InitialData, NewState} | {error, Reason}
 -spec handle_sse_init([{binary(), binary()}], handler_state()) ->
-    {ok, iolist(), handler_state()} | {error, term()}.
+    {ok, binary(), handler_state()} | {error, term()}.
 handle_sse_init(_Headers, #handler_state{sse_endpoint = undefined}) ->
     {error, sse_endpoint_not_configured};
 handle_sse_init(_Headers, #handler_state{sse_endpoint = Endpoint} = State) ->
@@ -189,7 +189,7 @@ handle_sse_init(_Headers, #handler_state{sse_endpoint = Endpoint} = State) ->
 %% @param State Handler 状态
 %% @returns {ok, ResponseData, NewState} | {error, Reason}
 -spec handle_sse_message(binary(), [{binary(), binary()}], handler_state()) ->
-    {ok, iolist(), handler_state()} | {error, term()}.
+    {ok, binary(), handler_state()} | {error, term()}.
 handle_sse_message(Body, _Headers, #handler_state{server_pid = ServerPid} = State) ->
     case beamai_mcp_jsonrpc:decode(Body) of
         {ok, Request} ->
@@ -214,8 +214,8 @@ handle_sse_message(Body, _Headers, #handler_state{server_pid = ServerPid} = Stat
 %%
 %% @param EventType 事件类型
 %% @param Data 数据（binary 或会被 JSON 编码的 term）
-%% @returns iolist
--spec format_sse_response(binary(), binary() | term()) -> iolist().
+%% @returns binary
+-spec format_sse_response(binary(), binary() | term()) -> binary().
 format_sse_response(EventType, Data) when is_binary(Data) ->
     beamai_sse:encode_event(EventType, Data);
 format_sse_response(EventType, Data) ->

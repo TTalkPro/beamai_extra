@@ -429,9 +429,9 @@ do_retry_notify(TaskId, Task, Attempt, Stats) ->
 send_notification(TaskId, Task, Webhook, Stats) ->
     Url = Webhook#webhook.url,
     Payload = build_payload(TaskId, Task),
-    Headers = build_headers(Webhook#webhook.token),
+    ExtraHeaders = build_auth_headers(Webhook#webhook.token),
 
-    case do_http_post(Url, Headers, Payload) of
+    case do_http_post(Url, ExtraHeaders, Payload) of
         {ok, _Response} ->
             %% 成功
             NewStats = maps:update_with(
@@ -471,27 +471,28 @@ build_payload(TaskId, Task) ->
     },
     jsx:encode(Event, []).
 
-%% @private 构建请求头
-build_headers(undefined) ->
+%% @private 构建额外请求头（认证等）
+build_auth_headers(undefined) ->
     [
-        {<<"Content-Type">>, <<"application/json">>},
         {<<"User-Agent">>, <<"A2A-Agent/1.0">>}
     ];
-build_headers(Token) when is_binary(Token) ->
+build_auth_headers(Token) when is_binary(Token) ->
     [
-        {<<"Content-Type">>, <<"application/json">>},
         {<<"Authorization">>, <<"Bearer ", Token/binary>>},
         {<<"User-Agent">>, <<"A2A-Agent/1.0">>}
     ].
 
 %% @private 发送 HTTP POST 请求
-do_http_post(Url, Headers, Body) ->
+do_http_post(Url, ExtraHeaders, Body) ->
     %% 使用 beamai_http 模块
-    case beamai_http:post(Url, Headers, Body, #{timeout => ?PUSH_HTTP_TIMEOUT}) of
-        {ok, {{_, StatusCode, _}, _, ResponseBody}} when StatusCode >= 200, StatusCode < 300 ->
+    %% beamai_http:post/4 签名: post(url(), ContentType, Body, Options)
+    Opts = #{
+        timeout => ?PUSH_HTTP_TIMEOUT,
+        headers => ExtraHeaders
+    },
+    case beamai_http:post(Url, <<"application/json">>, Body, Opts) of
+        {ok, ResponseBody} ->
             {ok, ResponseBody};
-        {ok, {{_, StatusCode, _}, _, ResponseBody}} ->
-            {error, {http_error, StatusCode, ResponseBody}};
         {error, Reason} ->
             {error, Reason}
     end.

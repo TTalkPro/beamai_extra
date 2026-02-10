@@ -29,8 +29,7 @@
 extract_content(Response) ->
     case llm_response:content(Response) of
         null -> <<>>;
-        Content when is_binary(Content) -> Content;
-        _ -> <<>>
+        Content when is_binary(Content) -> Content
     end.
 
 %% @doc 从 Kernel 构建 chat 选项

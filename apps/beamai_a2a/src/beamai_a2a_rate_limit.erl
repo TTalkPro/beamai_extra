@@ -101,7 +101,7 @@
 %% 令牌桶记录
 -record(bucket, {
     key :: binary(),                    %% 限流 Key
-    tokens :: float(),                  %% 当前令牌数
+    tokens :: number(),                 %% 当前令牌数
     last_refill :: non_neg_integer(),   %% 上次补充时间（毫秒）
     window_start :: non_neg_integer(),  %% 窗口开始时间
     window_count :: non_neg_integer()   %% 窗口内请求数

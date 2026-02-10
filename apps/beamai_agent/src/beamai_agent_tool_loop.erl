@@ -126,20 +126,12 @@ handle_normal_tool_calls(TCs, Msgs, Opts, N, ToolCallsMade) ->
 
 %% @private 执行 tools 并继续循环（或处理执行中断）
 execute_and_continue(TCs, Msgs, Opts, N, ToolCallsMade) ->
-    #{kernel := Kernel, agent := Agent} = Opts,
-    case execute_tools_with_interrupt_check(Kernel, TCs) of
-        {ok, ToolResults, NewToolCalls} ->
-            AssistantMsg = #{role => assistant, content => null, tool_calls => TCs},
-            NewMsgs = Msgs ++ [AssistantMsg | ToolResults],
-            NewOpts = Opts#{messages => NewMsgs},
-            iterate(NewOpts, N - 1, ToolCallsMade ++ NewToolCalls);
-        {interrupt, IntReason, PartialResults, InterruptedTC, CompletedCalls} ->
-            #{max_tool_iterations := MaxIter} = Agent,
-            Context = build_interrupt_context(TCs, Msgs, MaxIter - N,
-                                              PartialResults, InterruptedTC,
-                                              ToolCallsMade ++ CompletedCalls, IntReason),
-            {interrupt, tool_result, Context}
-    end.
+    #{kernel := Kernel} = Opts,
+    {ok, ToolResults, NewToolCalls} = execute_tools_with_interrupt_check(Kernel, TCs),
+    AssistantMsg = #{role => assistant, content => null, tool_calls => TCs},
+    NewMsgs = Msgs ++ [AssistantMsg | ToolResults],
+    NewOpts = Opts#{messages => NewMsgs},
+    iterate(NewOpts, N - 1, ToolCallsMade ++ NewToolCalls).
 
 %%====================================================================
 %% 内部函数 - 无 Tool Calls 结束处理
@@ -251,13 +243,6 @@ execute_tools_iter(Kernel, [TC | Rest], ResultsAcc, CallsAcc) ->
             CallRecord = #{name => Name, args => Args, result => Result, tool_call_id => Id},
             execute_tools_iter(Kernel, Rest,
                 [Msg | ResultsAcc], [CallRecord | CallsAcc]);
-        {interrupt, Reason, PartialResult} ->
-            PartialMsg = #{role => tool, tool_call_id => Id,
-                          content => beamai_tool:encode_result(PartialResult)},
-            {interrupt, Reason,
-             lists:reverse([PartialMsg | ResultsAcc]),
-             TC,
-             lists:reverse(CallsAcc)};
         {error, Reason} ->
             Result = beamai_tool:encode_result(#{error => Reason}),
             Msg = #{role => tool, tool_call_id => Id, content => Result},

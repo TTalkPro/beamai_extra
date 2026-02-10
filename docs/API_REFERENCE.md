@@ -546,7 +546,7 @@ beamai_deepagent_tool_provider:find_tool(Name, Opts). %% 查找工具
 LLM 配置使用 `beamai_chat_completion:create/2` 创建：
 
 ```erlang
-%% 创建 LLM 配置
+%% 直接创建 LLM 配置
 LLM = beamai_chat_completion:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
@@ -554,10 +554,31 @@ LLM = beamai_chat_completion:create(anthropic, #{
     max_tokens => 2048
 }).
 
+%% 使用辅助模块（从环境变量自动读取配置）
+LLM = example_llm_config:anthropic().     %% Zhipu Anthropic 兼容 API
+LLM = example_llm_config:claude().        %% Anthropic 原生 API
+LLM = example_llm_config:zhipu().         %% Zhipu 原生 API
+LLM = example_llm_config:openai_glm().    %% Zhipu OpenAI 兼容 API
+LLM = example_llm_config:deepseek().      %% DeepSeek API
+LLM = example_llm_config:openai().        %% OpenAI API
+
+%% 支持 ZHIPU_ANTHROPIC_BASE_URL 环境变量自定义 API 地址
+LLM = test_zhipu_anthropic:create_llm().
+
 %% 配置复用：多个 Agent 共享同一配置
 {ok, Agent1} = beamai_agent:new(#{llm => LLM, system_prompt => <<"助手1"/utf8>>}),
 {ok, Agent2} = beamai_agent:new(#{llm => LLM, system_prompt => <<"助手2"/utf8>>}).
 ```
+
+**环境变量：**
+
+| 环境变量 | 说明 |
+|----------|------|
+| `ZHIPU_API_KEY` | 智谱 API Key |
+| `ZHIPU_ANTHROPIC_BASE_URL` | Zhipu Anthropic 兼容 API 地址（默认 `https://open.bigmodel.cn/api/anthropic`） |
+| `ANTHROPIC_API_KEY` | Anthropic 原生 API Key |
+| `DEEPSEEK_API_KEY` | DeepSeek API Key |
+| `OPENAI_API_KEY` | OpenAI API Key |
 
 **优势：**
 - 配置复用：多个 Agent 共享同一 LLM 配置

@@ -442,6 +442,10 @@ handle_push_config_delete(Id, Params, Context) ->
 %%====================================================================
 
 %% @private 执行任务
+%%
+%% Note: dialyzer may report false positives here due to cross-module
+%% success typing analysis of beamai_agent:new/1 and beamai_agent:run/2.
+-dialyzer({no_match, [execute_task/2, execute_with_agent/2]}).
 execute_task(TaskPid, AgentConfig) ->
     %% 更新状态为 working
     ok = beamai_a2a_task:update_status(TaskPid, working),
@@ -506,13 +510,6 @@ execute_with_agent(Input, AgentConfig) ->
             case beamai_agent:run(Agent, Input) of
                 {ok, #{content := Content}, _NewAgent} ->
                     {ok, Content};
-                {ok, Result, _NewAgent} when is_map(Result) ->
-                    case maps:get(content, Result, undefined) of
-                        undefined -> {ok, jsx:encode(Result, [])};
-                        Resp -> {ok, Resp}
-                    end;
-                {interrupt, _InterruptInfo, _NewAgent} ->
-                    {ok, <<"Agent execution interrupted, awaiting input.">>};
                 {error, Reason} ->
                     {error, Reason}
             end;

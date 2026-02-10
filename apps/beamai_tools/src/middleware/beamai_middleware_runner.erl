@@ -61,7 +61,7 @@ init(MiddlewareSpecs) ->
 %%
 %% @param Chain 已初始化的中间件链
 %% @returns kernel filter 定义列表
--spec to_filters(middleware_chain()) -> [beamai_filter:filter_def()].
+-spec to_filters(middleware_chain()) -> [beamai_filter:filter_spec()].
 to_filters(Chain) ->
     %% 将中间件链存储到进程字典中，用于状态管理
     ChainRef = make_ref(),

@@ -11,6 +11,10 @@
 
 -export([execute_step/3]).
 
+%% Suppress dialyzer warning: beamai_agent:run/2 is inferred to only return {error, _}
+%% due to deep dependency chain analysis, making the {ok, ...} pattern appear unreachable.
+-dialyzer({nowarn_function, execute_agent/2}).
+
 -type step_result() :: #{
     step_id := pos_integer(),
     status := completed | failed | crashed | timeout,

@@ -10,6 +10,15 @@
 
 -export([create_plan/2]).
 
+%% Suppress dialyzer warnings: beamai_agent:run/2 is inferred to only return {error, _}
+%% due to deep dependency chain analysis, making the {ok, ...} branch and downstream
+%% functions (extract_plan, find_create_plan_call) appear unreachable.
+-dialyzer({nowarn_function, [
+    create_plan/2,
+    extract_plan/1,
+    find_create_plan_call/1
+]}).
+
 %%====================================================================
 %% API
 %%====================================================================

@@ -163,12 +163,8 @@ request(Message, State) ->
 %% @doc 发送请求并同步等待响应（指定超时）
 -spec request(binary(), timeout(), state()) -> {ok, binary(), state()} | {error, term()}.
 request(Message, Timeout, State) ->
-    case send(Message, State) of
-        {ok, NewState} ->
-            recv(Timeout, NewState);
-        Error ->
-            Error
-    end.
+    {ok, NewState} = send(Message, State),
+    recv(Timeout, NewState).
 
 %%====================================================================
 %% 内部函数

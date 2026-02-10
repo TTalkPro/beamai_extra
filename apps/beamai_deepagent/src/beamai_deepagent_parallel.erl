@@ -11,6 +11,11 @@
 
 -export([execute_layer/2]).
 
+%% Suppress dialyzer warning: execute_batch always returns {ok, ...} per analysis,
+%% making the {error, _} pattern in execute_batches appear unreachable.
+%% We keep the error handling for defensive coding.
+-dialyzer({nowarn_function, execute_batches/4}).
+
 -define(DEFAULT_MAX_PARALLEL, 5).
 -define(DEFAULT_STEP_TIMEOUT, 300000). %% 5 minutes per step
 
