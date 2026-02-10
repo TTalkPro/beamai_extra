@@ -126,46 +126,37 @@ no_memory_no_plugin_live() ->
 no_memory_with_plugin() ->
     io:format("~n=== 场景 2: 无 Memory + 有 Plugin (Mock) ===~n~n"),
 
-    %% 方式一：通过 kernel 注册 plugin
+    %% 方式一：通过 kernel 注册工具
     Kernel0 = beamai_kernel:new(),
     LlmConfig = beamai_chat_completion:create(mock, #{}),
     K1 = beamai_kernel:add_service(Kernel0, LlmConfig),
 
     %% 注册计算器工具
-    K2 = beamai_kernel:add_plugin(K1, <<"calculator">>, [
-        #{name => <<"add">>,
-          description => <<"Add two numbers">>,
+    AddTool = beamai_tool:new(<<"add">>,
+        fun(Args) ->
+            A = maps:get(<<"a">>, Args, 0),
+            B = maps:get(<<"b">>, Args, 0),
+            io:format("  [calculator] ~p + ~p = ~p~n", [A, B, A + B]),
+            {ok, #{result => A + B}}
+        end,
+        #{description => <<"Add two numbers">>,
           parameters => #{
-              type => object,
-              properties => #{
-                  a => #{type => number, description => <<"First number">>},
-                  b => #{type => number, description => <<"Second number">>}
-              },
-              required => [<<"a">>, <<"b">>]
-          },
-          handler => fun(Args, _Ctx) ->
-              A = maps:get(a, Args, maps:get(<<"a">>, Args, 0)),
-              B = maps:get(b, Args, maps:get(<<"b">>, Args, 0)),
-              io:format("  [calculator] ~p + ~p = ~p~n", [A, B, A + B]),
-              {ok, #{result => A + B}}
-          end},
-        #{name => <<"multiply">>,
-          description => <<"Multiply two numbers">>,
+              <<"a">> => #{type => number, description => <<"First number">>, required => true},
+              <<"b">> => #{type => number, description => <<"Second number">>, required => true}
+          }}),
+    MultiplyTool = beamai_tool:new(<<"multiply">>,
+        fun(Args) ->
+            A = maps:get(<<"a">>, Args, 0),
+            B = maps:get(<<"b">>, Args, 0),
+            io:format("  [calculator] ~p * ~p = ~p~n", [A, B, A * B]),
+            {ok, #{result => A * B}}
+        end,
+        #{description => <<"Multiply two numbers">>,
           parameters => #{
-              type => object,
-              properties => #{
-                  a => #{type => number, description => <<"First number">>},
-                  b => #{type => number, description => <<"Second number">>}
-              },
-              required => [<<"a">>, <<"b">>]
-          },
-          handler => fun(Args, _Ctx) ->
-              A = maps:get(a, Args, maps:get(<<"a">>, Args, 0)),
-              B = maps:get(b, Args, maps:get(<<"b">>, Args, 0)),
-              io:format("  [calculator] ~p * ~p = ~p~n", [A, B, A * B]),
-              {ok, #{result => A * B}}
-          end}
-    ]),
+              <<"a">> => #{type => number, description => <<"First number">>, required => true},
+              <<"b">> => #{type => number, description => <<"Second number">>, required => true}
+          }}),
+    K2 = beamai_kernel:add_tools(K1, [AddTool, MultiplyTool]),
 
     %% 创建 agent（传入预构建的 kernel）
     {ok, Agent} = beamai_agent:new(#{
@@ -200,36 +191,27 @@ no_memory_with_plugin_live() ->
     %% 构建带天气和计算工具的 kernel
     Kernel0 = beamai_kernel:new(),
     K1 = beamai_kernel:add_service(Kernel0, example_llm_config:anthropic()),
-    K2 = beamai_kernel:add_plugin(K1, <<"tools">>, [
-        #{name => <<"get_weather">>,
-          description => <<"Get current weather for a city">>,
+    WeatherTool = beamai_tool:new(<<"get_weather">>,
+        fun(Args) ->
+            City = maps:get(<<"city">>, Args, <<"unknown">>),
+            io:format("  [tool] get_weather(~ts)~n", [City]),
+            {ok, mock_weather(City)}
+        end,
+        #{description => <<"Get current weather for a city">>,
           parameters => #{
-              type => object,
-              properties => #{
-                  city => #{type => string, description => <<"City name">>}
-              },
-              required => [<<"city">>]
-          },
-          handler => fun(Args, _Ctx) ->
-              City = maps:get(city, Args, maps:get(<<"city">>, Args, <<"unknown">>)),
-              io:format("  [tool] get_weather(~ts)~n", [City]),
-              {ok, mock_weather(City)}
-          end},
-        #{name => <<"calculate">>,
-          description => <<"Evaluate a math expression">>,
+              <<"city">> => #{type => string, description => <<"City name">>, required => true}
+          }}),
+    CalcTool = beamai_tool:new(<<"calculate">>,
+        fun(Args) ->
+            Expr = maps:get(<<"expression">>, Args, <<"0">>),
+            io:format("  [tool] calculate(~s)~n", [Expr]),
+            {ok, #{expression => Expr, result => <<"42">>}}
+        end,
+        #{description => <<"Evaluate a math expression">>,
           parameters => #{
-              type => object,
-              properties => #{
-                  expression => #{type => string, description => <<"Math expression">>}
-              },
-              required => [<<"expression">>]
-          },
-          handler => fun(Args, _Ctx) ->
-              Expr = maps:get(expression, Args, maps:get(<<"expression">>, Args, <<"0">>)),
-              io:format("  [tool] calculate(~s)~n", [Expr]),
-              {ok, #{expression => Expr, result => <<"42">>}}
-          end}
-    ]),
+              <<"expression">> => #{type => string, description => <<"Math expression">>, required => true}
+          }}),
+    K2 = beamai_kernel:add_tools(K1, [WeatherTool, CalcTool]),
 
     {ok, Agent} = beamai_agent:new(#{
         kernel => K2,
@@ -281,10 +263,9 @@ with_memory_no_plugin() ->
         {ok, _} -> ok;
         {error, {already_started, _}} -> ok
     end,
-    {ok, Memory} = beamai_memory:new(#{
-        context_store => {beamai_store_ets, StoreName},
-        thread_id => <<"example-session-001">>
-    }),
+    StateStore = beamai_state_store:new({beamai_store_ets, StoreName}),
+    Mgr = beamai_process_snapshot:new(StateStore),
+    Memory = {Mgr, #{thread_id => <<"example-session-001">>}},
 
     %% Agent 配置（save 和 restore 都使用此配置）
     AgentConfig = #{
@@ -339,10 +320,9 @@ with_memory_no_plugin_live() ->
         {ok, _} -> ok;
         {error, {already_started, _}} -> ok
     end,
-    {ok, Memory} = beamai_memory:new(#{
-        context_store => {beamai_store_ets, StoreName},
-        thread_id => <<"live-session-001">>
-    }),
+    StateStore1 = beamai_state_store:new({beamai_store_ets, StoreName}),
+    Mgr1 = beamai_process_snapshot:new(StateStore1),
+    Memory = {Mgr1, #{thread_id => <<"live-session-001">>}},
 
     AgentConfig = #{
         llm => example_llm_config:anthropic(),
@@ -404,40 +384,33 @@ with_memory_with_plugin() ->
         {ok, _} -> ok;
         {error, {already_started, _}} -> ok
     end,
-    {ok, Memory} = beamai_memory:new(#{
-        context_store => {beamai_store_ets, StoreName},
-        thread_id => <<"full-agent-session">>
-    }),
+    StateStore2 = beamai_state_store:new({beamai_store_ets, StoreName}),
+    Mgr2 = beamai_process_snapshot:new(StateStore2),
+    Memory = {Mgr2, #{thread_id => <<"full-agent-session">>}},
 
     %% 构建带工具的 kernel
     Kernel0 = beamai_kernel:new(),
     LlmConfig = beamai_chat_completion:create(mock, #{}),
     K1 = beamai_kernel:add_service(Kernel0, LlmConfig),
-    K2 = beamai_kernel:add_plugin(K1, <<"notes">>, [
-        #{name => <<"save_note">>,
-          description => <<"Save a note with a title">>,
+    SaveNoteTool = beamai_tool:new(<<"save_note">>,
+        fun(Args) ->
+            Title = maps:get(<<"title">>, Args, <<"untitled">>),
+            Content = maps:get(<<"content">>, Args, <<>>),
+            io:format("  [notes] Saved: ~ts -> ~ts~n", [Title, Content]),
+            {ok, #{status => saved, title => Title}}
+        end,
+        #{description => <<"Save a note with a title">>,
           parameters => #{
-              type => object,
-              properties => #{
-                  title => #{type => string, description => <<"Note title">>},
-                  content => #{type => string, description => <<"Note content">>}
-              },
-              required => [<<"title">>, <<"content">>]
-          },
-          handler => fun(Args, _Ctx) ->
-              Title = maps:get(title, Args, maps:get(<<"title">>, Args, <<"untitled">>)),
-              Content = maps:get(content, Args, maps:get(<<"content">>, Args, <<>>)),
-              io:format("  [notes] Saved: ~ts -> ~ts~n", [Title, Content]),
-              {ok, #{status => saved, title => Title}}
-          end},
-        #{name => <<"list_notes">>,
-          description => <<"List all saved notes">>,
-          parameters => #{type => object, properties => #{}},
-          handler => fun(_Args, _Ctx) ->
-              io:format("  [notes] Listing notes~n"),
-              {ok, #{notes => [<<"Meeting notes">>, <<"TODO list">>]}}
-          end}
-    ]),
+              <<"title">> => #{type => string, description => <<"Note title">>, required => true},
+              <<"content">> => #{type => string, description => <<"Note content">>, required => true}
+          }}),
+    ListNotesTool = beamai_tool:new(<<"list_notes">>,
+        fun(_Args) ->
+            io:format("  [notes] Listing notes~n"),
+            {ok, #{notes => [<<"Meeting notes">>, <<"TODO list">>]}}
+        end,
+        #{description => <<"List all saved notes">>}),
+    K2 = beamai_kernel:add_tools(K1, [SaveNoteTool, ListNotesTool]),
 
     %% Agent 配置
     AgentConfig = #{
@@ -494,44 +467,34 @@ with_memory_with_plugin_live() ->
         {ok, _} -> ok;
         {error, {already_started, _}} -> ok
     end,
-    {ok, Memory} = beamai_memory:new(#{
-        context_store => {beamai_store_ets, StoreName},
-        thread_id => <<"full-live-session">>
-    }),
+    StateStore3 = beamai_state_store:new({beamai_store_ets, StoreName}),
+    Mgr3 = beamai_process_snapshot:new(StateStore3),
+    Memory = {Mgr3, #{thread_id => <<"full-live-session">>}},
 
     %% 构建 kernel
     Kernel0 = beamai_kernel:new(),
     K1 = beamai_kernel:add_service(Kernel0, example_llm_config:anthropic()),
-    K2 = beamai_kernel:add_plugin(K1, <<"tools">>, [
-        #{name => <<"get_weather">>,
-          description => <<"Get current weather for a city. Returns temperature and condition.">>,
+    WeatherTool2 = beamai_tool:new(<<"get_weather">>,
+        fun(Args) ->
+            City = maps:get(<<"city">>, Args, <<"unknown">>),
+            io:format("  [tool] get_weather(~ts)~n", [City]),
+            {ok, mock_weather(City)}
+        end,
+        #{description => <<"Get current weather for a city. Returns temperature and condition.">>,
           parameters => #{
-              type => object,
-              properties => #{
-                  city => #{type => string, description => <<"City name (e.g. Beijing, Tokyo)">>}
-              },
-              required => [<<"city">>]
-          },
-          handler => fun(Args, _Ctx) ->
-              City = maps:get(city, Args, maps:get(<<"city">>, Args, <<"unknown">>)),
-              io:format("  [tool] get_weather(~ts)~n", [City]),
-              {ok, mock_weather(City)}
-          end},
-        #{name => <<"remember_fact">>,
-          description => <<"Store a fact for later recall. Use this when the user asks you to remember something.">>,
+              <<"city">> => #{type => string, description => <<"City name (e.g. Beijing, Tokyo)">>, required => true}
+          }}),
+    RememberTool = beamai_tool:new(<<"remember_fact">>,
+        fun(Args) ->
+            Fact = maps:get(<<"fact">>, Args, <<>>),
+            io:format("  [tool] remember_fact: ~ts~n", [Fact]),
+            {ok, #{stored => true, fact => Fact}}
+        end,
+        #{description => <<"Store a fact for later recall. Use this when the user asks you to remember something.">>,
           parameters => #{
-              type => object,
-              properties => #{
-                  fact => #{type => string, description => <<"The fact to remember">>}
-              },
-              required => [<<"fact">>]
-          },
-          handler => fun(Args, _Ctx) ->
-              Fact = maps:get(fact, Args, maps:get(<<"fact">>, Args, <<>>)),
-              io:format("  [tool] remember_fact: ~ts~n", [Fact]),
-              {ok, #{stored => true, fact => Fact}}
-          end}
-    ]),
+              <<"fact">> => #{type => string, description => <<"The fact to remember">>, required => true}
+          }}),
+    K2 = beamai_kernel:add_tools(K1, [WeatherTool2, RememberTool]),
 
     AgentConfig = #{
         kernel => K2,

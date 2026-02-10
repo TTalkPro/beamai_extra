@@ -16,8 +16,7 @@
 
 -export([run_all/0, run_all/1]).
 
--define(BASE_URL, <<"https://open.bigmodel.cn/api/coding/paas/v4">>).
--define(ENDPOINT, <<"/chat/completions">>).
+-define(BASE_URL, <<"https://open.bigmodel.cn/api/anthropic">>).
 -define(DEFAULT_MODEL, <<"glm-4.7">>).
 -define(MAX_TOKENS, 2048).
 
@@ -43,8 +42,8 @@ test_single_agent(Model) ->
     io:format("~nTest 1: Single agent~n"),
 
     Config = #{
-        llm => {openai, #{model => Model, api_key => get_api_key(),
-                             base_url => ?BASE_URL, endpoint => ?ENDPOINT, max_tokens => ?MAX_TOKENS}},
+        llm => {anthropic, #{model => Model, api_key => get_api_key(),
+                             base_url => ?BASE_URL, max_tokens => ?MAX_TOKENS}},
         system_prompt => <<"You are a helpful assistant. Reply concisely in English.">>
     },
 
@@ -80,9 +79,9 @@ test_agent_pipeline(Model) ->
     },
 
     %% 构建 Kernel
-    LlmCfg = beamai_chat_completion:create(openai, #{
+    LlmCfg = beamai_chat_completion:create(anthropic, #{
         model => Model, api_key => ApiKey,
-        base_url => ?BASE_URL, endpoint => ?ENDPOINT, max_tokens => ?MAX_TOKENS}),
+        base_url => ?BASE_URL, max_tokens => ?MAX_TOKENS}),
     Kernel = beamai_kernel:add_service(beamai_kernel:new(), LlmCfg),
     Context = beamai_context:with_kernel(beamai_context:new(), Kernel),
 
@@ -125,9 +124,9 @@ test_parallel_agents(Model) ->
     io:format("~nTest 3: Parallel agents (fan-out -> fan-in)~n"),
 
     ApiKey = get_api_key(),
-    LlmCfg = beamai_chat_completion:create(openai, #{
+    LlmCfg = beamai_chat_completion:create(anthropic, #{
         model => Model, api_key => ApiKey,
-        base_url => ?BASE_URL, endpoint => ?ENDPOINT, max_tokens => ?MAX_TOKENS}),
+        base_url => ?BASE_URL, max_tokens => ?MAX_TOKENS}),
     Kernel = beamai_kernel:add_service(beamai_kernel:new(), LlmCfg),
     Context = beamai_context:with_kernel(beamai_context:new(), Kernel),
 
@@ -194,9 +193,9 @@ test_shared_kernel(Model) ->
     io:format("~nTest 4: Shared kernel from process context~n"),
 
     ApiKey = get_api_key(),
-    LlmCfg = beamai_chat_completion:create(openai, #{
+    LlmCfg = beamai_chat_completion:create(anthropic, #{
         model => Model, api_key => ApiKey,
-        base_url => ?BASE_URL, endpoint => ?ENDPOINT, max_tokens => ?MAX_TOKENS}),
+        base_url => ?BASE_URL, max_tokens => ?MAX_TOKENS}),
     Kernel = beamai_kernel:add_service(beamai_kernel:new(), LlmCfg),
 
     %% beamai_process_agent 自动从 Config 获取 Kernel
@@ -222,8 +221,8 @@ test_multi_turn(Model) ->
 
     ApiKey = get_api_key(),
     Config = #{
-        llm => {openai, #{model => Model, api_key => ApiKey,
-                             base_url => ?BASE_URL, endpoint => ?ENDPOINT, max_tokens => ?MAX_TOKENS}},
+        llm => {anthropic, #{model => Model, api_key => ApiKey,
+                             base_url => ?BASE_URL, max_tokens => ?MAX_TOKENS}},
         system_prompt => <<"You are a helpful assistant. Remember what the user tells you.">>
     },
 
@@ -257,16 +256,16 @@ test_with_tools(Model) ->
 
     ApiKey = get_api_key(),
     K0 = beamai_kernel:new(),
-    WeatherFunc = beamai_function:new(<<"get_weather">>,
+    WeatherTool = beamai_tool:new(<<"get_weather">>,
         fun(#{<<"city">> := City}) ->
             {ok, #{city => City, temperature => <<"25C">>, weather => <<"sunny">>}}
         end,
         #{description => <<"Get weather for a city">>,
-          parameters => #{city => #{type => string, description => <<"City name">>}}}),
-    K1 = beamai_kernel:add_plugin(K0, <<"tools">>, [WeatherFunc]),
-    LlmCfg = beamai_chat_completion:create(openai, #{
+          parameters => #{<<"city">> => #{type => string, description => <<"City name">>, required => true}}}),
+    K1 = beamai_kernel:add_tool(K0, WeatherTool),
+    LlmCfg = beamai_chat_completion:create(anthropic, #{
         model => Model, api_key => ApiKey,
-        base_url => ?BASE_URL, endpoint => ?ENDPOINT, max_tokens => ?MAX_TOKENS}),
+        base_url => ?BASE_URL, max_tokens => ?MAX_TOKENS}),
     K2 = beamai_kernel:add_service(K1, LlmCfg),
 
     Config = #{

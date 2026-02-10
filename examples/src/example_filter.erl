@@ -33,19 +33,18 @@ run_invoke() ->
 
     %% 1. 创建 Kernel 并注册一个简单函数
     K0 = beamai:kernel(),
-    K1 = beamai:add_plugin(K0, <<"math">>, [
-        beamai:function(<<"add">>,
-            fun(#{a := A, b := B}) -> {ok, A + B} end,
+    K1 = beamai:add_tool(K0,
+        beamai:tool(<<"add">>,
+            fun(#{<<"a">> := A, <<"b">> := B}) -> {ok, A + B} end,
             #{description => <<"Add two numbers">>,
               parameters => #{
-                  a => #{type => integer, required => true},
-                  b => #{type => integer, required => true}
-              }})
-    ]),
+                  <<"a">> => #{type => integer, required => true},
+                  <<"b">> => #{type => integer, required => true}
+              }})),
 
     %% 2. 添加前置过滤器：记录调用日志
     K2 = beamai:add_filter(K1, <<"log_pre">>, pre_invocation,
-        fun(#{function := #{name := Name}, args := Args} = Ctx) ->
+        fun(#{tool := #{name := Name}, args := Args} = Ctx) ->
             io:format("  [PRE] Calling ~ts with args: ~p~n", [Name, Args]),
             {continue, Ctx}
         end),
@@ -59,8 +58,8 @@ run_invoke() ->
         end),
 
     %% 4. 调用函数，观察过滤器效果
-    io:format("Invoking math.add(3, 5):~n"),
-    case beamai:invoke(K3, <<"math.add">>, #{a => 3, b => 5}) of
+    io:format("Invoking add(3, 5):~n"),
+    case beamai:invoke_tool(K3, <<"add">>, #{<<"a">> => 3, <<"b">> => 5}, #{}) of
         {ok, Value, _} ->
             io:format("  Final result: ~p~n~n", [Value]);
         {error, Reason} ->
@@ -69,15 +68,15 @@ run_invoke() ->
 
     %% 5. 演示 skip 过滤器：参数验证拒绝
     K4 = beamai:add_filter(K3, <<"validate">>, pre_invocation,
-        fun(#{args := #{a := A}} = _Ctx) when A > 100 ->
+        fun(#{args := #{<<"a">> := A}} = _Ctx) when A > 100 ->
             io:format("  [PRE] Rejected: a=~p exceeds limit~n", [A]),
             {skip, {error, too_large}};
            (Ctx) ->
             {continue, Ctx}
         end),
 
-    io:format("Invoking math.add(200, 1) with validation:~n"),
-    case beamai:invoke(K4, <<"math.add">>, #{a => 200, b => 1}) of
+    io:format("Invoking add(200, 1) with validation:~n"),
+    case beamai:invoke_tool(K4, <<"add">>, #{<<"a">> => 200, <<"b">> => 1}, #{}) of
         {ok, Value2, _} ->
             io:format("  Final result: ~p~n", [Value2]);
         {error, Reason2} ->

@@ -49,10 +49,10 @@
 -spec save(map()) -> ok | {error, term()}.
 save(#{memory := undefined}) ->
     {error, no_memory_configured};
-save(#{memory := Memory, messages := Messages, id := AgentId,
+save(#{memory := {Mgr, #{thread_id := ThreadId}} = _Memory,
+       messages := Messages, id := AgentId,
        turn_count := TurnCount, metadata := Meta,
        system_prompt := SysPrompt} = State) ->
-    ThreadId = beamai_memory:get_thread_id(Memory),
     IntState = maps:get(interrupt_state, State, undefined),
     RunId = maps:get(run_id, State, undefined),
 
@@ -85,7 +85,7 @@ save(#{memory := Memory, messages := Messages, id := AgentId,
         metadata => #{type => CheckpointType}
     },
 
-    case beamai_memory:save_snapshot(Memory, ThreadId, ProcessState, Opts) of
+    case beamai_process_snapshot:save_from_state(Mgr, ThreadId, ProcessState, Opts) of
         {ok, _Snapshot, _NewMemory} -> ok;
         {error, _} = Error -> Error
     end.
@@ -105,12 +105,11 @@ save(#{memory := Memory, messages := Messages, id := AgentId,
 %% @returns {ok, AgentState} 恢复成功，返回完整 agent 状态
 %% @returns {error, Reason} 恢复失败（snapshot 不存在或重建失败）
 -spec restore(map(), term()) -> {ok, map()} | {error, term()}.
-restore(Config, Memory) ->
-    ThreadId = beamai_memory:get_thread_id(Memory),
-    case beamai_memory:get_latest_snapshot(Memory, ThreadId) of
+restore(Config, {Mgr, #{thread_id := ThreadId}} = Memory) ->
+    case beamai_process_snapshot:get_latest(Mgr, ThreadId) of
         {ok, Snapshot} ->
             %% 从 snapshot 的 steps_state 中提取 agent 数据
-            StepsState = beamai_snapshot:get_steps_state(Snapshot),
+            StepsState = beamai_process_snapshot:get_steps_state(Snapshot),
             #{agent_state := #{state := SavedData}} = StepsState,
             %% 用原始 config + memory 重建 agent
             case beamai_agent:new(Config#{memory => Memory}) of

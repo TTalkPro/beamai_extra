@@ -76,9 +76,9 @@ run(Opts) ->
 
     %% 3. 查看注册的工具
     io:format("[3] Registered tools:~n"),
-    Tools = beamai:tools(K1, openai),
+    Tools = beamai:tools(K1, anthropic),
     lists:foreach(fun(T) ->
-        #{<<"function">> := #{<<"name">> := Name, <<"description">> := Desc}} = T,
+        #{<<"name">> := Name, <<"description">> := Desc} = T,
         io:format("    - ~s: ~s~n", [Name, Desc])
     end, Tools),
     io:format("~n"),
@@ -91,16 +91,17 @@ run(Opts) ->
     end, WeatherTools),
     io:format("~n"),
 
-    %% 5. 添加 LLM 服务（使用 GLM-4.7，兼容 OpenAI API）
-    io:format("[5] Adding LLM service (GLM-4.7 via OpenAI provider)...~n"),
+    %% 5. 添加 LLM 服务（使用 GLM-4.7，兼容 Anthropic API）
+    io:format("[5] Adding LLM service (GLM-4.7 via Anthropic provider)...~n"),
     ApiKey = maps:get(api_key, Opts),
-    BaseUrl = maps:get(base_url, Opts, <<"https://open.bigmodel.cn/api/paas/v4">>),
-    Model = maps:get(model, Opts, <<"glm-4-flash">>),
+    BaseUrl = maps:get(base_url, Opts, <<"https://open.bigmodel.cn/api/anthropic">>),
+    Model = maps:get(model, Opts, <<"glm-4.7">>),
 
-    K2 = beamai:add_llm(K1, openai, #{
+    K2 = beamai:add_llm(K1, anthropic, #{
         api_key => ApiKey,
         base_url => BaseUrl,
-        model => Model
+        model => Model,
+        max_tokens => 2048
     }),
     io:format("    LLM configured: ~s~n~n", [Model]),
 

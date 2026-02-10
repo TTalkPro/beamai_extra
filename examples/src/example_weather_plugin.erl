@@ -45,15 +45,14 @@ run(LLMConfig) ->
     %% 1. 构建 Kernel
     K0 = beamai:kernel(),
 
-    %% 2. 定义 Weather Plugin
-    K1 = beamai:add_plugin(K0, <<"weather">>, [
-        beamai:function(<<"get_current_weather">>,
+    %% 2. 定义 Weather Tool
+    K1 = beamai:add_tool(K0,
+        beamai:tool(<<"get_current_weather">>,
             fun(Args) -> get_weather(Args) end,
             #{description => <<"Get the current weather for a given city">>,
               parameters => #{
-                  city => #{type => string, description => <<"City name, e.g. Beijing, Tokyo, New York">>, required => true}
-              }})
-    ]),
+                  <<"city">> => #{type => string, description => <<"City name, e.g. Beijing, Tokyo, New York">>, required => true}
+              }})),
 
     %% 3. 添加 LLM 服务
     K2 = beamai:add_llm(K1, LLMConfig),
@@ -98,17 +97,16 @@ invoke_only() ->
     io:format("=== Direct Invoke Example ===~n~n"),
 
     K0 = beamai:kernel(),
-    K1 = beamai:add_plugin(K0, <<"weather">>, [
-        beamai:function(<<"get_current_weather">>,
+    K1 = beamai:add_tool(K0,
+        beamai:tool(<<"get_current_weather">>,
             fun(Args) -> get_weather(Args) end,
             #{description => <<"Get the current weather for a given city">>,
               parameters => #{
-                  city => #{type => string, description => <<"City name">>, required => true}
-              }})
-    ]),
+                  <<"city">> => #{type => string, description => <<"City name">>, required => true}
+              }})),
 
     %% 直接调用函数
-    {ok, Result, _} = beamai:invoke(K1, <<"weather.get_current_weather">>, #{city => <<"Beijing">>}),
+    {ok, Result, _} = beamai:invoke_tool(K1, <<"get_current_weather">>, #{<<"city">> => <<"Beijing">>}, #{}),
     io:format("Direct invoke result: ~p~n", [Result]),
     ok.
 
@@ -118,7 +116,7 @@ invoke_only() ->
 
 -spec get_weather(map()) -> {ok, map()}.
 get_weather(Args) ->
-    City = maps:get(city, Args, maps:get(<<"city">>, Args, <<"unknown">>)),
+    City = maps:get(<<"city">>, Args, maps:get(city, Args, <<"unknown">>)),
     io:format("  [Tool Called] get_current_weather(~ts)~n", [City]),
     %% 模拟天气数据
     Weather = mock_weather(City),

@@ -372,17 +372,22 @@ run_trace_inspection() ->
 %% 内部函数 - LLM 配置
 %%====================================================================
 
-%% @doc 创建真实 LLM 配置（GLM-4.7 Coding API）
+%% @doc 创建真实 LLM 配置（GLM-4.7 via Zhipu Anthropic API）
 create_live_llm() ->
     case os:getenv("ZHIPU_API_KEY") of
         false -> skip;
         "" -> skip;
         ApiKey ->
-            LLM = beamai_chat_completion:create(openai, #{
+            BaseUrl = case os:getenv("ZHIPU_ANTHROPIC_BASE_URL") of
+                false -> <<"https://open.bigmodel.cn/api/anthropic">>;
+                "" -> <<"https://open.bigmodel.cn/api/anthropic">>;
+                Url -> list_to_binary(Url)
+            end,
+            LLM = beamai_chat_completion:create(anthropic, #{
                 model => <<"glm-4.7">>,
                 api_key => list_to_binary(ApiKey),
-                base_url => <<"https://open.bigmodel.cn/api/coding/paas/v4">>,
-                endpoint => <<"/chat/completions">>
+                base_url => BaseUrl,
+                max_tokens => 2048
             }),
             {ok, LLM}
     end.

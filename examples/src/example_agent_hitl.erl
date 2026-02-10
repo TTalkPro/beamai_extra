@@ -100,21 +100,17 @@ demo_callback_interrupt() ->
     Kernel0 = beamai_kernel:new(),
     LlmConfig = beamai_chat_completion:create(mock, #{}),
     K1 = beamai_kernel:add_service(Kernel0, LlmConfig),
-    K2 = beamai_kernel:add_plugin(K1, <<"database">>, [
-        #{name => <<"execute_sql">>,
-          description => <<"Execute SQL query on the database">>,
+    SqlTool = beamai_tool:new(<<"execute_sql">>,
+        fun(Args) ->
+            SQL = maps:get(<<"sql">>, Args, <<>>),
+            io:format("  [DB] Executing: ~s~n", [SQL]),
+            {ok, <<"Query executed successfully, 42 rows affected">>}
+        end,
+        #{description => <<"Execute SQL query on the database">>,
           parameters => #{
-              type => object,
-              properties => #{
-                  sql => #{type => string, description => <<"SQL statement">>}
-              }
-          },
-          handler => fun(Args, _Ctx) ->
-              SQL = maps:get(sql, Args, maps:get(<<"sql">>, Args, <<>>)),
-              io:format("  [DB] Executing: ~s~n", [SQL]),
-              {ok, <<"Query executed successfully, 42 rows affected">>}
-          end}
-    ]),
+              <<"sql">> => #{type => string, description => <<"SQL statement">>, required => true}
+          }}),
+    K2 = beamai_kernel:add_tool(K1, SqlTool),
 
     %% Callback: 拦截危险 SQL
     Callbacks = #{
@@ -189,10 +185,9 @@ demo_memory_resume() ->
         {ok, _} -> ok;
         {error, {already_started, _}} -> ok
     end,
-    {ok, Memory} = beamai_memory:new(#{
-        context_store => {beamai_store_ets, StoreName},
-        thread_id => <<"demo-hitl-thread">>
-    }),
+    StateStore = beamai_state_store:new({beamai_store_ets, StoreName}),
+    Mgr = beamai_process_snapshot:new(StateStore),
+    Memory = {Mgr, #{thread_id => <<"demo-hitl-thread">>}},
 
     AgentConfig = #{
         llm => {mock, #{}},
@@ -220,15 +215,18 @@ demo_memory_resume() ->
 
     %% Step 2: 检查 memory 中的中断状态
     io:format("Step 2: Checking memory for pending interrupt~n"),
-    ThreadConfig = #{thread_id => <<"demo-hitl-thread">>},
-    HasInterrupt = beamai_memory:has_pending_interrupt(Memory, ThreadConfig),
-    io:format("  Has pending interrupt: ~p~n", [HasInterrupt]),
-
-    case beamai_memory:get_interrupt_context(Memory, ThreadConfig) of
-        {ok, Ctx} ->
-            io:format("  Interrupt context: ~p~n~n", [Ctx]);
-        {error, not_interrupted} ->
-            io:format("  No interrupt context found~n~n")
+    case beamai_process_snapshot:get_latest(Mgr, <<"demo-hitl-thread">>) of
+        {ok, Snapshot} ->
+            StepsState = beamai_process_snapshot:get_steps_state(Snapshot),
+            case StepsState of
+                #{agent_state := #{state := #{interrupt_state := IntState}}} when IntState =/= undefined ->
+                    io:format("  Has pending interrupt: true~n"),
+                    io:format("  Interrupt context: ~p~n~n", [IntState]);
+                _ ->
+                    io:format("  Has pending interrupt: false~n~n")
+            end;
+        {error, _} ->
+            io:format("  No snapshot found in memory~n~n")
     end,
 
     %% Step 3: 从 memory 恢复并继续执行

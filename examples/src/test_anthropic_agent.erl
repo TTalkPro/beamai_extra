@@ -3,8 +3,8 @@
 %%%
 %%% 使用方法:
 %%% ```
-%%% export ANTHROPIC_BASE_URL="https://api.anthropic.com"
-%%% export ANTHROPIC_AUTH_TOKEN="your-anthropic-api-key"
+%%% export ZHIPU_API_KEY="your-zhipu-api-key"
+%%% export ZHIPU_ANTHROPIC_BASE_URL="https://open.bigmodel.cn/api/anthropic"
 %%% rebar3 shell
 %%% ```
 %%%
@@ -33,13 +33,15 @@
 %% @doc 获取 LLM 配置（从环境变量）
 -spec get_llm_config() -> map().
 get_llm_config() ->
-    ApiKey = case os:getenv("ANTHROPIC_AUTH_TOKEN") of
-        false -> error({missing_env, "ANTHROPIC_AUTH_TOKEN"});
+    ApiKey = case os:getenv("ZHIPU_API_KEY") of
+        false -> error({missing_env, "ZHIPU_API_KEY"});
+        "" -> error({missing_env, "ZHIPU_API_KEY"});
         Key -> list_to_binary(Key)
     end,
 
-    BaseUrl = case os:getenv("ANTHROPIC_BASE_URL") of
-        false -> <<"https://api.anthropic.com">>;
+    BaseUrl = case os:getenv("ZHIPU_ANTHROPIC_BASE_URL") of
+        false -> <<"https://open.bigmodel.cn/api/anthropic">>;
+        "" -> <<"https://open.bigmodel.cn/api/anthropic">>;
         Url -> list_to_binary(Url)
     end,
 
@@ -47,8 +49,8 @@ get_llm_config() ->
         provider => anthropic,
         api_key => ApiKey,
         base_url => BaseUrl,
-        model => <<"claude-sonnet-4-20250514">>,
-        max_tokens => 4096
+        model => <<"glm-4.7">>,
+        max_tokens => 2048
     }.
 
 %% @doc 运行简单的对话测试

@@ -30,8 +30,8 @@ run() ->
 
     %% 2. Load file tool module
     K1 = beamai_tools:load(K0, beamai_tool_file),
-    io:format("Loaded file tool: ~p functions~n",
-              [length(beamai_kernel:list_functions(K1))]),
+    io:format("Loaded file tool: ~p tools~n",
+              [length(beamai_kernel:get_tool_specs(K1))]),
 
     %% 3. Add middleware (call limits + model retry)
     K2 = beamai_tools:with_middleware(K1, beamai_middleware_presets:default()),
@@ -76,20 +76,16 @@ run_simple() ->
     %% 2. Add middleware
     K2 = beamai_tools:with_middleware(K1, beamai_middleware_presets:minimal()),
 
-    %% 3. List available functions
-    Functions = beamai_kernel:list_functions(K2),
-    io:format("Available functions:~n"),
-    lists:foreach(fun(#{name := Name, plugin := Plugin}) ->
-        io:format("  ~s.~s~n", [Plugin, Name])
-    end, Functions),
+    %% 3. List available tools
+    ToolSpecs = beamai_kernel:get_tool_specs(K2),
+    io:format("Available tools:~n"),
+    lists:foreach(fun(#{name := Name}) ->
+        io:format("  ~s~n", [Name])
+    end, ToolSpecs),
     io:format("~n"),
 
-    %% 4. Direct invocation: read todos
-    {ok, TodoResult, _} = beamai:invoke(K2, <<"read_todos">>, #{}),
-    io:format("Read todos: ~p~n~n", [TodoResult]),
-
-    %% 5. Direct invocation: list files
-    {ok, ListResult, _} = beamai:invoke(K2, <<"file_list">>, #{<<"path">> => <<".">>}),
+    %% 4. Direct invocation: list files
+    {ok, ListResult, _} = beamai:invoke_tool(K2, <<"file_list">>, #{<<"path">> => <<".">>}, #{}),
     io:format("File list count: ~p~n", [maps:get(count, ListResult)]),
 
     ok.
