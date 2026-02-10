@@ -8,7 +8,7 @@
 
 基于 [BeamAI](https://github.com/TTalkPro/beamai) 的高性能 AI Agent 扩展框架，提供完整的 Agent 开发工具链。
 
-本项目依赖 [BeamAI 核心库](https://github.com/TTalkPro/beamai) 的 main 分支，包含以下扩展功能：
+本项目依赖 [BeamAI 核心库](https://github.com/TTalkPro/beamai) 的 r1.0.0 分支，包含以下扩展功能：
 
 ## 特性
 
@@ -16,11 +16,6 @@
   - 基于 Semantic Kernel 理念的 Kernel 核心
   - 统一的 Tool 定义和管理
   - Filter 过滤器和安全验证
-
-- **Process Framework**: 可编排的流程引擎
-  - 支持步骤定义、条件分支、并行执行
-  - 时间旅行和分支回溯
-  - 事件驱动和状态快照
 
 - **Simple Agent**: 基于工具循环的 ReAct Agent
   - 纯函数式 API（`new/1` → `run/2` → 新状态）
@@ -34,15 +29,6 @@
   - Planner（规划器）→ Executor（执行器）→ Reflector（反思器）
   - 支持并行子任务执行
   - Coordinator 多 Agent 协调
-
-- **Graph 引擎**: 基于 LangGraph 的图计算（已整合到 beamai_core）
-  - Graph Builder/DSL 构建器
-  - Pregel 分布式计算模型
-  - 状态快照和条件边
-
-- **Output Parser**: 结构化输出
-  - JSON/XML/CSV 解析
-  - 自动重试机制
 
 - **协议支持**: A2A 和 MCP
   - Agent-to-Agent 通信协议
@@ -147,7 +133,9 @@ K2 = beamai_kernel:add_tool(K1, #{
 ```erlang
 %% 创建存储后端
 {ok, _} = beamai_store_ets:start_link(my_store, #{}),
-{ok, Memory} = beamai_memory:new(#{context_store => {beamai_store_ets, my_store}}),
+StateStore = beamai_state_store:new({beamai_store_ets, my_store}),
+Mgr = beamai_process_snapshot:new(StateStore),
+Memory = {Mgr, #{thread_id => <<"my-session">>}},
 
 %% 创建带 Memory 的 Agent（auto_save 启用后每轮自动保存）
 {ok, Agent0} = beamai_agent:new(#{
@@ -193,53 +181,6 @@ Plan = beamai_deepagent:get_plan(Result),
 Trace = beamai_deepagent:get_trace(Result).
 ```
 
-### 7. Process Framework（流程编排）
-
-```erlang
-%% 使用 Process Builder 构建流程
-{ok, Process} = beamai_process_builder:new(<<"research_pipeline">>)
-    |> beamai_process_builder:add_step(<<"research">>, #{
-        handler => fun(Input, _Ctx) -> {ok, do_research(Input)} end
-    })
-    |> beamai_process_builder:add_step(<<"write">>, #{
-        handler => fun(Input, _Ctx) -> {ok, do_write(Input)} end
-    })
-    |> beamai_process_builder:add_step(<<"review">>, #{
-        handler => fun(Input, _Ctx) -> {ok, do_review(Input)} end
-    })
-    |> beamai_process_builder:build(),
-
-%% 执行流程
-{ok, Result} = beamai_process_executor:run(Process, #{
-    task => <<"研究 Erlang 并发模型"/utf8>>
-}).
-```
-
-### 8. Output Parser（结构化输出）
-
-```erlang
-%% 创建 JSON 解析器
-Parser = beamai_output_parser:json(#{
-    schema => #{
-        type => object,
-        properties => #{
-            <<"title">> => #{type => string},
-            <<"count">> => #{type => integer},
-            <<"items">> => #{type => array, items => #{type => string}}
-        },
-        required => [<<"title">>, <<"count">>]
-    }
-}),
-
-%% 解析 LLM 响应
-{ok, Parsed} = beamai_output_parser:parse(Parser, LLMResponse).
-
-%% 带重试的解析
-{ok, Parsed} = beamai_output_parser:parse_with_retry(Parser, LLMResponse, #{
-    max_retries => 3
-}).
-```
-
 ## 架构
 
 ### 应用结构
@@ -251,7 +192,7 @@ beamai (外部依赖)
 ├── beamai_core/        # 核心框架
 │   ├── Kernel         # beamai_kernel, beamai_tool, beamai_context,
 │   │                  # beamai_filter, beamai_prompt, beamai_result
-│   ├── LLM            # llm_response (统一 LLM 响应访问器)
+│   ├── LLM            # beamai_llm_response (统一 LLM 响应访问器)
 │   ├── Process        # beamai_process, beamai_process_builder,
 │   │                  # beamai_process_runtime, beamai_process_step,
 │   │                  # beamai_process_executor, beamai_process_event
@@ -337,7 +278,7 @@ apps/
 ```
 
 **依赖说明：**
-- 本项目通过 `rebar.config` 依赖 [BeamAI](https://github.com/TTalkPro/beamai) 的 main 分支
+- 本项目通过 `rebar.config` 依赖 [BeamAI](https://github.com/TTalkPro/beamai) 的 r1.0.0 分支
 - 核心功能（Kernel、Process Framework、Graph、LLM、Memory）由 BeamAI 提供
 - 本项目专注于 Agent 实现、协议支持（A2A、MCP）、工具系统和 RAG 功能
 
@@ -370,56 +311,21 @@ Tool = #{
 Kernel2 = beamai_kernel:add_tool(Kernel1, Tool),
 
 %% 调用注册的工具
-{ok, Result, _NewCtx} = beamai_kernel:invoke(Kernel2, <<"read_file">>, #{
+{ok, Result, _NewCtx} = beamai_kernel:invoke_tool(Kernel2, <<"read_file">>, #{
     <<"path">> => <<"/tmp/test.txt">>
 }, beamai_context:new()).
 ```
 
-### 2. Process Framework
+### 2. Memory 持久化
 
-可编排的流程引擎，支持步骤定义、分支、并行和时间旅行：
-
-```erlang
-%% 构建流程
-Process = beamai_process_builder:new(<<"my_process">>),
-Process1 = beamai_process_builder:add_step(Process, <<"step1">>, #{
-    handler => fun(Input, Ctx) -> {ok, transform(Input)} end
-}),
-{ok, Built} = beamai_process_builder:build(Process1),
-
-%% 执行
-{ok, Result} = beamai_process_executor:run(Built, InitialInput).
-```
-
-### 3. Graph 执行引擎
-
-基于 LangGraph 理念的图计算引擎（已整合到 beamai_core）：
+使用存储后端实现会话持久化：
 
 ```erlang
-%% 创建图
-Builder = graph_builder:new(),
-Builder1 = graph_builder:add_node(Builder, start, fun(State) ->
-    {ok, State#{step => 1}}
-end),
-Builder2 = graph_builder:add_node(Builder1, finish, fun(State) ->
-    {ok, State}
-end),
-Builder3 = graph_builder:add_edge(Builder2, start, finish),
-Builder4 = graph_builder:set_entry_point(Builder3, start),
-Builder5 = graph_builder:set_finish_point(Builder4, finish),
-
-{ok, Graph} = graph_builder:compile(Builder5),
-{ok, Result} = graph_runner:run(Graph, #{}).
-```
-
-### 4. Memory 持久化
-
-使用 beamai_memory 实现会话持久化和时间旅行：
-
-```erlang
-%% 创建 Memory
+%% 创建 Memory（使用 ETS 存储后端）
 {ok, _} = beamai_store_ets:start_link(my_store, #{}),
-{ok, Memory} = beamai_memory:new(#{context_store => {beamai_store_ets, my_store}}),
+StateStore = beamai_state_store:new({beamai_store_ets, my_store}),
+Mgr = beamai_process_snapshot:new(StateStore),
+Memory = {Mgr, #{thread_id => <<"my-session">>}},
 
 %% 创建带 memory 的 Agent（auto_save 启用后每轮自动保存）
 {ok, Agent0} = beamai_agent:new(#{llm => LLM, memory => Memory, auto_save => true}),
@@ -432,7 +338,7 @@ ok = beamai_agent:save(Agent1),
 {ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory).
 ```
 
-### 5. Callbacks（回调系统）
+### 3. Callbacks（回调系统）
 
 监听 Agent 执行过程中的 8 个事件：
 
@@ -579,6 +485,19 @@ rebar3 compile
 rebar3 shell
 ```
 
+### 示例文件
+
+| 文件 | 说明 | 需要 LLM |
+|------|------|----------|
+| `example_llm_config.erl` | LLM 配置辅助模块 | - |
+| `example_agent.erl` | Agent 基本用法（单轮、多轮、工具调用、流式） | 部分 |
+| `example_agent_hitl.erl` | Agent Human-in-the-Loop 中断恢复 | 否（Mock） |
+| `example_agent_scenarios.erl` | Agent 高级场景（回调、并发、Coordinator） | 部分 |
+| `example_deepagent.erl` | DeepAgent 规划执行、反思、轨迹检查 | 部分 |
+| `example_deepagent_tools.erl` | DeepAgent 工具集成（文件、Shell、自定义） | 是 |
+| `test_anthropic_agent.erl` | Agent 和 DeepAgent 端到端测试 | 是 |
+| `test_zhipu_anthropic.erl` | Zhipu Anthropic 兼容 API 集成测试 | 是 |
+
 ### 集成测试（Agent + DeepAgent）
 
 使用 `test_zhipu_anthropic` 模块对 Agent 和 DeepAgent 进行端到端测试：
@@ -609,7 +528,6 @@ test_zhipu_anthropic:test_deepagent_planned().  %% DeepAgent 规划执行
 | **OTP 应用（本项目）** | 6 个 |
 | **核心依赖（BeamAI）** | 3 个 |
 | **源代码模块（本项目）** | ~80 个 |
-| **测试文件（本项目）** | ~23 个 |
 
 **本项目应用：**
 - beamai_tools
@@ -631,7 +549,7 @@ test_zhipu_anthropic:test_deepagent_planned().  %% DeepAgent 规划执行
 rebar3 eunit
 
 # 运行特定应用的测试
-rebar3 eunit --app=beamai_llm
+rebar3 eunit --app=beamai_agent
 
 # 运行代码检查
 rebar3 dialyzer
@@ -640,7 +558,6 @@ rebar3 dialyzer
 ## 性能
 
 - 基于 Erlang/OTP 轻量级进程
-- Graph 引擎优化执行路径
 - 并发工具调用
 - HTTP 连接池（Gun，支持 HTTP/2）
 - ETS 高速存储

@@ -31,7 +31,7 @@
 %% 常量
 %%====================================================================
 
--define(ZHIPU_ANTHROPIC_BASE_URL, <<"https://open.bigmodel.cn/api/anthropic">>).
+-define(ZHIPU_ANTHROPIC_DEFAULT_BASE_URL, <<"https://open.bigmodel.cn/api/anthropic">>).
 -define(ZHIPU_OPENAI_BASE_URL, <<"https://open.bigmodel.cn/api/paas">>).
 -define(ANTHROPIC_DEFAULT_MODEL, <<"glm-4.7">>).
 -define(CLAUDE_DEFAULT_MODEL, <<"claude-sonnet-4-20250514">>).
@@ -62,9 +62,13 @@ anthropic() ->
 %%   - max_tokens: 最大 token 数 (默认 2048)
 -spec anthropic(map()) -> beamai_chat_completion:config().
 anthropic(Opts) ->
+    BaseUrl = case maps:find(base_url, Opts) of
+        {ok, Url} -> Url;
+        error -> zhipu_anthropic_base_url()
+    end,
     beamai_chat_completion:create(anthropic, #{
         api_key => maps:get(api_key, Opts),
-        base_url => ?ZHIPU_ANTHROPIC_BASE_URL,
+        base_url => BaseUrl,
         model => maps:get(model, Opts, ?ANTHROPIC_DEFAULT_MODEL),
         max_tokens => maps:get(max_tokens, Opts, ?DEFAULT_MAX_TOKENS)
     }).
@@ -198,4 +202,13 @@ require_env(VarName) ->
             error({missing_env, VarName});
         Value ->
             list_to_binary(Value)
+    end.
+
+%% @private 从环境变量获取 Zhipu Anthropic base URL，未设置则使用默认值
+-spec zhipu_anthropic_base_url() -> binary().
+zhipu_anthropic_base_url() ->
+    case os:getenv("ZHIPU_ANTHROPIC_BASE_URL") of
+        false -> ?ZHIPU_ANTHROPIC_DEFAULT_BASE_URL;
+        "" -> ?ZHIPU_ANTHROPIC_DEFAULT_BASE_URL;
+        Url -> list_to_binary(Url)
     end.

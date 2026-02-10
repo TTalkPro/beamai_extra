@@ -494,8 +494,8 @@ finalize_turn(State0, Response, ToolCallsMade, Iterations, UserMsgs) ->
     Result = #{
         content => Content,
         tool_calls_made => ToolCallsMade,
-        finish_reason => llm_response:finish_reason(Response),
-        usage => llm_response:usage(Response),
+        finish_reason => beamai_llm_response:finish_reason(Response),
+        usage => beamai_llm_response:usage(Response),
         iterations => Iterations
     },
     EndMeta = Meta#{turn_count => maps:get(turn_count, NewState)},

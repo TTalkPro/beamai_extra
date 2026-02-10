@@ -136,8 +136,8 @@ run_with_tools() ->
                 handler => fun(_Args, _Ctx) ->
                     {ok, #{
                         result => list_to_binary(
-                            calendar:system_time_to_universal_time(
-                                erlang:system_time(millisecond)
+                            calendar:system_time_to_rfc3339(
+                                erlang:system_time(second)
                             )
                         )
                     }}

@@ -1,6 +1,6 @@
 {application, beamai_agent, [
     {description, "Stateful multi-turn conversation agent"},
-    {vsn, "0.2.0"},
+    {vsn, "1.0.0"},
     {registered, []},
     {applications, [kernel, stdlib, jsx, beamai_core, beamai_llm, beamai_tools, beamai_memory]},
     {env, []},

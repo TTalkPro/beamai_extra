@@ -1,6 +1,6 @@
 {application, beamai_a2a, [
     {description, "A2A (Agent-to-Agent) Protocol Implementation"},
-    {vsn, "0.1.0"},
+    {vsn, "1.0.0"},
     {registered, [beamai_a2a_sup, beamai_a2a_task_sup, beamai_a2a_card_cache, beamai_a2a_push, beamai_a2a_auth, beamai_a2a_rate_limit]},
     {applications, [
         kernel,

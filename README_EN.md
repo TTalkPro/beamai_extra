@@ -8,7 +8,7 @@ English | [中文](README.md)
 
 A high-performance AI Agent extension framework based on [BeamAI](https://github.com/TTalkPro/beamai), providing a complete Agent development toolkit.
 
-This project depends on the main branch of the [BeamAI core library](https://github.com/TTalkPro/beamai) and includes the following extension features:
+This project depends on the r1.0.0 branch of the [BeamAI core library](https://github.com/TTalkPro/beamai) and includes the following extension features:
 
 ## Features
 
@@ -16,11 +16,6 @@ This project depends on the main branch of the [BeamAI core library](https://git
   - Kernel core based on Semantic Kernel concepts
   - Tool management and Middleware pipeline
   - Security validation and permission control
-
-- **Process Framework**: Orchestratable process engine
-  - Step definitions, conditional branching, parallel execution
-  - Time travel and branch rollback
-  - Event-driven with state snapshots
 
 - **Simple Agent**: ReAct Agent based on tool loop
   - Pure functional API (`new/1` -> `run/2` -> new state)
@@ -31,18 +26,9 @@ This project depends on the main branch of the [BeamAI core library](https://git
   - Built-in Memory persistence (`save/1`, `restore/2`)
 
 - **Deep Agent**: Recursive planning Agent based on SubAgent architecture
-  - Planner → Executor → Reflector pipeline
+  - Planner -> Executor -> Reflector pipeline
   - Parallel subtask execution
   - Coordinator multi-Agent orchestration
-
-- **Graph Engine**: Graph computation based on LangGraph
-  - Graph Builder/DSL
-  - Pregel distributed computation model
-  - State snapshots and conditional edges
-
-- **Output Parser**: Structured output
-  - JSON/XML/CSV parsing
-  - Automatic retry mechanism
 
 - **Protocol Support**: A2A and MCP
   - Agent-to-Agent communication protocol
@@ -147,7 +133,9 @@ K2 = beamai_kernel:add_tool(K1, #{
 ```erlang
 %% Create storage backend
 {ok, _} = beamai_store_ets:start_link(my_store, #{}),
-{ok, Memory} = beamai_memory:new(#{context_store => {beamai_store_ets, my_store}}),
+StateStore = beamai_state_store:new({beamai_store_ets, my_store}),
+Mgr = beamai_process_snapshot:new(StateStore),
+Memory = {Mgr, #{thread_id => <<"my-session">>}},
 
 %% Create Agent with Memory (auto_save enables per-turn auto-save)
 {ok, Agent0} = beamai_agent:new(#{
@@ -193,53 +181,6 @@ Plan = beamai_deepagent:get_plan(Result),
 Trace = beamai_deepagent:get_trace(Result).
 ```
 
-### 7. Process Framework (Process Orchestration)
-
-```erlang
-%% Build process using Process Builder
-{ok, Process} = beamai_process_builder:new(<<"research_pipeline">>)
-    |> beamai_process_builder:add_step(<<"research">>, #{
-        handler => fun(Input, _Ctx) -> {ok, do_research(Input)} end
-    })
-    |> beamai_process_builder:add_step(<<"write">>, #{
-        handler => fun(Input, _Ctx) -> {ok, do_write(Input)} end
-    })
-    |> beamai_process_builder:add_step(<<"review">>, #{
-        handler => fun(Input, _Ctx) -> {ok, do_review(Input)} end
-    })
-    |> beamai_process_builder:build(),
-
-%% Execute process
-{ok, Result} = beamai_process_executor:run(Process, #{
-    task => <<"Research Erlang concurrency model">>
-}).
-```
-
-### 8. Output Parser (Structured Output)
-
-```erlang
-%% Create JSON parser
-Parser = beamai_output_parser:json(#{
-    schema => #{
-        type => object,
-        properties => #{
-            <<"title">> => #{type => string},
-            <<"count">> => #{type => integer},
-            <<"items">> => #{type => array, items => #{type => string}}
-        },
-        required => [<<"title">>, <<"count">>]
-    }
-}),
-
-%% Parse LLM response
-{ok, Parsed} = beamai_output_parser:parse(Parser, LLMResponse).
-
-%% Parse with retry
-{ok, Parsed} = beamai_output_parser:parse_with_retry(Parser, LLMResponse, #{
-    max_retries => 3
-}).
-```
-
 ## Architecture
 
 ### Application Structure
@@ -249,9 +190,9 @@ Parser = beamai_output_parser:json(#{
 ```
 beamai (external dependency)
 ├── beamai_core/        # Core framework
-│   ├── Kernel         # beamai_kernel, beamai_function, beamai_context,
+│   ├── Kernel         # beamai_kernel, beamai_tool, beamai_context,
 │   │                  # beamai_filter, beamai_prompt, beamai_result
-│   ├── LLM            # llm_response (unified LLM response accessors)
+│   ├── LLM            # beamai_llm_response (unified LLM response accessors)
 │   ├── Process        # beamai_process, beamai_process_builder,
 │   │                  # beamai_process_runtime, beamai_process_step,
 │   │                  # beamai_process_executor, beamai_process_event
@@ -260,7 +201,7 @@ beamai (external dependency)
 │   ├── Behaviours     # beamai_llm_behaviour, beamai_http_behaviour,
 │   │                  # beamai_step_behaviour, beamai_process_store_behaviour
 │   ├── Graph          # graph, graph_node, graph_edge, graph_builder, graph_dsl,
-│   │                  # graph_runner, graph_snapshot, graph_state, graph_state_reducer
+│   │                  # graph_runner, graph_snapshot, graph_state, graph_command
 │   ├── Pregel         # pregel, pregel_master, pregel_worker, pregel_vertex
 │   └── Utils          # beamai_id, beamai_jsonrpc, beamai_sse, beamai_utils
 │
@@ -336,7 +277,7 @@ apps/
 ```
 
 **Dependency Notes:**
-- This project depends on the main branch of [BeamAI](https://github.com/TTalkPro/beamai) via `rebar.config`
+- This project depends on the r1.0.0 branch of [BeamAI](https://github.com/TTalkPro/beamai) via `rebar.config`
 - Core functionality (Kernel, Process Framework, Graph, LLM, Memory) is provided by BeamAI
 - This project focuses on Agent implementation, protocol support (A2A, MCP), tool system, and RAG features
 
@@ -355,57 +296,35 @@ Kernel = beamai_kernel:new(),
 %% Load tool from module
 Kernel1 = beamai_kernel:add_tool_module(Kernel, beamai_tool_file),
 
+%% Or add a single tool
+Tool = #{
+    name => <<"read_file">>,
+    description => <<"Read file contents">>,
+    parameters => #{
+        <<"path">> => #{type => string, required => true}
+    },
+    handler => fun(#{<<"path">> := Path}, _Ctx) ->
+        file:read_file(Path)
+    end
+},
+Kernel2 = beamai_kernel:add_tool(Kernel1, Tool),
+
 %% Invoke registered tool
-{ok, Result, _Ctx} = beamai_kernel:invoke(Kernel1, <<"file_read">>, #{
+{ok, Result, _Ctx} = beamai_kernel:invoke_tool(Kernel2, <<"read_file">>, #{
     <<"path">> => <<"/tmp/test.txt">>
-}, #{}).
+}, beamai_context:new()).
 ```
 
-### 2. Process Framework
+### 2. Memory Persistence
 
-Orchestratable process engine supporting step definitions, branching, parallelism, and time travel:
-
-```erlang
-%% Build process
-Process = beamai_process_builder:new(<<"my_process">>),
-Process1 = beamai_process_builder:add_step(Process, <<"step1">>, #{
-    handler => fun(Input, Ctx) -> {ok, transform(Input)} end
-}),
-{ok, Built} = beamai_process_builder:build(Process1),
-
-%% Execute
-{ok, Result} = beamai_process_executor:run(Built, InitialInput).
-```
-
-### 3. Graph Execution Engine
-
-Graph computation engine based on LangGraph concepts (in beamai_core app):
+Use storage backends for session persistence:
 
 ```erlang
-%% Create graph
-Builder = graph_builder:new(),
-Builder1 = graph_builder:add_node(Builder, start, fun(State) ->
-    {ok, State#{step => 1}}
-end),
-Builder2 = graph_builder:add_node(Builder1, finish, fun(State) ->
-    {ok, State}
-end),
-Builder3 = graph_builder:add_edge(Builder2, start, finish),
-Builder4 = graph_builder:set_entry_point(Builder3, start),
-Builder5 = graph_builder:set_finish_point(Builder4, finish),
-
-{ok, Graph} = graph_builder:compile(Builder5),
-{ok, Result} = graph_runner:run(Graph, #{}).
-```
-
-### 4. Memory Persistence
-
-Use beamai_memory for session persistence and time travel:
-
-```erlang
-%% Create Memory
+%% Create Memory (using ETS storage backend)
 {ok, _} = beamai_store_ets:start_link(my_store, #{}),
-{ok, Memory} = beamai_memory:new(#{context_store => {beamai_store_ets, my_store}}),
+StateStore = beamai_state_store:new({beamai_store_ets, my_store}),
+Mgr = beamai_process_snapshot:new(StateStore),
+Memory = {Mgr, #{thread_id => <<"my-session">>}},
 
 %% Create Agent with memory (auto_save enables per-turn auto-save)
 {ok, Agent0} = beamai_agent:new(#{llm => LLM, memory => Memory, auto_save => true}),
@@ -418,7 +337,7 @@ ok = beamai_agent:save(Agent1),
 {ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory).
 ```
 
-### 5. Callbacks
+### 3. Callbacks
 
 Listen to 8 events during Agent execution:
 
@@ -565,6 +484,19 @@ rebar3 compile
 rebar3 shell
 ```
 
+### Example Files
+
+| File | Description | Requires LLM |
+|------|-------------|--------------|
+| `example_llm_config.erl` | LLM configuration helper module | - |
+| `example_agent.erl` | Agent basics (single-turn, multi-turn, tool calls, streaming) | Partial |
+| `example_agent_hitl.erl` | Agent Human-in-the-Loop interrupt/resume | No (Mock) |
+| `example_agent_scenarios.erl` | Agent advanced scenarios (callbacks, concurrency, Coordinator) | Partial |
+| `example_deepagent.erl` | DeepAgent planning, reflection, trace inspection | Partial |
+| `example_deepagent_tools.erl` | DeepAgent tool integration (file, shell, custom) | Yes |
+| `test_anthropic_agent.erl` | Agent and DeepAgent end-to-end tests | Yes |
+| `test_zhipu_anthropic.erl` | Zhipu Anthropic-compatible API integration tests | Yes |
+
 ### Integration Tests (Agent + DeepAgent)
 
 Use the `test_zhipu_anthropic` module for end-to-end testing of Agent and DeepAgent:
@@ -595,7 +527,6 @@ test_zhipu_anthropic:test_deepagent_planned().  %% DeepAgent planned execution
 | **OTP Applications (Project)** | 6 |
 | **Core Dependencies (BeamAI)** | 3 |
 | **Source Modules (Project)** | ~80 |
-| **Test Files (Project)** | ~23 |
 
 **Project Applications:**
 - beamai_tools
@@ -617,7 +548,7 @@ test_zhipu_anthropic:test_deepagent_planned().  %% DeepAgent planned execution
 rebar3 eunit
 
 # Run tests for specific app
-rebar3 eunit --app=beamai_llm
+rebar3 eunit --app=beamai_agent
 
 # Run type checking
 rebar3 dialyzer
@@ -626,7 +557,6 @@ rebar3 dialyzer
 ## Performance
 
 - Based on Erlang/OTP lightweight processes
-- Graph engine optimizes execution paths
 - Concurrent tool invocations
 - HTTP connection pool (Gun, supports HTTP/2)
 - ETS high-speed storage

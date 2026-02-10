@@ -67,9 +67,9 @@ iterate(Opts, N, ToolCallsMade) ->
     #{kernel := Kernel, messages := Msgs, chat_opts := ChatOpts} = Opts,
     case beamai_kernel:invoke_chat(Kernel, Msgs, ChatOpts) of
         {ok, Response, _Ctx} ->
-            case llm_response:has_tool_calls(Response) of
+            case beamai_llm_response:has_tool_calls(Response) of
                 true ->
-                    TCs = llm_response:tool_calls(Response),
+                    TCs = beamai_llm_response:tool_calls(Response),
                     handle_tool_calls(TCs, Msgs, Opts, N, ToolCallsMade);
                 false ->
                     finish_no_tools(Opts, Response, ToolCallsMade)

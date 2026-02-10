@@ -88,9 +88,9 @@ do_llm_call(Inputs, State, Kernel) ->
     ChatOpts = beamai_agent_utils:build_chat_opts(Kernel, #{}),
     case beamai_kernel:invoke_chat(Kernel, NewMessages, ChatOpts) of
         {ok, Response, _Ctx} ->
-            case llm_response:has_tool_calls(Response) of
+            case beamai_llm_response:has_tool_calls(Response) of
                 true ->
-                    TCs = llm_response:tool_calls(Response),
+                    TCs = beamai_llm_response:tool_calls(Response),
                     handle_tool_response(TCs, NewMessages, State);
                 false ->
                     handle_text_response(Response, Inputs, State, NewMessages, History, IsNewTurn)
@@ -146,7 +146,7 @@ handle_text_response(Response, Inputs, State, NewMessages, History, IsNewTurn) -
         response => Content,
         tool_calls_made => PrevToolCalls,
         turn_count => NewTurnCount,
-        finish_reason => llm_response:finish_reason(Response)
+        finish_reason => beamai_llm_response:finish_reason(Response)
     },
     Event = beamai_process_event:new(OutputEvent, EventData),
     {ok, #{events => [Event], state => NewState}}.

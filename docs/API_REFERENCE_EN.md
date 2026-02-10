@@ -690,53 +690,47 @@ LLM = beamai_chat_completion:create(Provider, #{
 
 Unified memory and checkpoint management system.
 
-### Creation and Configuration
+### Creating Memory
+
+Memory is constructed by combining a storage backend with a snapshot manager:
 
 ```erlang
-%% Create Memory instance
--spec new(map()) -> {ok, memory()} | {error, term()}.
-beamai_memory:new(Config).
+%% Step 1: Start storage backend (ETS or SQLite)
+{ok, _} = beamai_store_ets:start_link(my_store, #{}).
 
-Config = #{
-    checkpointer => #{backend => ets | sqlite},
-    store => #{backend => ets | sqlite},
-    context_store => {module(), term()}
-}.
+%% Step 2: Create state store
+StateStore = beamai_state_store:new({beamai_store_ets, my_store}).
+
+%% Step 3: Create snapshot manager
+Mgr = beamai_process_snapshot:new(StateStore).
+
+%% Step 4: Build Memory tuple
+Memory = {Mgr, #{thread_id => <<"my-session">>}}.
 ```
 
-### Checkpoint Operations
+### Integration with Agent
 
 ```erlang
-%% Save checkpoint
--spec save_checkpoint(memory(), config(), state_data()) -> {ok, memory()}.
-beamai_memory:save_checkpoint(Memory, Config, StateData).
+%% Create Agent with Memory (auto_save enables per-turn auto-save)
+{ok, Agent0} = beamai_agent:new(#{
+    llm => LLM,
+    memory => Memory,
+    auto_save => true
+}).
 
-%% Load checkpoint
--spec load_checkpoint(memory(), config()) -> {ok, state_data()} | {error, not_found}.
--spec load_latest_checkpoint(memory(), config()) -> {ok, state_data()} | {error, not_found}.
-beamai_memory:load_checkpoint(Memory, Config).
-beamai_memory:load_latest_checkpoint(Memory, Config).
+%% Manual save
+ok = beamai_agent:save(Agent).
 
-%% List checkpoints
--spec list_checkpoints(memory(), config()) -> {ok, [checkpoint_info()]}.
-beamai_memory:list_checkpoints(Memory, Config).
-
-%% Checkpoint count
--spec checkpoint_count(memory(), config()) -> non_neg_integer().
-beamai_memory:checkpoint_count(Memory, Config).
+%% Restore Agent from Memory
+{ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory).
 ```
 
-### Store Operations
+### Storage Backends
 
-```erlang
-%% Store data
--spec put(memory(), namespace(), key(), value()) -> {ok, memory()}.
-beamai_memory:put(Memory, Namespace, Key, Value).
-
-%% Search data
--spec search(memory(), namespace(), filter()) -> {ok, [item()]}.
-beamai_memory:search(Memory, Namespace, Filter).
-```
+| Backend | Module | Features |
+|---------|--------|----------|
+| ETS | `beamai_store_ets` | In-memory, high performance, lost on process restart |
+| SQLite | `beamai_store_sqlite` | Persistent storage, survives restarts |
 
 ---
 

@@ -717,53 +717,47 @@ LLM = beamai_chat_completion:create(Provider, #{
 
 统一的记忆和检查点管理系统。
 
-### 创建和配置
+### 创建 Memory
+
+Memory 通过组合存储后端和快照管理器来构建：
 
 ```erlang
-%% 创建 Memory 实例
--spec new(map()) -> {ok, memory()} | {error, term()}.
-beamai_memory:new(Config).
+%% 步骤 1：启动存储后端（ETS 或 SQLite）
+{ok, _} = beamai_store_ets:start_link(my_store, #{}).
 
-Config = #{
-    checkpointer => #{backend => ets | sqlite},
-    store => #{backend => ets | sqlite},
-    context_store => {module(), term()}
-}.
+%% 步骤 2：创建状态存储
+StateStore = beamai_state_store:new({beamai_store_ets, my_store}).
+
+%% 步骤 3：创建快照管理器
+Mgr = beamai_process_snapshot:new(StateStore).
+
+%% 步骤 4：构建 Memory 元组
+Memory = {Mgr, #{thread_id => <<"my-session">>}}.
 ```
 
-### Checkpoint 操作
+### 与 Agent 集成
 
 ```erlang
-%% 保存检查点
--spec save_checkpoint(memory(), config(), state_data()) -> {ok, memory()}.
-beamai_memory:save_checkpoint(Memory, Config, StateData).
+%% 创建带 Memory 的 Agent（auto_save 启用后每轮自动保存）
+{ok, Agent0} = beamai_agent:new(#{
+    llm => LLM,
+    memory => Memory,
+    auto_save => true
+}).
 
-%% 加载检查点
--spec load_checkpoint(memory(), config()) -> {ok, state_data()} | {error, not_found}.
--spec load_latest_checkpoint(memory(), config()) -> {ok, state_data()} | {error, not_found}.
-beamai_memory:load_checkpoint(Memory, Config).
-beamai_memory:load_latest_checkpoint(Memory, Config).
+%% 手动保存
+ok = beamai_agent:save(Agent).
 
-%% 列出检查点
--spec list_checkpoints(memory(), config()) -> {ok, [checkpoint_info()]}.
-beamai_memory:list_checkpoints(Memory, Config).
-
-%% 检查点计数
--spec checkpoint_count(memory(), config()) -> non_neg_integer().
-beamai_memory:checkpoint_count(Memory, Config).
+%% 从 Memory 恢复 Agent
+{ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory).
 ```
 
-### Store 操作
+### 存储后端
 
-```erlang
-%% 存储数据
--spec put(memory(), namespace(), key(), value()) -> {ok, memory()}.
-beamai_memory:put(Memory, Namespace, Key, Value).
-
-%% 搜索数据
--spec search(memory(), namespace(), filter()) -> {ok, [item()]}.
-beamai_memory:search(Memory, Namespace, Filter).
-```
+| 后端 | 模块 | 特点 |
+|------|------|------|
+| ETS | `beamai_store_ets` | 内存存储，高性能，进程重启后丢失 |
+| SQLite | `beamai_store_sqlite` | 持久化存储，重启后保留 |
 
 ---
 

@@ -27,7 +27,7 @@
 %% 处理 content 为 null 或不存在的情况，返回空二进制。
 -spec extract_content(map()) -> binary().
 extract_content(Response) ->
-    case llm_response:content(Response) of
+    case beamai_llm_response:content(Response) of
         null -> <<>>;
         Content when is_binary(Content) -> Content
     end.

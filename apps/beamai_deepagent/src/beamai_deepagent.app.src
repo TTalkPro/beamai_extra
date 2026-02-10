@@ -1,6 +1,6 @@
 {application, beamai_deepagent, [
     {description, "BeamAI Deep Agent - Sub-agent Orchestrator"},
-    {vsn, "2.0.0"},
+    {vsn, "1.0.0"},
     {registered, []},
     {applications, [
         kernel,

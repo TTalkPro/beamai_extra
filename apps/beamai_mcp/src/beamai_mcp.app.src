@@ -1,6 +1,6 @@
 {application, beamai_mcp, [
     {description, "MCP (Model Context Protocol) Client and Server"},
-    {vsn, "0.1.0"},
+    {vsn, "1.0.0"},
     {registered, [
         beamai_mcp_sup,
         beamai_mcp_client_sup,
