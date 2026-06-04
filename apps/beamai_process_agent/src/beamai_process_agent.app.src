@@ -1,0 +1,9 @@
+{application, beamai_process_agent, [
+    {description, "Process-native agent built on the Process Framework"},
+    {vsn, "1.0.0"},
+    {registered, []},
+    {applications, [kernel, stdlib, beamai_core, beamai_agent, beamai_process]},
+    {env, []},
+    {modules, [beamai_process_agent, beamai_process_agent_llm_step, beamai_process_agent_tool_step]},
+    {licenses, ["Apache-2.0"]}
+]}.
