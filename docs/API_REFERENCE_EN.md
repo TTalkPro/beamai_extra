@@ -292,7 +292,7 @@ beamai_coordinator:delegate_parallel(CoordinatorPid, WorkerNames, Task).
 
 ```erlang
 %% Pipeline example: Translation pipeline
-LLM = beamai_chat_completion:create(bailian, #{model => <<"qwen-plus">>, api_key => ApiKey}),
+LLM = beamai_chat_completion:create(dashscope, #{model => <<"qwen-plus">>, api_key => ApiKey}),
 
 {ok, Pipeline} = beamai_coordinator:start_pipeline(<<"translator">>, #{
     agents => [
@@ -629,7 +629,7 @@ Opts = #{
 | `anthropic` | llm_provider_anthropic | Anthropic | Chat, streaming, tool calling |
 | `deepseek` | llm_provider_deepseek | OpenAI compatible | Chat, streaming, tool calling |
 | `zhipu` | llm_provider_zhipu | OpenAI compatible | Chat, streaming, tool calling, async |
-| `bailian` | llm_provider_bailian | DashScope native | Chat, streaming, tool calling, web search |
+| `dashscope` | llm_provider_dashscope | DashScope native | Chat, streaming, tool calling, web search |
 | `ollama` | llm_provider_ollama | OpenAI compatible | Chat, streaming |
 | `mock` | llm_provider_mock | Built-in | Mock LLM for testing |
 | `{custom, Module}` | Custom | Custom | User-defined provider |
@@ -651,9 +651,9 @@ LLM = beamai_chat_completion:create(deepseek, #{
 }).
 ```
 
-### Alibaba Cloud Bailian (DashScope) Detailed Description
+### Alibaba Cloud DashScope Detailed Description
 
-Bailian Provider uses DashScope native API, automatically selecting endpoints based on model type:
+DashScope Provider uses DashScope native API, automatically selecting endpoints based on model type:
 - **Text generation models** (`qwen-plus`, `qwen-max`, `qwen-turbo`): Use `/api/v1/services/aigc/text-generation/generation`
 - **Multimodal models** (`qwen-vl-plus`, `qwen-audio`, etc.): Use `/api/v1/services/aigc/multimodal-generation/generation`
 
@@ -680,7 +680,7 @@ LLM = beamai_chat_completion:create(Provider, #{
 }).
 ```
 
-**Provider Types:** `openai | anthropic | deepseek | zhipu | bailian | ollama | mock | {custom, module()}`
+**Provider Types:** `openai | anthropic | deepseek | zhipu | dashscope | ollama | mock | {custom, module()}`
 
 **Config Type Marker:** The returned config map includes `'__llm_config__' => true` marker for internal validation.
 

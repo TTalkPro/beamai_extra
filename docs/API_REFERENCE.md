@@ -292,7 +292,7 @@ beamai_coordinator:delegate_parallel(CoordinatorPid, WorkerNames, Task).
 
 ```erlang
 %% Pipeline 示例：翻译流水线
-LLM = beamai_chat_completion:create(bailian, #{model => <<"qwen-plus">>, api_key => ApiKey}),
+LLM = beamai_chat_completion:create(dashscope, #{model => <<"qwen-plus">>, api_key => ApiKey}),
 
 {ok, Pipeline} = beamai_coordinator:start_pipeline(<<"translator">>, #{
     agents => [
@@ -629,7 +629,7 @@ Opts = #{
 | `anthropic` | llm_provider_anthropic | Anthropic | 聊天、流式、工具调用 |
 | `deepseek` | llm_provider_deepseek | OpenAI 兼容 | 聊天、流式、工具调用 |
 | `zhipu` | llm_provider_zhipu | OpenAI 兼容 | 聊天、流式、工具调用、异步 |
-| `bailian` | llm_provider_bailian | DashScope 原生 | 聊天、流式、工具调用、联网搜索 |
+| `dashscope` | llm_provider_dashscope | DashScope 原生 | 聊天、流式、工具调用、联网搜索 |
 | `ollama` | llm_provider_ollama | OpenAI 兼容 | 聊天、流式 |
 | `mock` | llm_provider_mock | 内置 | 测试用 Mock LLM |
 | `{custom, Module}` | 自定义 | 自定义 | 用户自定义 Provider |
@@ -707,7 +707,7 @@ LLM = beamai_chat_completion:create(Provider, #{
 }).
 ```
 
-**Provider 类型：** `openai | anthropic | deepseek | zhipu | bailian | ollama | mock | {custom, module()}`
+**Provider 类型：** `openai | anthropic | deepseek | zhipu | dashscope | ollama | mock | {custom, module()}`
 
 **Config 类型标记：** 返回的 config map 包含 `'__llm_config__' => true` 标记，用于内部验证。
 
