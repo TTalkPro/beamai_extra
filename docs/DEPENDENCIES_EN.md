@@ -201,7 +201,7 @@ application:set_env(beamai_core, http_backend, beamai_http_hackney).
   - DeepSeek (llm_provider_deepseek) - OpenAI compatible API
   - Ollama (llm_provider_ollama)
   - Zhipu AI (llm_provider_zhipu)
-  - Alibaba Cloud Bailian (llm_provider_bailian) - DashScope native API
+  - Alibaba Cloud DashScope (llm_provider_dashscope) - DashScope native API
 - Message adapter (llm_message_adapter)
 - Tool adapter (llm_tool_adapter)
 - Response adapter (llm_response_adapter)

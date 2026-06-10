@@ -199,7 +199,7 @@ application:set_env(beamai_core, http_backend, beamai_http_hackney).
   - DeepSeek（llm_provider_deepseek）- OpenAI 兼容 API
   - Ollama（llm_provider_ollama）
   - 智谱 AI（llm_provider_zhipu）
-  - 阿里云百炼（llm_provider_bailian）- DashScope 原生 API
+  - 阿里云百炼（llm_provider_dashscope）- DashScope 原生 API
 - 消息适配器（llm_message_adapter）
 - 工具适配器（llm_tool_adapter）
 - 响应适配器（llm_response_adapter）
