@@ -209,7 +209,7 @@ beamai (external dependency)
 │   ├── Chat           # beamai_chat_completion
 │   ├── Parser         # beamai_output_parser, beamai_parser_json
 │   ├── Adapters       # llm_message_adapter, llm_response_adapter, llm_tool_adapter
-│   └── Providers      # OpenAI, Anthropic, DeepSeek, Zhipu, Bailian, Ollama
+│   └── Providers      # OpenAI, Anthropic, DeepSeek, Zhipu, DashScope, Ollama
 │
 └── beamai_memory/      # Memory and context storage
     ├── Context        # Context management
@@ -424,7 +424,7 @@ LLM = test_zhipu_anthropic:create_llm().  %% Built from ZHIPU_API_KEY + ZHIPU_AN
 | `openai` | llm_provider_openai | OpenAI | OpenAI API |
 | `deepseek` | llm_provider_deepseek | OpenAI compatible | DeepSeek API |
 | `zhipu` | llm_provider_zhipu | OpenAI compatible | Zhipu AI (GLM series) |
-| `bailian` | llm_provider_bailian | DashScope native | Alibaba Cloud Bailian (Qwen series) |
+| `dashscope` | llm_provider_dashscope | DashScope native | Alibaba Cloud DashScope (Qwen series) |
 | `ollama` | llm_provider_ollama | OpenAI compatible | Ollama local models |
 | `mock` | llm_provider_mock | Built-in | Mock LLM for testing |
 
@@ -465,7 +465,7 @@ BeamAI supports both Gun and Hackney HTTP backends, with Gun as the default (sup
 | Module | Description | Source | Documentation |
 |--------|-------------|--------|---------------|
 | **beamai_core** | Core framework: Kernel, Process Framework, Graph Engine, HTTP, Behaviours | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
-| **beamai_llm** | LLM client: supports OpenAI, Anthropic, DeepSeek, Zhipu, Bailian, Ollama | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
+| **beamai_llm** | LLM client: supports OpenAI, Anthropic, DeepSeek, Zhipu, DashScope, Ollama | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
 | **beamai_memory** | Memory management: Checkpoint, Store, time travel, branching | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
 | **beamai_tools** | Tool system: tool management, Middleware, security validation | Project | [README](apps/beamai_tools/README.md) |
 | **beamai_agent** | Agent implementation: ReAct pattern, callback system, Process Agent | Project | [README](apps/beamai_agent/README.md) |

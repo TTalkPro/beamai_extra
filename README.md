@@ -210,7 +210,7 @@ beamai (外部依赖)
 │   ├── Chat           # beamai_chat_completion
 │   ├── Parser         # beamai_output_parser, beamai_parser_json
 │   ├── Adapters       # llm_message_adapter, llm_response_adapter, llm_tool_adapter
-│   └── Providers      # OpenAI, Anthropic, DeepSeek, Zhipu, Bailian, Ollama
+│   └── Providers      # OpenAI, Anthropic, DeepSeek, Zhipu, DashScope, Ollama
 │
 └── beamai_memory/      # 内存和上下文存储
     ├── Context        # 上下文管理
@@ -425,7 +425,7 @@ LLM = test_zhipu_anthropic:create_llm().  %% 从 ZHIPU_API_KEY + ZHIPU_ANTHROPIC
 | `openai` | llm_provider_openai | OpenAI | OpenAI API |
 | `deepseek` | llm_provider_deepseek | OpenAI 兼容 | DeepSeek API |
 | `zhipu` | llm_provider_zhipu | OpenAI 兼容 | 智谱 AI (GLM 系列) |
-| `bailian` | llm_provider_bailian | DashScope 原生 | 阿里云百炼 (通义千问系列) |
+| `dashscope` | llm_provider_dashscope | DashScope 原生 | 阿里云百炼 (通义千问系列) |
 | `ollama` | llm_provider_ollama | OpenAI 兼容 | Ollama 本地模型 |
 | `mock` | llm_provider_mock | 内置 | 测试用 Mock LLM |
 
@@ -466,7 +466,7 @@ BeamAI 支持 Gun 和 Hackney 两种 HTTP 后端，默认使用 Gun（支持 HTT
 | 模块 | 说明 | 来源 | 文档 |
 |------|------|------|------|
 | **beamai_core** | 核心框架：Kernel、Process Framework、Graph 引擎、HTTP、Behaviours | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
-| **beamai_llm** | LLM 客户端：支持 OpenAI、Anthropic、DeepSeek、Zhipu、Bailian、Ollama | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
+| **beamai_llm** | LLM 客户端：支持 OpenAI、Anthropic、DeepSeek、Zhipu、DashScope、Ollama | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
 | **beamai_memory** | 记忆管理：Checkpoint、Store、时间旅行、分支 | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
 | **beamai_tools** | 工具和中间件系统：Tool 模块、Middleware、安全验证 | 本项目 | [README](apps/beamai_tools/README.md) |
 | **beamai_agent** | Agent 实现：ReAct 模式、回调系统、Process Agent | 本项目 | [README](apps/beamai_agent/README.md) |
