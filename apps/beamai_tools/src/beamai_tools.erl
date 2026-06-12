@@ -41,26 +41,19 @@
 %% 指定的模块必须实现 beamai_tool_behaviour 的回调函数
 %% （tool_info/0 和 tools/0）。
 %%
-%% 同时会加载工具模块通过 filters/0 回调定义的所有过滤器。
+%% 整体委托 beamai_kernel:add_tool_module/2：模块若定义 filters/0，
+%% 由 kernel 原语自行加载，本模块不重复处理。
 %%
 %% @param Kernel  当前的 Kernel 实例
 %% @param Module  实现了 beamai_tool_behaviour 的工具模块名
 %% @returns 注册了工具后的更新 Kernel 实例
 -spec load(beamai_kernel:kernel(), module()) -> beamai_kernel:kernel().
 load(Kernel, Module) ->
-    K1 = beamai_kernel:add_tool_module(Kernel, Module),
-    %% 如果工具模块定义了 filters/0 回调，则加载对应的过滤器
-    case erlang:function_exported(Module, filters, 0) of
-        true ->
-            Filters = Module:filters(),
-            lists:foldl(fun(F, K) -> beamai_kernel:add_filter(K, F) end, K1, Filters);
-        false ->
-            K1
-    end.
+    beamai_kernel:add_tool_module(Kernel, Module).
 
 %% @doc 批量加载多个工具模块到 kernel。
 %%
-%% 按顺序依次加载所有指定的工具模块，每个模块的过滤器也会被加载。
+%% 按顺序依次加载所有指定的工具模块。
 %%
 %% @param Kernel   当前的 Kernel 实例
 %% @param Modules  工具模块名列表
