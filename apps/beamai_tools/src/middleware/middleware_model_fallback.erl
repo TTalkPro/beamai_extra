@@ -1,12 +1,9 @@
 %%%-------------------------------------------------------------------
-%%% @doc 模型降级中间件（4-hook 版本）
+%%% @doc 模型降级中间件（around 模型）
 %%%
 %%% 当主模型调用失败时，自动切换到备选降级模型。
-%%% 支持配置多个降级模型列表，按优先级依次尝试。
+%%% around_chat 包裹 LLM 调用：调 Next → 检测错误 → 切换模型后重调 Next。
 %%% 当所有降级模型耗尽时，返回原始错误。
-%%%
-%%% 使用的钩子：
-%%% - post_chat: 检测 LLM 错误并触发模型降级
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -14,93 +11,75 @@
 
 -behaviour(beamai_middleware).
 
--export([init/1, post_chat/2]).
+-export([init/1, around_chat/3]).
 
 %%====================================================================
-%% 中间件回调函数
-%%====================================================================
+%% 中间件回调
+%%%-------------------------------------------------------------------
 
-%% @doc 初始化降级模型列表和触发条件
-%%
-%% 从配置选项中提取降级相关参数，构建中间件初始状态。
-%%
-%% @param Opts 配置选项映射，支持以下字段：
-%%   - fallback_models: 降级模型列表，按优先级排序
-%%   - trigger_errors: 触发降级的错误类型列表
-%%   - on_fallback: 降级时触发的回调函数（可选）
-%% @returns 中间件状态映射，包含降级配置和当前索引
 -spec init(map()) -> map().
 init(Opts) ->
     #{
         fallback_models => maps:get(fallback_models, Opts, []),
         trigger_errors => maps:get(trigger_errors, Opts, default_trigger_errors()),
         on_fallback => maps:get(on_fallback, Opts, undefined),
-        fallback_index => 0,
-        fallback_active => false
+        fallback_index => 0
     }.
 
-%% @doc 检测 LLM 错误并触发模型降级
-%%
-%% 在 LLM 调用完成后检查返回结果。如果检测到错误，
-%% 判断是否需要触发降级，并切换到下一个可用的备选模型。
-%%
-%% @param FilterCtx 过滤上下文，包含 result 字段表示 LLM 调用结果
-%% @param MwState 中间件状态，包含降级模型列表和当前索引
-%% @returns ok | {skip, 降级信息映射}
--spec post_chat(map(), map()) -> beamai_middleware:middleware_result().
-post_chat(FilterCtx, MwState) ->
-    case maps:get(result, FilterCtx, undefined) of
-        {error, Error} ->
-            handle_error(Error, FilterCtx, MwState);
-        _ ->
-            ok
-    end.
+%% @doc 包裹 LLM 调用：失败时依次切换到降级模型。
+-spec around_chat(beamai_middleware:request(), map(), beamai_middleware:next()) ->
+    beamai_middleware:response() | {beamai_middleware:response(), map()}.
+around_chat(Req, State, Next) ->
+    try_fallback(Req, State, Next, 0).
 
 %%====================================================================
 %% 内部函数
-%%====================================================================
+%%%-------------------------------------------------------------------
 
-%% @doc 获取默认的触发降级错误类型列表
-%% 包含常见的网络错误、超时、限流、服务不可用等错误类型
 default_trigger_errors() ->
     [timeout, connection_error, connection_closed, rate_limit,
      rate_limited, server_error, service_unavailable,
      internal_server_error, bad_gateway, gateway_timeout,
      model_not_found, invalid_api_key, quota_exceeded].
 
-%% @doc 处理 LLM 调用错误
-%% 判断错误是否应触发降级，如果是则尝试切换到下一个备选模型
-%% 当所有降级模型耗尽时返回 ok（不再尝试降级）
-handle_error(Error, _FilterCtx, MwState) ->
+%% @private 递归尝试降级模型
+try_fallback(Req, State, Next, Index) ->
     #{fallback_models := FallbackModels,
       trigger_errors := TriggerErrors,
-      on_fallback := OnFallback,
-      fallback_index := CurrentIndex} = MwState,
+      on_fallback := OnFallback} = State,
 
-    case should_trigger_fallback(Error, TriggerErrors) of
-        false -> ok;
-        true ->
-            NextIndex = CurrentIndex + 1,
-            case NextIndex =< length(FallbackModels) of
-                true ->
-                    NextModel = lists:nth(NextIndex, FallbackModels),
-                    maybe_call_on_fallback(OnFallback, #{}, NextModel, Error),
-                    %% 通过 skip 信号通知框架执行模型降级
-                    {skip, #{pending => model_fallback,
-                             fallback_model => NextModel,
-                             fallback_index => NextIndex,
-                             error => Error}};
+    Resp = Next(Req),
+
+    case extract_error(Resp) of
+        undefined ->
+            {Resp, State#{fallback_index => Index}};
+        Error ->
+            case should_trigger_fallback(Error, TriggerErrors) of
                 false ->
-                    %% 所有降级模型已耗尽，无法继续降级
-                    ok
+                    {Resp, State#{fallback_index => Index}};
+                true ->
+                    NextIndex = Index + 1,
+                    case NextIndex =< length(FallbackModels) of
+                        true ->
+                            FallbackModel = lists:nth(NextIndex, FallbackModels),
+                            maybe_call_on_fallback(OnFallback, maps:get(model, maps:get(opts, Req, #{}), undefined), FallbackModel, Error),
+                            %% 修改请求中的模型，重试
+                            Opts = maps:get(opts, Req, #{}),
+                            NewReq = Req#{opts => Opts#{model => FallbackModel}},
+                            try_fallback(NewReq, State, Next, NextIndex);
+                        false ->
+                            %% 降级模型已耗尽
+                            {Resp, State#{fallback_index => Index}}
+                    end
             end
     end.
 
-%% @doc 判断错误是否应触发降级
-%% 支持三种错误格式：
-%% - {ErrorType, _} 元组形式：提取错误类型进行匹配
-%% - 原子形式：直接与触发列表比较
-%% - 二进制字符串形式：通过关键词模糊匹配
+%% @private 从 chat 响应中提取错误
+extract_error(#{response := {error, Error}}) -> Error;
+extract_error(#{response := #{error := Error}}) -> Error;
+extract_error(#{response := Error}) when is_atom(Error), Error =/= ok -> Error;
+extract_error(_) -> undefined.
+
 should_trigger_fallback({ErrorType, _}, TriggerErrors) when is_atom(ErrorType) ->
     lists:member(ErrorType, TriggerErrors);
 should_trigger_fallback(ErrorType, TriggerErrors) when is_atom(ErrorType) ->
@@ -113,12 +92,8 @@ should_trigger_fallback(ErrorBin, _) when is_binary(ErrorBin) ->
           "503", "502", "504", "quota", "invalid key", "model not found"]);
 should_trigger_fallback(_, _) -> false.
 
-%% @doc 调用降级回调函数（如果已配置）
-%% 当发生模型降级时通知调用方，便于记录日志或执行自定义逻辑
-%% 回调函数异常不会影响降级流程
 maybe_call_on_fallback(undefined, _, _, _) -> ok;
 maybe_call_on_fallback(OnFallback, FromModel, ToModel, Error) when is_function(OnFallback, 3) ->
     try OnFallback(FromModel, ToModel, Error)
-    catch _:R -> logger:warning("降级回调函数执行异常: ~p", [R])
-    end,
-    ok.
+    catch _:R -> logger:warning("Fallback callback error: ~p", [R])
+    end.
