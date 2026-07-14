@@ -144,4 +144,4 @@ generate_request_id() ->
     iolist_to_binary(io_lib:format("req_~p_~8.16.0b", [Timestamp, Rand])).
 
 get_interaction_handler(Context) ->
-    maps:get(human_interaction_handler, Context, undefined).
+    beamai_context:get(Context, human_interaction_handler, undefined).

@@ -73,7 +73,7 @@ read_todos_tool() ->
 
 handle_write_todos(Args, Context) ->
     TodosInput = maps:get(<<"todos">>, Args, []),
-    ExistingTodos = maps:get(?TODOS_KEY, Context, []),
+    ExistingTodos = beamai_context:state_get(Context, ?TODOS_KEY, []),
     {NewTodos, Stats} = process_todos(TodosInput, ExistingTodos),
     FormattedTodos = format_todos(NewTodos),
     Result = #{
@@ -85,7 +85,7 @@ handle_write_todos(Args, Context) ->
     {ok, Result, #{?TODOS_KEY => NewTodos}}.
 
 handle_read_todos(_Args, Context) ->
-    Todos = maps:get(?TODOS_KEY, Context, []),
+    Todos = beamai_context:state_get(Context, ?TODOS_KEY, []),
     Stats = compute_stats(Todos),
     FormattedTodos = format_todos(Todos),
     {ok, #{
