@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @doc 使用 ZHIPU_ANTHROPIC_BASE_URL + ZHIPU_API_KEY 测试 Agent 和 DeepAgent
+%%% @doc 使用 ZHIPU_ANTHROPIC_BASE_URL + ZHIPU_API_KEY 测试 Agent
 %%%
 %%% 环境变量:
 %%%   ZHIPU_ANTHROPIC_BASE_URL - Zhipu Anthropic 兼容 API 地址
@@ -11,7 +11,7 @@
 %%% export ZHIPU_API_KEY="your-api-key"
 %%% export ZHIPU_ANTHROPIC_BASE_URL="https://open.bigmodel.cn/api/anthropic"
 %%% rebar3 shell
-%%% ```
+%%% '''
 %%%
 %%% 然后在 shell 中执行:
 %%% ```erlang
@@ -19,8 +19,6 @@
 %%% test_zhipu_anthropic:test_agent_simple().
 %%% test_zhipu_anthropic:test_agent_multi_turn().
 %%% test_zhipu_anthropic:test_agent_with_tools().
-%%% test_zhipu_anthropic:test_deepagent_simple().
-%%% test_zhipu_anthropic:test_deepagent_planned().
 %%% ```
 %%% @end
 %%%-------------------------------------------------------------------
@@ -31,8 +29,6 @@
     test_agent_simple/0,
     test_agent_multi_turn/0,
     test_agent_with_tools/0,
-    test_deepagent_simple/0,
-    test_deepagent_planned/0,
     create_llm/0
 ]).
 
@@ -85,9 +81,7 @@ run_all() ->
     Tests = [
         {"Agent: Simple Conversation", fun test_agent_simple/0},
         {"Agent: Multi-Turn", fun test_agent_multi_turn/0},
-        {"Agent: Tool Calling", fun test_agent_with_tools/0},
-        {"DeepAgent: Simple (No Planning)", fun test_deepagent_simple/0},
-        {"DeepAgent: Planned Execution", fun test_deepagent_planned/0}
+        {"Agent: Tool Calling", fun test_agent_with_tools/0}
     ],
 
     Results = lists:map(fun({Name, TestFun}) ->
@@ -265,86 +259,6 @@ test_agent_with_tools() ->
     io:format("Tool calls made: ~p~n", [length(ToolCalls)]),
     true = counters:get(ToolCallCount, 1) >= 1,
     true = byte_size(Content) > 0,
-    ok.
-
-%%====================================================================
-%% DeepAgent 测试
-%%====================================================================
-
-%% @doc 测试 DeepAgent 简单任务（无规划）
--spec test_deepagent_simple() -> ok.
-test_deepagent_simple() ->
-    ensure_apps(),
-    LLM = create_llm(),
-
-    Config = beamai_deepagent:new(#{
-        llm => LLM,
-        planning_enabled => false,
-        reflection_enabled => false,
-        max_tool_iterations => 1,
-        timeout => 30000
-    }),
-
-    Task = <<"What is 2+2? Answer with just the number.">>,
-    io:format("Task: ~s~n", [Task]),
-    {ok, Result} = beamai_deepagent:run(Config, Task),
-
-    Status = maps:get(status, Result),
-    Response = maps:get(response, Result),
-    io:format("Status: ~p~n", [Status]),
-    io:format("Response: ~ts~n", [Response]),
-
-    completed = Status,
-    true = byte_size(Response) > 0,
-    ok.
-
-%% @doc 测试 DeepAgent 规划执行
--spec test_deepagent_planned() -> ok.
-test_deepagent_planned() ->
-    ensure_apps(),
-    LLM = create_llm(),
-
-    Config = beamai_deepagent:new(#{
-        llm => LLM,
-        planning_enabled => true,
-        reflection_enabled => false,
-        max_tool_iterations => 3,
-        max_parallel => 2,
-        timeout => 60000
-    }),
-
-    Task = <<"Write a haiku about Erlang, then explain what makes it a haiku.">>,
-    io:format("Task: ~s~n", [Task]),
-    {ok, Result} = beamai_deepagent:run(Config, Task),
-
-    Status = maps:get(status, Result),
-    Response = maps:get(response, Result),
-    io:format("Status: ~p~n", [Status]),
-    io:format("Response: ~ts~n", [Response]),
-
-    true = (Status =:= completed orelse Status =:= error),
-    true = byte_size(Response) > 0,
-
-    %% 检查计划
-    case beamai_deepagent:get_plan(Result) of
-        undefined ->
-            io:format("No plan generated (direct execution)~n");
-        Plan ->
-            Steps = beamai_deepagent_plan:get_steps(Plan),
-            io:format("Plan steps: ~p~n", [length(Steps)]),
-            true = length(Steps) >= 1
-    end,
-
-    %% 检查步骤结果
-    StepResults = maps:get(step_results, Result, []),
-    io:format("Step results: ~p~n", [length(StepResults)]),
-    lists:foreach(fun(SR) ->
-        io:format("  Step ~p [~p]: ~ts~n", [
-            maps:get(step_id, SR, 0),
-            maps:get(status, SR, unknown),
-            truncate(maps:get(result, SR, <<>>), 100)
-        ])
-    end, StepResults),
     ok.
 
 %%====================================================================

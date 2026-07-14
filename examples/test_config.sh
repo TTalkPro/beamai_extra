@@ -8,7 +8,6 @@ cd "$(dirname "$0")"
 export ERL_FLAGS="-pa _build/default/lib/beamai_examples/ebin"
 export ERL_FLAGS="$ERL_FLAGS -pa ../_build/default/lib/beamai/_build/default/lib/beamai_core/ebin"
 export ERL_FLAGS="$ERL_FLAGS -pa ../_build/default/lib/beamai/_build/default/lib/beamai_llm/ebin"
-export ERL_FLAGS="$ERL_FLAGS -pa ../_build/default/lib/beamai/_build/default/lib/beamai_memory/ebin"
 export ERL_FLAGS="$ERL_FLAGS -pa ../_build/default/lib/beamai/_build/default/lib/*/ebin"
 
 echo "=== Configuration Test ==="

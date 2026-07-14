@@ -24,7 +24,6 @@ for app in $APPS; do
     # 获取 include 路径
     INCLUDE="-I $PROJECT_ROOT/_build/default/lib/beamai/apps/beamai_core/include"
     INCLUDE="$INCLUDE -I $PROJECT_ROOT/_build/default/lib/beamai/apps/beamai_llm/include"
-    INCLUDE="$INCLUDE -I $PROJECT_ROOT/_build/default/lib/beamai/apps/beamai_memory/include"
 
     # 编译源文件
     for src in "$PROJECT_ROOT/apps/$app/src"/*.erl; do
@@ -49,7 +48,6 @@ CODEPATH="$CODEPATH:$PROJECT_ROOT/apps/beamai_tools/ebin"
 CODEPATH="$CODEPATH:$PROJECT_ROOT/apps/beamai_agent/ebin"
 CODEPATH="$CODEPATH:$PROJECT_ROOT/_build/default/lib/beamai/_build/default/lib/beamai_core/ebin"
 CODEPATH="$CODEPATH:$PROJECT_ROOT/_build/default/lib/beamai/_build/default/lib/beamai_llm/ebin"
-CODEPATH="$CODEPATH:$PROJECT_ROOT/_build/default/lib/beamai/_build/default/lib/beamai_memory/ebin"
 CODEPATH="$CODEPATH:$PROJECT_ROOT/_build/default/lib/beamai/_build/default/lib/*/ebin"
 
 # 检查环境变量

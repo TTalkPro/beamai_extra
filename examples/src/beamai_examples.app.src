@@ -6,17 +6,13 @@
         kernel,
         stdlib,
         jsx,
-        hackney,
-        poolboy
+        hackney
     ]},
     {env, []},
     {modules, [
         example_llm_config,
         example_agent,
-        example_agent_hitl,
         example_agent_scenarios,
-        example_deepagent,
-        example_deepagent_tools,
         test_anthropic_agent,
         test_zhipu_anthropic
     ]},

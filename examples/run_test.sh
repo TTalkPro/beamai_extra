@@ -5,7 +5,7 @@
 cd "$(dirname "$0")"
 
 # 设置代码路径
-CODEPATH="_build/default/lib/beamai_examples/ebin:../_build/default/lib/beamai/_build/default/lib/beamai_core/ebin:../_build/default/lib/beamai/_build/default/lib/beamai_llm/ebin:../_build/default/lib/beamai/_build/default/lib/beamai_memory/ebin:../_build/default/lib/beamai/_build/default/lib/*/ebin"
+CODEPATH="_build/default/lib/beamai_examples/ebin:../_build/default/lib/beamai/_build/default/lib/beamai_core/ebin:../_build/default/lib/beamai/_build/default/lib/beamai_llm/ebin:../_build/default/lib/beamai/_build/default/lib/*/ebin"
 
 # 检查环境变量
 if [ -z "$ANTHROPIC_AUTH_TOKEN" ]; then
