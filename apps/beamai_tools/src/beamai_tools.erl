@@ -81,19 +81,20 @@ available() ->
 %% 中间件集成
 %%====================================================================
 
-%% @doc 初始化中间件链并添加 filters 到 kernel。
+%% @doc 初始化中间件链并将 filters 注入 kernel。
 %%
-%% 将中间件规格列表通过中间件运行器转换为 kernel 过滤器，
-%% 然后逐一添加到 kernel 中。
+%% 将中间件规格列表转换为 beamai_filter:filter() 并追加到 kernel
+%% 的 filters 字段。filter 注册顺序即洋葱层序（靠前 = 外层）。
 %%
 %% @param Kernel          当前的 Kernel 实例
-%% @param MiddlewareSpecs 中间件规格列表，格式为 [{Module, Opts}, ...]
-%% @returns 添加了中间件过滤器后的更新 Kernel 实例
+%% @param MiddlewareSpecs 中间件规格列表，格式为 [{Module, Opts, Priority}, ...]
+%% @returns 追加了中间件过滤器后的更新 Kernel 实例
 -spec with_middleware(beamai_kernel:kernel(), [term()]) -> beamai_kernel:kernel().
 with_middleware(Kernel, MiddlewareSpecs) ->
     Chain = beamai_middleware_runner:init(MiddlewareSpecs),
-    Filters = beamai_middleware_runner:to_filters(Chain),
-    lists:foldl(fun(F, K) -> beamai_kernel:add_filter(K, F) end, Kernel, Filters).
+    NewFilters = beamai_middleware_runner:to_filters(Chain),
+    Existing = maps:get(filters, Kernel, []),
+    Kernel#{filters => Existing ++ NewFilters}.
 
 %% @doc 获取预设中间件配置。
 %%
