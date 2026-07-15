@@ -13,7 +13,7 @@
 %%% 使用方法:
 %%% ```
 %%% %% Mock 版本（无需 API Key）
-%%% ERL_LIBS=../_build/default/lib rebar3 shell
+%%% ERL_LIBS=../_build/default/lib:../_build/default/checkouts rebar3 shell
 %%% example_agent:run_basic().
 %%% example_agent:run_multi_turn().
 %%% example_agent:run_with_plugin().

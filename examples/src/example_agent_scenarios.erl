@@ -9,7 +9,7 @@
 %%% 使用方法：
 %%% ```
 %%% cd examples
-%%% ERL_LIBS=../_build/default/lib rebar3 shell
+%%% ERL_LIBS=../_build/default/lib:../_build/default/checkouts rebar3 shell
 %%%
 %%% %% Mock 版本（无需 API Key）
 %%% example_agent_scenarios:no_memory_no_plugin().
