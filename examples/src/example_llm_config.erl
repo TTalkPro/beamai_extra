@@ -3,6 +3,7 @@
 %%%
 %%% 提供多种 LLM 配置方案：
 %%%   - anthropic(): Zhipu Anthropic 兼容 API（GLM-4.7）
+%%%   - minimax(): MiniMax Anthropic 兼容 API（MiniMax-M2）
 %%%   - claude(): Anthropic 原生 API（Claude Sonnet 4）
 %%%   - zhipu(): Zhipu 原生 API（GLM-4.6）
 %%%   - deepseek(): DeepSeek API（deepseek-chat）
@@ -10,6 +11,7 @@
 %%%
 %%% 环境变量：
 %%%   ZHIPU_API_KEY     - 智谱 API Key
+%%%   MINIMAX_API_KEY   - MiniMax API Key
 %%%   ANTHROPIC_API_KEY - Anthropic API Key
 %%%   DEEPSEEK_API_KEY  - DeepSeek API Key
 %%%   OPENAI_API_KEY    - OpenAI API Key
@@ -20,6 +22,7 @@
 
 -export([
     anthropic/0, anthropic/1,
+    minimax/0, minimax/1,
     claude/0, claude/1,
     zhipu/0, zhipu/1,
     openai_glm/0, openai_glm/1,
@@ -33,6 +36,8 @@
 
 -define(ZHIPU_ANTHROPIC_DEFAULT_BASE_URL, <<"https://open.bigmodel.cn/api/anthropic">>).
 -define(ZHIPU_OPENAI_BASE_URL, <<"https://open.bigmodel.cn/api/paas">>).
+-define(MINIMAX_ANTHROPIC_DEFAULT_BASE_URL, <<"https://api.minimaxi.com/anthropic">>).
+-define(MINIMAX_DEFAULT_MODEL, <<"MiniMax-M2">>).
 -define(ANTHROPIC_DEFAULT_MODEL, <<"glm-4.7">>).
 -define(CLAUDE_DEFAULT_MODEL, <<"claude-sonnet-4-20250514">>).
 -define(ZHIPU_DEFAULT_MODEL, <<"glm-4.7">>).
@@ -70,6 +75,37 @@ anthropic(Opts) ->
         api_key => maps:get(api_key, Opts),
         base_url => BaseUrl,
         model => maps:get(model, Opts, ?ANTHROPIC_DEFAULT_MODEL),
+        max_tokens => maps:get(max_tokens, Opts, ?DEFAULT_MAX_TOKENS)
+    }).
+
+%% @doc 创建 MiniMax LLM 配置（从环境变量获取 API Key）
+%%
+%% 使用 MiniMax 的 Anthropic 兼容 API，模型为 MiniMax-M2。
+-spec minimax() -> beamai_chat_completion:config().
+minimax() ->
+    ApiKey = require_env("MINIMAX_API_KEY"),
+    minimax(#{api_key => ApiKey}).
+
+%% @doc 创建 MiniMax LLM 配置
+%%
+%% 通过 MiniMax 的 Anthropic 兼容 URL 调用，provider 为 anthropic
+%% （与 zhipu 的 anthropic 兼容方案同构，base_url 后由 provider 拼 /v1/messages）。
+%%
+%% Opts 支持:
+%%   - api_key: API Key (必填)
+%%   - model: 模型名 (默认 MiniMax-M2)
+%%   - max_tokens: 最大 token 数 (默认 2048)
+%%   - base_url: 自定义 API 地址（可选，默认取环境变量 MINIMAX_ANTHROPIC_BASE_URL）
+-spec minimax(map()) -> beamai_chat_completion:config().
+minimax(Opts) ->
+    BaseUrl = case maps:find(base_url, Opts) of
+        {ok, Url} -> Url;
+        error -> minimax_anthropic_base_url()
+    end,
+    beamai_chat_completion:create(anthropic, #{
+        api_key => maps:get(api_key, Opts),
+        base_url => BaseUrl,
+        model => maps:get(model, Opts, ?MINIMAX_DEFAULT_MODEL),
         max_tokens => maps:get(max_tokens, Opts, ?DEFAULT_MAX_TOKENS)
     }).
 
@@ -210,5 +246,14 @@ zhipu_anthropic_base_url() ->
     case os:getenv("ZHIPU_ANTHROPIC_BASE_URL") of
         false -> ?ZHIPU_ANTHROPIC_DEFAULT_BASE_URL;
         "" -> ?ZHIPU_ANTHROPIC_DEFAULT_BASE_URL;
+        Url -> list_to_binary(Url)
+    end.
+
+%% @private 从环境变量获取 MiniMax Anthropic base URL，未设置则使用默认值
+-spec minimax_anthropic_base_url() -> binary().
+minimax_anthropic_base_url() ->
+    case os:getenv("MINIMAX_ANTHROPIC_BASE_URL") of
+        false -> ?MINIMAX_ANTHROPIC_DEFAULT_BASE_URL;
+        "" -> ?MINIMAX_ANTHROPIC_DEFAULT_BASE_URL;
         Url -> list_to_binary(Url)
     end.
