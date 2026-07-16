@@ -287,14 +287,27 @@ disconnected({call, From}, get_state, Data) ->
     {keep_state, Data, [{reply, From, {ok, disconnected}}]};
 
 disconnected({call, From}, _, Data) ->
-    {keep_state, Data, [{reply, From, {error, not_connected}}]}.
+    {keep_state, Data, [{reply, From, {error, not_connected}}]};
+
+%% 静默吞掉迟到的 info：从 connecting/connected 掉下来时，在途的
+%% send_after(100, recv_loop) 或传输层残留消息会追到这里——没有这条子句
+%% 就是 function_clause 崩掉整个客户端。
+disconnected(info, _Msg, Data) ->
+    {keep_state, Data}.
 
 %%====================================================================
 %% 状态: connecting
 %%====================================================================
 
-connecting(enter, _OldState, #data{config = Config} = Data) ->
-    %% 建立传输连接
+%% enter 回调**不允许改状态**（callback_mode 含 state_enter，gen_statem 只接受
+%% keep_state/repeat_state 系返回）。历史实现在这里做 transport 连接、失败时返回
+%% {next_state, disconnected, ...}——一个干净的 {error, Reason}（stdio 命令不存在、
+%% URL 不可达）会变成 bad_state_enter_return_from_state_function 崩溃，还顺着
+%% start_link 带崩调用方。所以真正的连接动作挪到 state_timeout 0 事件里做。
+connecting(enter, _OldState, Data) ->
+    {keep_state, Data, [{state_timeout, 0, connect}]};
+
+connecting(state_timeout, connect, #data{config = Config} = Data) ->
     case beamai_mcp_transport:create(Config) of
         {ok, {Mod, TState}} ->
             NewData = Data#data{
@@ -304,19 +317,45 @@ connecting(enter, _OldState, #data{config = Config} = Data) ->
             %% 发送 initialize 请求
             {keep_state, NewData, [{state_timeout, 0, send_initialize}]};
         {error, Reason} ->
-            {next_state, disconnected, Data, [{state_timeout, 0, {connect_failed, Reason}}]}
+            %% 注意不能往 disconnected armed state_timeout：那个状态没有
+            %% state_timeout 子句，事件到达即 function_clause
+            logger:warning("MCP transport connect failed: ~p", [Reason]),
+            {next_state, disconnected, Data}
     end;
 
 connecting(state_timeout, send_initialize, Data) ->
     case send_initialize_request(Data) of
         {ok, NewData} ->
+            %% 必须在 connecting 里就开始轮询传输层。
+            %% 历史实现只在 connected(enter) 武装 recv_loop——而进入 connected
+            %% 的唯一途径是收到 initialize 响应，响应又只能靠 recv_loop 从传输层
+            %% 读上来：鸡生蛋死锁。实测任何传输、任何行为端正的 server，客户端
+            %% 都在 connecting 干等到 init_timeout 然后掉 disconnected，
+            %% list_tools/call_tool 永远 {error, not_connected}。
+            self() ! recv_loop,
             {keep_state, NewData, [{state_timeout, Data#data.init_timeout, init_timeout}]};
         {error, Reason} ->
-            {next_state, disconnected, Data, [{state_timeout, 0, {init_failed, Reason}}]}
+            logger:warning("MCP initialize send failed: ~p", [Reason]),
+            {next_state, disconnected, Data}
     end;
 
 connecting(state_timeout, init_timeout, Data) ->
     {next_state, disconnected, Data};
+
+%% 轮询传输层读 initialize 响应（与 connected 的 recv_loop 同构；
+%% handle_incoming_message 会把响应转成 {response, Id, Msg} 投回本进程，
+%% 由下面既有的 {response, ...} 子句完成状态迁移）
+connecting(info, recv_loop, #data{transport_mod = Mod, transport_state = TState} = Data) ->
+    case Mod:recv(0, TState) of
+        {ok, Message, NewTState} ->
+            handle_incoming_message(Message, Data#data{transport_state = NewTState});
+        {error, timeout} ->
+            erlang:send_after(100, self(), recv_loop),
+            {keep_state, Data};
+        {error, Reason} ->
+            logger:warning("MCP transport recv failed during init: ~p", [Reason]),
+            {next_state, disconnected, Data}
+    end;
 
 connecting(info, {response, ReqId, Response}, #data{pending_requests = Pending} = Data) ->
     case maps:get(ReqId, Pending, undefined) of
@@ -414,7 +453,20 @@ connected({call, From}, {list_prompts, Cursor}, Data) ->
 connected({call, From}, {get_prompt, Name, Arguments}, Data) ->
     handle_call_request(?MCP_METHOD_PROMPTS_GET,
                         #{<<"name">> => Name, <<"arguments">> => Arguments},
-                        From, Data).
+                        From, Data);
+
+%% 未识别的 call 要回复而不是崩：没有这条子句，`initialize/1' 打到已连接的
+%% 客户端就是 function_clause——客户端进程崩掉，调用方还卡在 gen_statem:call 里。
+connected({call, From}, Unsupported, Data) ->
+    {keep_state, Data, [{reply, From, {error, {unsupported_in_state, connected, Unsupported}}}]};
+
+%% 静默吞掉未识别的 info：stdio 传输的端口归本进程所有（connecting 阶段
+%% open_port），子进程退出的 {Port, {exit_status,_}} / {'EXIT', Port, _} 会
+%% 直接落进来——没有这条子句就是 function_clause，MCP server 子进程一退出
+%% 就带崩客户端。
+connected(info, Msg, Data) ->
+    logger:debug("MCP client ignoring info in connected: ~p", [Msg]),
+    {keep_state, Data}.
 
 %%====================================================================
 %% 内部函数 - 请求处理辅助
