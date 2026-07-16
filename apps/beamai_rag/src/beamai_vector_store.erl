@@ -258,16 +258,25 @@ score_documents(Docs, QueryVector, Filter) ->
     ).
 
 %% @private 为单个文档计算分数
+%%
+%% 跳过 embedding 为空的文档（默认 embedding => []），避免无意义比较。
 -spec score_single_document(document(), beamai_embeddings:vector(), fun()) ->
     {true, search_result()} | false.
-score_single_document(Doc, QueryVector, Filter) ->
-    case Filter(Doc) of
+score_single_document(#{embedding := Embedding} = Doc, QueryVector, Filter) ->
+    case Filter(Doc) andalso has_valid_embedding(Embedding) of
         true ->
             Score = compute_similarity(Doc, QueryVector),
             {true, #{document => Doc, score => Score}};
         false ->
             false
     end.
+
+%% @private 检查 embedding 是否有效（非空列表/二进制）
+-spec has_valid_embedding(term()) -> boolean().
+has_valid_embedding([]) -> false;
+has_valid_embedding(<<>>) -> false;
+has_valid_embedding(V) when is_list(V); is_binary(V) -> true;
+has_valid_embedding(_) -> false.
 
 %% @private 计算文档与查询的相似度
 -spec compute_similarity(document(), beamai_embeddings:vector()) -> float().

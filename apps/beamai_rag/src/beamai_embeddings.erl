@@ -168,7 +168,11 @@ embed_batch(#{type := local} = Model, Texts) ->
 cosine_similarity(Vec1, Vec2) when length(Vec1) =:= length(Vec2) ->
     DotProd = dot_product(Vec1, Vec2),
     Denominator = vector_norm(Vec1) * vector_norm(Vec2),
-    safe_divide(DotProd, Denominator).
+    safe_divide(DotProd, Denominator);
+%% 向量长度不等（含空向量与正常向量比较）：无相似度，返回 0.0。
+%% 这防止了 function_clause 崩溃（根因：默认 embedding 为 [] 的文档参与搜索）。
+cosine_similarity(_Vec1, _Vec2) ->
+    0.0.
 
 %% @doc 计算欧几里得距离
 %%
@@ -177,7 +181,10 @@ cosine_similarity(Vec1, Vec2) when length(Vec1) =:= length(Vec2) ->
 -spec euclidean_distance(vector(), vector()) -> float().
 euclidean_distance(Vec1, Vec2) when length(Vec1) =:= length(Vec2) ->
     DiffSquares = [math:pow(A - B, 2) || {A, B} <- lists:zip(Vec1, Vec2)],
-    math:sqrt(lists:sum(DiffSquares)).
+    math:sqrt(lists:sum(DiffSquares));
+%% 向量长度不等：返回极大距离，使其在任何排序中沉底。
+euclidean_distance(_Vec1, _Vec2) ->
+    1.0e308.
 
 %% @doc 归一化向量
 %%
@@ -302,11 +309,20 @@ collect_results(Results, ExpectedCount) ->
 %% @private 生成哈希嵌入
 %%
 %% 使用文本哈希生成确定性伪随机向量。
+%% 注意：使用 rand:seed_s/rand:uniform_s 而非 rand:seed/rand:uniform，
+%% 避免污染调用者进程的进程字典。
 -spec generate_hash_embedding(binary(), pos_integer()) -> vector().
 generate_hash_embedding(Text, Dimension) ->
     Seed = hash_to_seed(Text),
-    rand:seed(exsss, {Seed, Seed * 2, Seed * 3}),
-    RawVector = [rand:uniform() * 2 - 1 || _ <- lists:seq(1, Dimension)],
+    State0 = rand:seed_s(exsss, {Seed, Seed * 2, Seed * 3}),
+    {RawVector, _FinalState} = lists:mapfoldl(
+        fun(_, State) ->
+            {R, State1} = rand:uniform_s(State),
+            {R * 2 - 1, State1}
+        end,
+        State0,
+        lists:seq(1, Dimension)
+    ),
     normalize(RawVector).
 
 %% @private 将文本哈希转换为种子
