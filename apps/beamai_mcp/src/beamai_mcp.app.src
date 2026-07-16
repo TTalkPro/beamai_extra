@@ -46,6 +46,7 @@
         %% Server
         beamai_mcp_server,
         beamai_mcp_server_sup,
+        beamai_mcp_session_registry,
         beamai_mcp_handler,
         beamai_mcp_cowboy_handler,
         %% Adapter

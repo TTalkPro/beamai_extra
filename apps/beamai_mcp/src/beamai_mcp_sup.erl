@@ -97,4 +97,15 @@ init([]) ->
         modules => [beamai_mcp_server_sup]
     },
 
-    {ok, {SupFlags, [ClientRegistry, ClientSup, ServerSup]}}.
+    %% Streamable HTTP 会话注册表（create 时经 server_sup 起会话级 server，
+    %% 故排在 ServerSup 之后启动）
+    SessionRegistry = #{
+        id => beamai_mcp_session_registry,
+        start => {beamai_mcp_session_registry, start_link, []},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [beamai_mcp_session_registry]
+    },
+
+    {ok, {SupFlags, [ClientRegistry, ClientSup, ServerSup, SessionRegistry]}}.
