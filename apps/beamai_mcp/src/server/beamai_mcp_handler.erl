@@ -51,6 +51,7 @@
 
 -export([
     init/1,
+    init_with_server/2,
     handle_post/3,
     handle_post/4,
     handle_sse_init/2,
@@ -100,6 +101,20 @@
 init(Config) ->
     %% 启动 MCP 服务器进程
     {ok, ServerPid} = beamai_mcp_server:start_link(Config),
+    #handler_state{
+        server_pid = ServerPid,
+        config = Config,
+        sse_endpoint = maps:get(sse_endpoint, Config, undefined)
+    }.
+
+%% @doc 绑定到**已存在**的 server 进程（会话复用路径）
+%%
+%% 与 init/1 的区别：不新建 server。Streamable HTTP 的会话流程里，server 由
+%% beamai_mcp_server_sup 启动、寿命跨越多个 HTTP 请求（经
+%% beamai_mcp_session_registry 按 mcp-session-id 找回）。这条路径上**不要**
+%% 对返回的状态调用 close/1——那会把活着的会话 server 停掉。
+-spec init_with_server(pid(), map()) -> handler_state().
+init_with_server(ServerPid, Config) when is_pid(ServerPid) ->
     #handler_state{
         server_pid = ServerPid,
         config = Config,
@@ -164,6 +179,9 @@ handle_post(Body, Headers, AcceptSSE, #handler_state{server_pid = ServerPid} = S
 %% @param Headers 请求头
 %% @param State Handler 状态
 %% @returns {ok, InitialData, NewState} | {error, Reason}
+%% @deprecated SSE 会话逻辑已移入 beamai_mcp_cowboy_handler（它需要
+%% cowboy_loop 进程与 registry 协作，handler 这层做不到）。保留仅为兼容
+%% 自建适配器的嵌入式用户；beamai_mcp_cowboy_handler 不再调用它。
 -spec handle_sse_init([{binary(), binary()}], handler_state()) ->
     {ok, binary(), handler_state()} | {error, term()}.
 handle_sse_init(_Headers, #handler_state{sse_endpoint = undefined}) ->
@@ -188,6 +206,8 @@ handle_sse_init(_Headers, #handler_state{sse_endpoint = Endpoint} = State) ->
 %% @param Headers 请求头
 %% @param State Handler 状态
 %% @returns {ok, ResponseData, NewState} | {error, Reason}
+%% @deprecated 同 handle_sse_init/2：SSE 消息分发已由
+%% beamai_mcp_cowboy_handler:handle_sse_message/2 经 registry 完成。
 -spec handle_sse_message(binary(), [{binary(), binary()}], handler_state()) ->
     {ok, binary(), handler_state()} | {error, term()}.
 handle_sse_message(Body, _Headers, #handler_state{server_pid = ServerPid} = State) ->
@@ -276,8 +296,10 @@ maybe_update_session_id(State) ->
     State.
 
 %% @private 生成会话 ID
+%%
+%% session id 承担鉴权语义，必须 crypto 强随机。旧实现是时间戳 + 16 bit rand，
+%% 且 `~.4b' 是 **4 进制**不是 4 位 hex——熵低到可枚举。
 -spec generate_session_id() -> binary().
 generate_session_id() ->
-    Timestamp = erlang:system_time(microsecond),
-    Random = rand:uniform(16#FFFF),
-    iolist_to_binary(io_lib:format("mcp-~.16b-~.4b", [Timestamp, Random])).
+    Hex = binary:encode_hex(crypto:strong_rand_bytes(16), lowercase),
+    <<"mcp-", Hex/binary>>.
