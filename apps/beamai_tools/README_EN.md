@@ -35,7 +35,7 @@ Tool system module providing tool module loading, Middleware system, and built-i
 - **beamai_tool_file** - File operations (read, write, list, glob)
 - **beamai_tool_shell** - Shell command execution
 - **beamai_tool_todo** - Task management
-- **beamai_tool_human** - Human input interaction
+- **beamai_tool_human** - Human-in-the-loop (interrupt tool descriptors, used via the agent's `interrupt_tools`; not registered into the kernel)
 
 ## API Documentation
 

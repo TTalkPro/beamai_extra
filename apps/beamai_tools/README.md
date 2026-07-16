@@ -35,7 +35,7 @@
 - **beamai_tool_file** - 文件操作（读取、写入、列表、glob）
 - **beamai_tool_shell** - Shell 命令执行
 - **beamai_tool_todo** - 任务管理
-- **beamai_tool_human** - 人工输入交互
+- **beamai_tool_human** - 人机交互（interrupt tool 描述符，经 agent 的 `interrupt_tools` 使用，不注册进 kernel）
 
 ## API 文档
 

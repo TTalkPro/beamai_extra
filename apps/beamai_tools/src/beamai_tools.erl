@@ -62,10 +62,13 @@ load(Kernel, Module) ->
 load_all(Kernel, Modules) ->
     lists:foldl(fun(M, K) -> load(K, M) end, Kernel, Modules).
 
-%% @doc 列出所有内置工具模块。
+%% @doc 列出所有内置工具模块（可 load 进 kernel 的）。
 %%
-%% 返回系统内置可用的工具模块列表，包括文件操作、Shell 命令、
-%% TODO 列表和人机交互等工具。
+%% 返回系统内置可用的工具模块列表：文件操作、Shell 命令、TODO 列表。
+%%
+%% 人机交互（ask_human/confirm_action）**不在此列**：它们是 interrupt tool，
+%% 不注册进 kernel，经 beamai_agent:new/1 的 `interrupt_tools' 配置，
+%% 见 beamai_tool_human:interrupt_tools/0。
 %%
 %% @returns 内置工具模块名列表
 -spec available() -> [module()].
@@ -73,8 +76,7 @@ available() ->
     [
         beamai_tool_file,
         beamai_tool_shell,
-        beamai_tool_todo,
-        beamai_tool_human
+        beamai_tool_todo
     ].
 
 %%====================================================================
