@@ -9,6 +9,10 @@
 %%%
 %%% 正确做法是 throw，由 beamai_filter_chain:run/4 收敛成 {error, Reason}。
 %%%
+%%% 注：工具侧限额（max_tool_calls）已从本中间件移除——filter 拿的是批内只读
+%%% 快照，计数天生累加不起来。该能力现由 agent 的 max_tool_calls 提供
+%%% （上游 beamai_agent_tool_loop，测试见 beamai_max_tool_calls_tests）。
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(middleware_call_limit_tests).
@@ -28,7 +32,8 @@ model_limit_halt_returns_error_test() ->
 %% 错误里要带足信息，否则运维看不出是撞了哪条线
 model_limit_error_carries_details_test() ->
     K = chat_kernel(#{max_model_calls => 3, on_limit_exceeded => halt}),
-    %% 计数不跨调用累加（见模块头的已知限制），这里直接把上限设成 0 来触发
+    %% 这里直连 invoke_chat、不回穿 context，故计数不累加；直接把上限设成 0 来触发。
+    %% （真实 agent 循环会把 invoke_chat 返回的 context 穿回下一轮，计数正常累加）
     K0 = chat_kernel(#{max_model_calls => 0, on_limit_exceeded => halt}),
     {error, {limit_exceeded, D}} = beamai_kernel:invoke_chat(K0, msgs(), #{}),
     ?assertEqual(model_calls, maps:get(type, D)),
@@ -53,31 +58,25 @@ under_limit_passes_through_test() ->
     ?assertMatch({ok, _, _}, beamai_kernel:invoke_chat(K, msgs(), #{})).
 
 %%====================================================================
-%% tool 链：halt 走错误通道
+%% 工具侧限额已移除
 %%====================================================================
 
-%% 工具 filter 停不了整个循环，但至少要走 kernel 的错误通道，
-%% 而不是把错误元组当成功值透出
-tool_limit_halt_returns_error_test() ->
-    K = tool_kernel(#{max_tool_calls => 0, on_limit_exceeded => halt}),
-    ?assertMatch({error, {limit_exceeded, #{type := tool_calls}}},
-                 beamai_kernel:invoke_tool(K, <<"t">>, #{}, beamai_context:new())).
+%% 守住它不会被"好心"加回来：filter 拿的是批内只读快照，计数累加不起来，
+%% 加回来只会得到一个静默失效的限额。工具调用限额用 agent 的 max_tool_calls。
+tool_side_limits_are_gone_test() ->
+    code:ensure_loaded(middleware_call_limit),
+    ?assertNot(erlang:function_exported(middleware_call_limit, around_tool, 3)),
+    St = middleware_call_limit:init(#{}),
+    ?assertEqual(error, maps:find(max_tool_calls, St)),
+    ?assertEqual(error, maps:find(max_tool_calls_per_turn, St)),
+    ?assertEqual(error, maps:find(tool_call_count, St)).
 
-per_turn_limit_halt_returns_error_test() ->
-    K = tool_kernel(#{max_tool_calls => 99, max_tool_calls_per_turn => 0,
-                      on_limit_exceeded => halt}),
-    ?assertMatch({error, {limit_exceeded, #{type := tool_calls_per_turn}}},
-                 beamai_kernel:invoke_tool(K, <<"t">>, #{}, beamai_context:new())).
-
-tool_under_limit_executes_test() ->
-    K = tool_kernel(#{max_tool_calls => 10, on_limit_exceeded => halt}),
-    ?assertEqual({ok, <<"done">>, #{}},
-                 beamai_kernel:invoke_tool(K, <<"t">>, #{}, beamai_context:new())).
-
-tool_warn_and_continue_executes_test() ->
-    K = tool_kernel(#{max_tool_calls => 0, on_limit_exceeded => warn_and_continue}),
-    ?assertEqual({ok, <<"done">>, #{}},
-                 beamai_kernel:invoke_tool(K, <<"t">>, #{}, beamai_context:new())).
+%% agent 那边确实提供了替代能力（上游 beamai_agent_tool_loop）
+agent_provides_tool_call_limit_test() ->
+    {ok, State} = beamai_agent_state:create(#{llm => {mock, #{}}, max_tool_calls => 5}),
+    ?assertEqual(5, maps:get(max_tool_calls, State)),
+    {ok, Default} = beamai_agent_state:create(#{llm => {mock, #{}}}),
+    ?assertEqual(infinity, maps:get(max_tool_calls, Default)).
 
 %% 限额是语义错误，不该被当成 transient 反复重试
 limit_error_is_not_retryable_test() ->
@@ -100,7 +99,3 @@ chat_kernel(Opts) ->
       beamai_kernel:new(#{}, filters(Opts)),
       #{module => cl_fake_llm, provider => openai, model => <<"m">>, api_key => <<"k">>}).
 
-tool_kernel(Opts) ->
-    Tool = beamai_tool:new(<<"t">>, fun(_) -> {ok, <<"done">>} end,
-                           #{description => <<"d">>}),
-    beamai_kernel:add_tool(beamai_kernel:new(#{}, filters(Opts)), Tool).

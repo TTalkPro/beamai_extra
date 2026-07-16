@@ -90,7 +90,6 @@ production(Opts) ->
     [
         call_limit(maps:merge(#{
             max_model_calls => 15,
-            max_tool_calls => 30,
             max_iterations => 10,
             on_limit_exceeded => halt
         }, maps:get(call_limit, Opts, #{}))),
@@ -134,7 +133,6 @@ development(Opts) ->
     [
         call_limit(maps:merge(#{
             max_model_calls => 50,
-            max_tool_calls => 100,
             max_iterations => 30,
             on_limit_exceeded => warn_and_continue
         }, maps:get(call_limit, Opts, #{}))),
@@ -174,8 +172,6 @@ call_limit() -> call_limit(#{}).
 %% @doc 调用限制中间件配置（带参版本）。
 %% 默认参数：
 %% - max_model_calls: 20（模型最大调用次数）
-%% - max_tool_calls: 50（工具最大调用次数）
-%% - max_tool_calls_per_turn: 10（每轮最大工具调用次数）
 %% - max_iterations: 15（最大迭代次数）
 %% - on_limit_exceeded: halt（超限时的处理方式）
 %%
@@ -185,8 +181,6 @@ call_limit() -> call_limit(#{}).
 call_limit(Opts) ->
     DefaultOpts = #{
         max_model_calls => 20,
-        max_tool_calls => 50,
-        max_tool_calls_per_turn => 10,
         max_iterations => 15,
         on_limit_exceeded => halt
     },
