@@ -17,6 +17,9 @@
 -export([handle_write_todos/2, handle_read_todos/2]).
 
 -define(TODOS_KEY, todos).
+%% 纯内存 state 读写，毫秒级。必须显式声明：上游 c8dca82 之后缺省是 infinity，
+%% 不声明就是无限等待——对一个毫秒级操作来说，那等于把死锁伪装成"还在跑"。
+-define(TODO_TIMEOUT, 5000).
 
 %%====================================================================
 %% 工具行为回调
@@ -49,6 +52,7 @@ write_todos_tool() ->
         handler => fun ?MODULE:handle_write_todos/2,
         description => <<"Create or update task list.">>,
         tag => <<"todo">>,
+        timeout => ?TODO_TIMEOUT,
         parameters => #{
             <<"todos">> => #{
                 type => array,
@@ -64,7 +68,8 @@ read_todos_tool() ->
         name => <<"read_todos">>,
         handler => fun ?MODULE:handle_read_todos/2,
         description => <<"Read current task list and status.">>,
-        tag => <<"todo">>
+        tag => <<"todo">>,
+        timeout => ?TODO_TIMEOUT
     }.
 
 %%====================================================================

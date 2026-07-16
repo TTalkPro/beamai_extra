@@ -51,12 +51,23 @@ tools() ->
 %% 工具定义
 %%====================================================================
 
+%% 必须显式声明超时。上游 c8dca82 之后缺省是 **infinity**——不声明就是无限等待，
+%% 框架不再替我们判断「多久算太久」。对这些工具我们判断得出来，那就得说出口。
+%%
+%% 本地单文件读写/建目录是毫秒级操作，卡住必是异常（NFS 挂死、路径是 FIFO 等）。
+%% 这种情况下不声明超时 = agent 永远挂在一次 file_read 上，没有任何东西会来救它。
+%% 超时归为 transient，重试一次远比无限等待划算。
+-define(FS_TIMEOUT, 10000).
+%% 遍历类要宽一些：大仓库下 glob/grep 慢是正常现象，不是故障。
+-define(SCAN_TIMEOUT, 30000).
+
 file_read_tool() ->
     #{
         name => <<"file_read">>,
         handler => fun ?MODULE:handle_read/2,
         description => <<"Read file content. Supports line range and encoding.">>,
         tag => <<"io">>,
+        timeout => ?FS_TIMEOUT,
         parameters => #{
             <<"path">> => #{type => string, description => <<"File path">>, required => true},
             <<"start_line">> => #{type => integer, description => <<"Start line (1-indexed, optional)">>},
@@ -71,6 +82,7 @@ file_write_tool() ->
         handler => fun ?MODULE:handle_write/2,
         description => <<"Write content to file. Creates if not exists, overwrites if exists.">>,
         tag => <<"io">>,
+        timeout => ?FS_TIMEOUT,
         parameters => #{
             <<"path">> => #{type => string, description => <<"File path">>, required => true},
             <<"content">> => #{type => string, description => <<"Content to write">>, required => true},
@@ -85,6 +97,7 @@ file_glob_tool() ->
         handler => fun ?MODULE:handle_glob/2,
         description => <<"Search files by glob pattern. Supports ** and * wildcards.">>,
         tag => <<"search">>,
+        timeout => ?SCAN_TIMEOUT,
         parameters => #{
             <<"pattern">> => #{type => string, description => <<"Glob pattern, e.g. **/*.erl">>, required => true},
             <<"path">> => #{type => string, description => <<"Base search path (default .).">>},
@@ -98,6 +111,7 @@ file_grep_tool() ->
         handler => fun ?MODULE:handle_grep/2,
         description => <<"Search file contents using regex.">>,
         tag => <<"search">>,
+        timeout => ?SCAN_TIMEOUT,
         parameters => #{
             <<"pattern">> => #{type => string, description => <<"Regex pattern">>, required => true},
             <<"path">> => #{type => string, description => <<"Search path (file or directory)">>, required => true},
@@ -113,6 +127,7 @@ file_list_tool() ->
         handler => fun ?MODULE:handle_list/2,
         description => <<"List directory contents.">>,
         tag => <<"io">>,
+        timeout => ?FS_TIMEOUT,
         parameters => #{
             <<"path">> => #{type => string, description => <<"Directory path">>},
             <<"show_hidden">> => #{type => boolean, description => <<"Show hidden files (default false)">>},
@@ -126,6 +141,7 @@ file_mkdir_tool() ->
         handler => fun ?MODULE:handle_mkdir/2,
         description => <<"Create directory. Supports nested directories.">>,
         tag => <<"io">>,
+        timeout => ?FS_TIMEOUT,
         parameters => #{
             <<"path">> => #{type => string, description => <<"Directory path">>, required => true}
         }
