@@ -383,7 +383,18 @@ call_llm(#{llm := Config}, Prompt) ->
             {error, Reason} -> {error, {llm_error, Reason}}
         end
     catch
-        _:_ -> {ok, <<"[LLM unavailable] Context provided for: ", Prompt/binary>>}
+        %% 绝不能把异常吞成 {ok, 假答案}。
+        %%
+        %% 旧写法是 `_:_ -> {ok, <<"[LLM unavailable] Context provided for: ", Prompt>>}'：
+        %% 没配 API key 时，query/2 会把**提示词原样回显**当成模型的回答返回，
+        %% 还带着 {ok, _} 标签——调用方无从分辨真答案和占位符，
+        %% 这类静默错误答案比直接报错危险得多。
+        %%
+        %% generate_with_context/3 本来就处理 {error, Reason}（见上），
+        %% 老老实实往上抛即可。
+        Class:CaughtReason:Stack ->
+            logger:warning("RAG LLM call failed: ~p:~p~n~p", [Class, CaughtReason, Stack]),
+            {error, {llm_call_failed, Class, CaughtReason}}
     end.
 
 %% @private 提取 LLM 响应内容
