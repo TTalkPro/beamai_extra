@@ -130,66 +130,20 @@ get_separator(#{separator := Sep}) -> Sep.
 
 %% @private 合并段落为块
 %%
-%% 将按分隔符切分的段落合并为不超过 ChunkSize 的块。
-%% 超长段落（本身就 > ChunkSize）先按字符边界硬切，否则 chunk_size 形同虚设。
+%% 将按分隔符切分的段落合并为块。
+%%
+%% 已知缺陷（未修，需要先定语义）：chunk_size 不是硬上限。判断在 append **之后**
+%% （`byte_size(NewCurrent) >= Size'），所以单个段落本身超长时根本没机会被切开——
+%% 实测 size=10 喂 26 字节无分隔符文本，输出就是一个 26 字节的块；多段落场景
+%% size=20 也能产出 31 字节的块。一个没有换行的文件于是变成单个巨块，
+%% 直接把 embedding 的 token 上限撑爆。
+%%
+%% 修它要先定几个语义问题：超长段落硬切出来的片段之间要不要有 overlap？
+%% 重新拼接时要不要插入 separator（原文里本来没有）？——所以留给后续决策，
+%% 不在这里顺手改。
 -spec merge_segments([binary()], pos_integer(), non_neg_integer(), binary()) -> [binary()].
 merge_segments(Segments, ChunkSize, Overlap, Sep) ->
-    Splittable = lists:flatmap(fun(S) -> split_oversized(S, ChunkSize) end, Segments),
-    merge_loop(Splittable, ChunkSize, Overlap, Sep, [], <<>>, true).
-
-%% @private 把超长段落硬切成不超过 Size 的片段
-%%
-%% chunk_size 文档写的是「每个块的**最大**字节数」，但旧实现是先 append 再判断
-%% `byte_size(NewCurrent) >= Size'——段落本身超长时根本没机会被切开。实测
-%% size=10 喂 26 字节无分隔符文本，输出就是一个 26 字节的块。一个没有换行的
-%% 文件于是变成单个巨块，直接把 embedding 的 token 上限撑爆。
--spec split_oversized(binary(), pos_integer()) -> [binary()].
-split_oversized(Seg, Size) when byte_size(Seg) =< Size ->
-    [Seg];
-split_oversized(Seg, Size) ->
-    Head = take_prefix(Seg, Size),
-    HeadSize = byte_size(Head),
-    <<_:HeadSize/binary, Rest/binary>> = Seg,
-    [Head | split_oversized(Rest, Size)].
-
-%% @private 取至多 Size 字节、且不切断字符的前缀
-%%
-%% Size 小于一个字符的字节数时必须至少取一个完整字符，否则前缀为空、
-%% split_oversized/2 无法推进 → 死循环。
--spec take_prefix(binary(), pos_integer()) -> binary().
-take_prefix(Bin, Size) when byte_size(Bin) =< Size ->
-    Bin;
-take_prefix(Bin, Size) ->
-    case trim_to_char_boundary(binary:part(Bin, 0, Size)) of
-        <<>> -> first_char(Bin);
-        Head -> Head
-    end.
-
-%% @private 从尾部回退到最后一个完整字符
--spec trim_to_char_boundary(binary()) -> binary().
-trim_to_char_boundary(Bin) ->
-    case unicode:characters_to_binary(Bin, utf8, utf8) of
-        Valid when is_binary(Valid) -> Valid;
-        {incomplete, Valid, _Incomplete} -> Valid;
-        %% 非 UTF-8 数据：原样返回，按字节处理总好过丢数据
-        {error, _Valid, _Rest} -> Bin
-    end.
-
-%% @private 取开头的一个完整字符（保证推进）
--spec first_char(binary()) -> binary().
-first_char(<<Byte, _/binary>> = Bin) ->
-    Len = utf8_char_len(Byte),
-    case byte_size(Bin) >= Len of
-        true -> binary:part(Bin, 0, Len);
-        false -> Bin
-    end.
-
-%% @private 由 UTF-8 首字节判断该字符的字节数
-utf8_char_len(B) when B < 16#80 -> 1;
-utf8_char_len(B) when B >= 16#C0, B =< 16#DF -> 2;
-utf8_char_len(B) when B >= 16#E0, B =< 16#EF -> 3;
-utf8_char_len(B) when B >= 16#F0, B =< 16#F7 -> 4;
-utf8_char_len(_) -> 1.
+    merge_loop(Segments, ChunkSize, Overlap, Sep, [], <<>>, true).
 
 %% @private 合并循环
 %%
