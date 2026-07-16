@@ -84,7 +84,7 @@ connect(#{url := Url} = Config) ->
             GunOpts = #{
                 connect_timeout => Timeout,
                 transport => Transport,
-                protocols => [http2, http]
+                protocols => [http]
             },
             case gun:open(binary_to_list(Host), Port, GunOpts) of
                 {ok, ConnPid} ->
@@ -176,7 +176,10 @@ parse_url(Url) ->
     case uri_string:parse(Url) of
         #{scheme := Scheme, host := Host} = Parsed ->
             Port = maps:get(port, Parsed, default_port(Scheme)),
-            Path = maps:get(path, Parsed, <<"/">>),
+            RawPath = maps:get(path, Parsed, <<"/">>),
+            %% uri_string:parse 对无路径的 URL（如 <<"http://host">>）返回 path => <<>>，
+            %% maps:get/3 的默认值仅在键不存在时生效，故需手动兜底。
+            Path = case RawPath of <<>> -> <<"/">>; _ -> RawPath end,
             Query = maps:get(query, Parsed, <<>>),
             FullPath = case Query of
                 <<>> -> ensure_binary(Path);

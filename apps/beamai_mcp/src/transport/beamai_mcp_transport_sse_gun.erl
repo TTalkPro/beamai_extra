@@ -84,7 +84,7 @@ connect(#{url := Url} = Config) ->
             GunOpts = #{
                 connect_timeout => Timeout,
                 transport => Transport,
-                protocols => [http2, http]
+                protocols => [http]
             },
             case gun:open(binary_to_list(Host), Port, GunOpts) of
                 {ok, ConnPid} ->
@@ -184,7 +184,10 @@ parse_url(Url) ->
     case uri_string:parse(Url) of
         #{scheme := Scheme, host := Host} = Parsed ->
             Port = maps:get(port, Parsed, default_port(Scheme)),
-            Path = maps:get(path, Parsed, <<"/">>),
+            RawPath = maps:get(path, Parsed, <<"/">>),
+            %% uri_string:parse 对无路径的 URL（如 <<"http://host">>）返回 path => <<>>，
+            %% maps:get/3 的默认值仅在键不存在时生效，故需手动兜底。
+            Path = case RawPath of <<>> -> <<"/">>; _ -> RawPath end,
             Query = maps:get(query, Parsed, <<>>),
             FullPath = case Query of
                 <<>> -> ensure_binary(Path);
@@ -228,8 +231,9 @@ wait_for_endpoint(#sse_gun_state{sse_conn = Conn, sse_stream = Stream,
             NewBuffer = <<Buffer/binary, Data/binary>>,
             case parse_endpoint_event(NewBuffer) of
                 {ok, PostUrl, Rest} ->
-                    %% 解析 POST URL
-                    case parse_url(PostUrl) of
+                    %% 解析 POST URL：若为相对 URI，基于 SSE URL 解析为绝对 URI
+                    AbsoluteUrl = resolve_uri(PostUrl, State#sse_gun_state.sse_url),
+                    case parse_url(AbsoluteUrl) of
                         {ok, Host, Port, Path, Transport} ->
                             {ok, State#sse_gun_state{
                                 post_url = PostUrl,
@@ -269,17 +273,60 @@ parse_endpoint_event(Buffer) ->
     end.
 
 %% @private 查找 endpoint 事件
+%%
+%% endpoint 事件数据可能是：
+%% - JSON 格式 {"uri":"..."} / {"url":"..."}（自家服务端）
+%% - 原始 URI 字符串（MCP 规范 compliant 服务端，如 /message?sessionId=xxx）
 -spec find_endpoint_event([map()]) -> {ok, binary()} | not_found.
 find_endpoint_event([]) ->
     not_found;
 find_endpoint_event([#{event := <<"endpoint">>, data := Data} | _Rest]) ->
-    case jsx:decode(Data, [return_maps]) of
-        #{<<"uri">> := Uri} -> {ok, Uri};
-        #{<<"url">> := Url} -> {ok, Url};
-        _ -> not_found
-    end;
+    parse_endpoint_data(Data);
 find_endpoint_event([_ | Rest]) ->
     find_endpoint_event(Rest).
+
+%% @private 解析 endpoint 事件数据
+%%
+%% 先尝试 JSON（自家服务端格式），失败则作为原始 URI 字符串处理（MCP 规范格式）。
+-spec parse_endpoint_data(binary()) -> {ok, binary()} | not_found.
+parse_endpoint_data(Data) ->
+    try jsx:decode(Data, [return_maps]) of
+        #{<<"uri">> := Uri} when is_binary(Uri) -> {ok, Uri};
+        #{<<"url">> := Url} when is_binary(Url) -> {ok, Url};
+        _ -> try_raw_uri(Data)
+    catch
+        _:_ ->
+            %% JSON 解析失败——Data 是原始 URI 字符串（MCP 规范）
+            try_raw_uri(Data)
+    end.
+
+%% @private 尝试将数据视为原始 URI 字符串
+-spec try_raw_uri(binary()) -> {ok, binary()} | not_found.
+try_raw_uri(Data) ->
+    Trimmed = string:trim(Data),
+    case Trimmed of
+        <<>> -> not_found;
+        _ -> {ok, Trimmed}
+    end.
+
+%% @private 解析相对 URI
+%%
+%% 如果 Uri 是绝对 URI（含 scheme），直接返回。
+%% 否则基于 BaseUrl 解析为绝对 URI（RFC 3986）。
+-spec resolve_uri(binary(), binary()) -> binary().
+resolve_uri(Uri, BaseUrl) ->
+    case uri_string:parse(Uri) of
+        #{scheme := _} ->
+            Uri;
+        _ ->
+            try
+                %% 注意：Erlang 的 uri_string:resolve/2 第一参数为相对 URI，第二参数为 base
+                Resolved = uri_string:resolve(Uri, BaseUrl),
+                ensure_binary(Resolved)
+            catch
+                _:_ -> Uri
+            end
+    end.
 
 %% @private 确保 POST 连接存在
 -spec ensure_post_connection(state()) -> {ok, state()} | {error, term()}.
