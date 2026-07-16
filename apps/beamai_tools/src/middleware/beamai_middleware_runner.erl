@@ -96,15 +96,31 @@ collect_hooks(Module) ->
 %% @private 如果模块导出了指定的 around_* 回调，添加到 hooks map
 maybe_add_hook(Module, HookName, Hooks) ->
     case erlang:function_exported(Module, HookName, 3) of
-        true ->
-            Hooks#{HookName => fun(Req, FCtx, Next) ->
-                case Module:HookName(Req, FCtx, Next) of
-                    {Resp, NewFCtx} -> {Resp, NewFCtx};
-                    Resp -> Resp
-                end
-            end};
-        false ->
-            Hooks
+        true -> Hooks#{HookName => wrap_hook(Module, HookName)};
+        false -> Hooks
+    end.
+
+%% @private around_turn 的响应是 turn 结果 **tuple**（{ok,Resp,N,Iters,Msgs} 等），
+%% 不是带 context 的 map。beamai_filter_chain:compose/3 只在响应匹配
+%% `{#{context := _}, NewFCtx}` 时才回写 filter 状态；turn 响应匹配不上，
+%% `{Resp, NewFCtx}` 会被整个当成响应透出，beamai_agent:dispatch_turn_result/4
+%% 随即 case_clause 崩溃。
+%%
+%% 所以 turn 钩子这里丢弃状态、只透传 Resp：turn 级 filter 只能做包裹/观测，
+%% 无法持久化私有状态（上游架构限制）。chat/tool 钩子不受影响。
+wrap_hook(Module, around_turn) ->
+    fun(Req, FCtx, Next) ->
+        case Module:around_turn(Req, FCtx, Next) of
+            {Resp, _DiscardedFCtx} -> Resp;
+            Resp -> Resp
+        end
+    end;
+wrap_hook(Module, HookName) ->
+    fun(Req, FCtx, Next) ->
+        case Module:HookName(Req, FCtx, Next) of
+            {Resp, NewFCtx} -> {Resp, NewFCtx};
+            Resp -> Resp
+        end
     end.
 
 %% @private 生成 filter 名称

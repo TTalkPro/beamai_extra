@@ -88,29 +88,29 @@ production() -> production(#{}).
 -spec production(map()) -> [term()].
 production(Opts) ->
     [
-        {middleware_call_limit, maps:merge(#{
+        call_limit(maps:merge(#{
             max_model_calls => 15,
             max_tool_calls => 30,
             max_iterations => 10,
             on_limit_exceeded => halt
-        }, maps:get(call_limit, Opts, #{})), 10},
+        }, maps:get(call_limit, Opts, #{}))),
 
-        {middleware_tool_retry, maps:merge(#{
+        tool_retry(maps:merge(#{
             max_retries => 2,
             backoff => #{
                 type => exponential,
                 initial_delay => 500,
                 max_delay => 10000
             }
-        }, maps:get(tool_retry, Opts, #{})), 30},
+        }, maps:get(tool_retry, Opts, #{}))),
 
-        {middleware_model_retry, maps:merge(#{
+        model_retry(maps:merge(#{
             max_retries => 2
-        }, maps:get(model_retry, Opts, #{})), 40},
+        }, maps:get(model_retry, Opts, #{}))),
 
-        {middleware_model_fallback, maps:merge(#{
+        model_fallback(maps:merge(#{
             fallback_models => maps:get(fallback_models, Opts, [])
-        }, maps:get(model_fallback, Opts, #{})), 50}
+        }, maps:get(model_fallback, Opts, #{})))
     ].
 
 %% @doc 开发环境预设（无参版本）。
@@ -132,16 +132,16 @@ development() -> development(#{}).
 -spec development(map()) -> [term()].
 development(Opts) ->
     [
-        {middleware_call_limit, maps:merge(#{
+        call_limit(maps:merge(#{
             max_model_calls => 50,
             max_tool_calls => 100,
             max_iterations => 30,
             on_limit_exceeded => warn_and_continue
-        }, maps:get(call_limit, Opts, #{})), 10},
+        }, maps:get(call_limit, Opts, #{}))),
 
-        {middleware_tool_retry, maps:merge(#{
+        tool_retry(maps:merge(#{
             max_retries => 5
-        }, maps:get(tool_retry, Opts, #{})), 30}
+        }, maps:get(tool_retry, Opts, #{})))
     ].
 
 %% @doc 人机协作预设（无参版本）。
@@ -229,7 +229,9 @@ tool_retry() -> tool_retry(#{}).
 %%   - initial_delay: 1000ms（初始延迟）
 %%   - max_delay: 30000ms（最大延迟）
 %%   - multiplier: 2（退避倍数）
-%% - retryable_errors: all（所有错误均可重试）
+%% - retryable_errors: 用中间件缺省的 auto（经 beamai_tool_error:classify/1
+%%   只重试 transient）。此处**不要**再写死 all——那会盖掉 auto，把参数非法之类
+%%   的 semantic 错误也反复重试，纯属放大副作用。
 %%
 %% @param Opts 自定义配置选项，会与默认值合并
 %% @returns 中间件规格元组 {Module, Opts, Priority}，优先级为 80
@@ -242,8 +244,7 @@ tool_retry(Opts) ->
             initial_delay => 1000,
             max_delay => 30000,
             multiplier => 2
-        },
-        retryable_errors => all
+        }
     },
     {middleware_tool_retry, maps:merge(DefaultOpts, Opts), 80}.
 
