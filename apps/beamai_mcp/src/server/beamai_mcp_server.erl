@@ -383,15 +383,32 @@ handle_tools_call(#{<<"name">> := Name} = Params, #state{tools = Tools} = State)
              #{<<"tool">> => Name}, State};
         #mcp_tool{handler = Handler} ->
             Arguments = maps:get(<<"arguments">>, Params, #{}),
+            %% of 分支**不在** try 的保护区内：历史写法 `try Handler(A) of
+            %% {ok,_} -> ...; {error,_} -> ... catch' 在 handler 返回第三种形状
+            %% 时抛出 try_clause——catch 接不住，整个 server 进程崩掉，还带走
+            %% linked 的 Cowboy 进程。所以 of 里用必然匹配的裸变量，形状判断
+            %% 放进 case 并给足兜底。
             try Handler(Arguments) of
-                {ok, Result} ->
-                    ResultContent = format_tool_result(Result),
-                    {ok, #{<<"content">> => ResultContent, <<"isError">> => false}, State};
-                {error, Error} ->
-                    ErrorContent = [beamai_mcp_types:text_content(
-                        iolist_to_binary(io_lib:format("~p", [Error]))
-                    )],
-                    {ok, #{<<"content">> => ErrorContent, <<"isError">> => true}, State}
+                Returned ->
+                    case Returned of
+                        {ok, Result} ->
+                            ResultContent = format_tool_result(Result),
+                            {ok, #{<<"content">> => ResultContent,
+                                   <<"isError">> => false}, State};
+                        {error, Error} ->
+                            ErrorContent = [beamai_mcp_types:text_content(
+                                iolist_to_binary(io_lib:format("~p", [Error]))
+                            )],
+                            {ok, #{<<"content">> => ErrorContent,
+                                   <<"isError">> => true}, State};
+                        Other ->
+                            OtherContent = [beamai_mcp_types:text_content(
+                                iolist_to_binary(io_lib:format(
+                                    "Tool returned unexpected shape: ~p", [Other]))
+                            )],
+                            {ok, #{<<"content">> => OtherContent,
+                                   <<"isError">> => true}, State}
+                    end
             catch
                 _:Exception:_Stack ->
                     ExceptionContent = [beamai_mcp_types:text_content(
@@ -445,15 +462,23 @@ handle_resources_read(_Params, State) ->
     {error, ?MCP_ERROR_INVALID_PARAMS, <<"Missing resource URI">>, State}.
 
 %% @private 订阅资源
+%%
+%% 缺 uri 的兜底子句不能省：params 来自网络，`{"params":{}}' 打在单头子句上
+%% 就是 function_clause → server 崩 → 带走 linked 的 Cowboy 进程。
+%% 同文件的 handle_resources_read/handle_tools_call 都有兜底，此前唯独这两个没有。
 handle_resources_subscribe(#{<<"uri">> := Uri}, #state{subscriptions = Subs} = State) ->
     %% TODO: 实际的订阅逻辑
     NewSubs = maps:update_with(Uri, fun(L) -> [self() | L] end, [self()], Subs),
-    {ok, #{}, State#state{subscriptions = NewSubs}}.
+    {ok, #{}, State#state{subscriptions = NewSubs}};
+handle_resources_subscribe(_Params, State) ->
+    {error, ?MCP_ERROR_INVALID_PARAMS, <<"Missing resource URI">>, State}.
 
 %% @private 取消订阅
 handle_resources_unsubscribe(#{<<"uri">> := Uri}, #state{subscriptions = Subs} = State) ->
     NewSubs = maps:update_with(Uri, fun(L) -> lists:delete(self(), L) end, [], Subs),
-    {ok, #{}, State#state{subscriptions = NewSubs}}.
+    {ok, #{}, State#state{subscriptions = NewSubs}};
+handle_resources_unsubscribe(_Params, State) ->
+    {error, ?MCP_ERROR_INVALID_PARAMS, <<"Missing resource URI">>, State}.
 
 %%====================================================================
 %% 内部函数 - 提示方法
@@ -508,10 +533,13 @@ do_handle_notification(_Notification, State) ->
 %%====================================================================
 
 %% @private 生成会话 ID
+%%
+%% session id 承担鉴权语义（拿到 id 即可续接会话），必须 crypto 强随机。
+%% 旧实现是时间戳 + 16 bit rand，且 `~.4b' 是 **4 进制**不是 4 位 hex——
+%% 熵低到可枚举。
 generate_session_id() ->
-    Timestamp = erlang:system_time(microsecond),
-    Random = rand:uniform(16#FFFF),
-    iolist_to_binary(io_lib:format("mcp-~.16b-~.4b", [Timestamp, Random])).
+    Hex = binary:encode_hex(crypto:strong_rand_bytes(16), lowercase),
+    <<"mcp-", Hex/binary>>.
 
 %% @private 更新能力
 update_capabilities(#state{tools = Tools, resources = Resources, prompts = Prompts,
