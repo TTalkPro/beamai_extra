@@ -5,6 +5,13 @@
 %%% around_chat 包裹 LLM 调用：调 Next → 检测错误 → 切换模型后重调 Next。
 %%% 当所有降级模型耗尽时，返回原始错误。
 %%%
+%%% 触发条件以 beamai_llm_error 分类为准，比"可重试"更宽——换模型能救的都算：
+%%%   - retryable（429 限流 / 5xx / 超时 / 连接断开）：换个模型可能不限流
+%%%   - auth（401/403）：该 provider 密钥无效，降级模型可能在别的 provider
+%%%   - 404：模型不存在，换模型
+%%% 其余（如 400 请求本身有问题）换模型也救不了，不触发。
+%%% trigger_errors 原子列表仅作兜底，匹配上游无法识别的自定义错误。
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(middleware_model_fallback).
@@ -80,17 +87,41 @@ extract_error(#{response := #{error := Error}}) -> Error;
 extract_error(#{response := Error}) when is_atom(Error), Error =/= ok -> Error;
 extract_error(_) -> undefined.
 
-should_trigger_fallback({ErrorType, _}, TriggerErrors) when is_atom(ErrorType) ->
+%% @private 先问上游分类器，识别不了再走兜底列表
+should_trigger_fallback(Error, TriggerErrors) ->
+    case classify(Error) of
+        undefined -> matches_legacy(Error, TriggerErrors);
+        LlmError ->
+            case triggers_by_class(LlmError) of
+                true -> true;
+                false -> matches_legacy(Error, TriggerErrors)
+            end
+    end.
+
+%% @private 换模型能救的错误类别
+triggers_by_class(LlmError) ->
+    beamai_llm_error:retryable(LlmError)
+        orelse beamai_llm_error:type(LlmError) =:= auth
+        orelse beamai_llm_error:status(LlmError) =:= 404.
+
+%% @private 归一化为 beamai_llm_error；无法分类时返回 undefined（中间件不应因分类崩溃）
+classify(Error) ->
+    try beamai_llm_error:from_reason(Error)
+    catch _:_ -> undefined
+    end.
+
+%% @private 兜底：匹配自定义原子/文本错误
+matches_legacy({ErrorType, _}, TriggerErrors) when is_atom(ErrorType) ->
     lists:member(ErrorType, TriggerErrors);
-should_trigger_fallback(ErrorType, TriggerErrors) when is_atom(ErrorType) ->
+matches_legacy(ErrorType, TriggerErrors) when is_atom(ErrorType) ->
     lists:member(ErrorType, TriggerErrors);
-should_trigger_fallback(ErrorBin, _) when is_binary(ErrorBin) ->
+matches_legacy(ErrorBin, _) when is_binary(ErrorBin) ->
     LowerError = string:lowercase(binary_to_list(ErrorBin)),
     lists:any(fun(Pattern) ->
         string:find(LowerError, Pattern) =/= nomatch
     end, ["timeout", "rate limit", "connection", "server error",
           "503", "502", "504", "quota", "invalid key", "model not found"]);
-should_trigger_fallback(_, _) -> false.
+matches_legacy(_, _) -> false.
 
 maybe_call_on_fallback(undefined, _, _, _) -> ok;
 maybe_call_on_fallback(OnFallback, FromModel, ToModel, Error) when is_function(OnFallback, 3) ->
