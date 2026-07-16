@@ -38,8 +38,10 @@ ascii_chunks_are_valid_test() ->
 
 %% 重叠仍然存在——不能为了合法性把重叠整个丢掉
 overlap_is_still_present_test() ->
-    [_First, Second | _] = contents(split_chinese(#{chunk_size => 40, chunk_overlap => 10})),
+    Chunks = contents(split_chinese(#{chunk_size => 50, chunk_overlap => 10})),
     %% 第二块以上一块尾部的完整汉字开头
+    ?assert(length(Chunks) > 1),
+    [_First, Second | _] = Chunks,
     ?assert(byte_size(Second) > 0),
     ?assert(is_valid_utf8(Second)),
     ?assertNotEqual(nomatch, binary:match(Second, <<"第二段落"/utf8>>)).
@@ -50,10 +52,12 @@ overlap_is_still_present_test() ->
 
 %% 回归测试：段落耗尽时残留的重叠尾巴是上一块的纯复制，
 %% 旧实现把它当成独立块输出，会被单独 embed 入库、检索时命中重复内容。
+%% 注意：输入恰好等于 chunk_size，不触发硬切；硬切场景由独立测试覆盖。
 trailing_overlap_is_not_emitted_as_chunk_test() ->
     S = beamai_rag_splitter:new(#{chunk_size => 10, chunk_overlap => 5, separator => <<"\n">>}),
-    ?assertEqual([<<"aaaaaaaaaaaa">>],
-                 contents(beamai_rag_splitter:split(S, <<"aaaaaaaaaaaa">>))).
+    %% 单段正好 10 字节：输出 1 块。段落耗尽后尾部 overlap（5B）被丢弃。
+    ?assertEqual([<<"aaaaaaaaaa">>],
+                 contents(beamai_rag_splitter:split(S, <<"aaaaaaaaaa">>))).
 
 %% 任何一块都不该是前一块尾部的纯子串（即纯重复内容）
 no_chunk_is_pure_duplicate_of_predecessor_test() ->
@@ -66,14 +70,76 @@ no_chunk_is_pure_duplicate_of_predecessor_test() ->
                      end)
      || {Prev, Next} <- Pairs].
 
-%% chunk_size 目前**不是**硬上限（已知缺陷，见 merge_segments/4 注释）。
-%% 这里把当前真实行为钉住，避免有人误以为它是上限：
-%% 段落自身超长时不会被切开。修好之后这个测试应该反过来写。
-chunk_size_is_not_yet_enforced_test() ->
+%%====================================================================
+%% chunk_size 硬上限（回归测试）
+%%====================================================================
+
+%% chunk_size 是硬上限：无分隔符的长文本必须被切开，每块 <= chunk_size
+chunk_size_is_hard_limit_ascii_test() ->
     S = beamai_rag_splitter:new(#{chunk_size => 10, chunk_overlap => 0, separator => <<"\n">>}),
-    [Chunk] = contents(beamai_rag_splitter:split(S, <<"0123456789ABCDEFGHIJKLMNOP">>)),
-    %% 26 字节 > 配置的 10：这是缺陷，不是期望
-    ?assertEqual(26, byte_size(Chunk)).
+    Chunks = contents(beamai_rag_splitter:split(S, <<"0123456789ABCDEFGHIJKLMNOP">>)),
+    %% 旧实现：1 个 26 字节的块（缺陷）。修复后：多个 <= 10 字节的块。
+    ?assert(length(Chunks) > 1),
+    [?assert(byte_size(C) =< 10) || C <- Chunks].
+
+%% 中文超长段落：硬切后每块仍是合法 UTF-8，且 <= chunk_size
+chunk_size_hard_limit_chinese_test() ->
+    %% 20 个汉字 = 60 字节，chunk_size=15（5 个汉字）
+    Text = binary:copy(<<"段"/utf8>>, 20),
+    S = beamai_rag_splitter:new(#{chunk_size => 15, chunk_overlap => 3, separator => <<"\n">>}),
+    Chunks = contents(beamai_rag_splitter:split(S, Text)),
+    ?assert(length(Chunks) > 1),
+    [?assert(is_valid_utf8(C)) || C <- Chunks],
+    [?assert(byte_size(C) =< 15) || C <- Chunks].
+
+%% 硬切片段之间有 overlap
+hard_cut_has_overlap_test() ->
+    Text = binary:copy(<<"a">>, 30),
+    S = beamai_rag_splitter:new(#{chunk_size => 10, chunk_overlap => 3, separator => <<"\n">>}),
+    Chunks = contents(beamai_rag_splitter:split(S, Text)),
+    ?assert(length(Chunks) >= 2),
+    Pairs = lists:zip(lists:droplast(Chunks), tl(Chunks)),
+    [?assert(overlap_size(Prev, Next) > 0) || {Prev, Next} <- Pairs].
+
+%% 硬切片段间不插入 separator（原文没有的 \n 不应出现）
+hard_cut_no_separator_inserted_test_() ->
+    {"硬切片段间不插入 separator",
+     fun() ->
+        Text = binary:copy(<<"x">>, 25),
+        S = beamai_rag_splitter:new(#{chunk_size => 10, chunk_overlap => 0, separator => <<"\n">>}),
+        Chunks = contents(beamai_rag_splitter:split(S, Text)),
+        [?assertEqual(nomatch, binary:match(C, <<"\n">>)) || C <- Chunks]
+     end}.
+
+%% 混合场景：短段落 + 超长段落 + 短段落
+mixed_normal_and_oversized_test() ->
+    Text = <<"short\n", (binary:copy(<<"a">>, 25))/binary, "\nshort">>,
+    S = beamai_rag_splitter:new(#{chunk_size => 10, chunk_overlap => 0, separator => <<"\n">>}),
+    Chunks = contents(beamai_rag_splitter:split(S, Text)),
+    ?assert(length(Chunks) >= 3),
+    [?assert(byte_size(C) =< 10) || C <- Chunks],
+    %% 首块和末块包含 "short"
+    ?assertEqual(<<"short">>, hd(Chunks)),
+    ?assertEqual(<<"short">>, lists:last(Chunks)).
+
+%% overlap=0 时硬切产出连续不重叠的片段
+hard_cut_zero_overlap_test() ->
+    Text = <<"0123456789ABCDEFGHIJ">>,  %% 20 字节
+    S = beamai_rag_splitter:new(#{chunk_size => 10, chunk_overlap => 0, separator => <<"\n">>}),
+    Chunks = contents(beamai_rag_splitter:split(S, Text)),
+    ?assertEqual(2, length(Chunks)),
+    ?assertEqual(<<"0123456789">>, hd(Chunks)),
+    ?assertEqual(<<"ABCDEFGHIJ">>, lists:last(Chunks)).
+
+%% 硬切覆盖全部原文（无丢字）
+hard_cut_covers_all_content_test() ->
+    Text = lists:seq($a, $z),  %% "abcdefghijklmnopqrstuvwxyz"
+    TextBin = list_to_binary(Text),
+    S = beamai_rag_splitter:new(#{chunk_size => 10, chunk_overlap => 3, separator => <<"\n">>}),
+    Chunks = contents(beamai_rag_splitter:split(S, TextBin)),
+    %% 每个字符至少出现在一个块中
+    AllChars = lists:flatten([binary:bin_to_list(C) || C <- Chunks]),
+    [?assert(lists:member(Ch, AllChars)) || Ch <- Text].
 
 %%====================================================================
 %% 基本切分行为
@@ -138,6 +204,20 @@ split_chinese(Opts) ->
     beamai_rag_splitter:split(S, chinese_text()).
 
 contents(Chunks) -> [maps:get(content, C) || C <- Chunks].
+
+%% 测量 Prev 尾部与 Next 头部的最大公共子串长度（即 overlap 字节数）
+overlap_size(Prev, Next) ->
+    MaxN = min(byte_size(Prev), byte_size(Next)),
+    find_overlap(Prev, Next, MaxN).
+
+find_overlap(_Prev, _Next, 0) -> 0;
+find_overlap(Prev, Next, N) ->
+    Suffix = binary:part(Prev, byte_size(Prev) - N, N),
+    Prefix = binary:part(Next, 0, N),
+    case Suffix =:= Prefix of
+        true -> N;
+        false -> find_overlap(Prev, Next, N - 1)
+    end.
 
 is_valid_utf8(Bin) ->
     case unicode:characters_to_binary(Bin, utf8, utf8) of
