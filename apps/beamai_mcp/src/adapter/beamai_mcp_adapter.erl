@@ -178,11 +178,17 @@ extract_text_from_contents(_) ->
 %% @param Result MCP 工具调用结果
 %% @returns 提取的文本内容
 -spec extract_content(map()) -> binary().
+%% isError 必须**排在前面**判断。
+%%
+%% 旧顺序把 `#{<<"content">> := Contents} when is_list(Contents)' 放在首位，
+%% 而任何符合 MCP 规范的结果（无论成功还是失败）都带 list 型 content——
+%% 于是 isError 那条子句永远匹配不到，是死代码：工具报的错会被当成**正常内容**
+%% 交给模型，"Error: " 前缀从来没加上过。模型看到 "file not found"
+%% 会以为那就是工具的正常返回值。
+extract_content(#{<<"isError">> := true, <<"content">> := Contents}) when is_list(Contents) ->
+    <<"Error: ", (extract_text_from_contents(Contents))/binary>>;
 extract_content(#{<<"content">> := Contents}) when is_list(Contents) ->
     extract_text_from_contents(Contents);
-extract_content(#{<<"isError">> := true, <<"content">> := Contents}) ->
-    %% 错误响应
-    <<"Error: ", (extract_text_from_contents(Contents))/binary>>;
 extract_content(Result) when is_map(Result) ->
     %% 尝试转换为 JSON
     try
