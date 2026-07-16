@@ -25,6 +25,30 @@
 %%%     agent_config => AgentConfig
 %%% }).
 %%%
+%%% %% agent_config 原样透传给 beamai_agent:new/1，故上游的执行策略键在这里
+%%% %% 直接可用。工具超时策略经 tool_calling_manager 配置：
+%%% %%
+%%% %%   AgentConfig = #{
+%%% %%       llm => LlmConfig,
+%%% %%       tool_calling_manager =>
+%%% %%           beamai_tool_calling_manager:concurrent(#{
+%%% %%               %% 未声明 timeout 的工具的缺省上限（工具自己声明的优先）
+%%% %%               tool_timeout  => 60000,
+%%% %%               %% 批级兜底
+%%% %%               batch_timeout => 180000
+%%% %%           })
+%%% %%   }
+%%% %%
+%%% %% **这三层缺省全是 infinity**（上游 c8dca82/0f73809：框架不替调用者决定
+%%% %% "多久算太久"）。对 a2a 这种请求/响应服务，这意味着**不配就等于没有兜底**：
+%%% %% 一个卡死的工具会把 HTTP 请求无限期挂住，没有任何东西会来救它。
+%%% %% 服务端场景强烈建议显式配 batch_timeout。
+%%% %%
+%%% %% 另注：beamai_tools 的 file/todo 工具自己声明了超时（10s/30s/5s），
+%%% %% shell_execute 显式声明 infinity（长命令要跑到底），
+%%% %% 均不受 manager 的 tool_timeout 影响——工具声明优先。
+%%% %% 只有 batch_timeout 盖得住 shell 的 infinity。
+%%%
 %%% %% 处理请求（无认证）
 %%% {ok, Response} = beamai_a2a_server:handle_request(Server, JsonRpcRequest).
 %%%
