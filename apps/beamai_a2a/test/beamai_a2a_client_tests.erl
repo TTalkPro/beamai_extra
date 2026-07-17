@@ -32,7 +32,10 @@ client_test_() ->
         {"消息发送测试", fun test_send_message/0},
         {"任务查询测试", fun test_get_task/0},
         {"任务取消测试", fun test_cancel_task/0},
-        {"错误处理测试", fun test_error_handling/0}
+        {"错误处理测试", fun test_error_handling/0},
+        {"流式请求 Gun 后端走 stream 池", fun test_stream_pool_gun/0},
+        {"流式请求 Hackney 后端不注入池", fun test_stream_pool_hackney/0},
+        {"流式请求显式 pool 优先", fun test_stream_pool_explicit/0}
      ]}.
 
 %%====================================================================
@@ -307,3 +310,48 @@ test_parse_simple_sse() ->
 
 test_parse_multiple_sse() ->
     ok.
+
+%%====================================================================
+%% 流式请求连接池路由测试
+%%
+%% SSE 是长连流，按流量类别应走 http_pool_stream；但只在 Gun 后端注入
+%% （Hackney 后端把 pool 当自己的池名，传 Gun 池名会指向不存在的池）。
+%% 复刻自上游 beamai_llm_http_client:maybe_inject_pool(stream, ...) 的门控。
+%%====================================================================
+
+%% 捕获 stream_request 收到的 HttpOpts（第 5 参），返回一个满足调用方的成功结果
+mock_stream_capture() ->
+    Self = self(),
+    meck:expect(beamai_http, stream_request,
+        fun(_M, _U, _H, _B, HttpOpts, _Handler) ->
+            Self ! {captured_opts, HttpOpts},
+            {ok, #{last_task => #{<<"id">> => <<"t1">>}}}
+        end).
+
+captured_pool() ->
+    receive {captured_opts, Opts} -> maps:find(pool, Opts)
+    after 1000 -> timeout end.
+
+test_stream_pool_gun() ->
+    meck:expect(beamai_http, get_backend, fun() -> beamai_http_gun end),
+    mock_stream_capture(),
+    Msg = beamai_a2a_client:create_text_message(<<"hi">>),
+    beamai_a2a_client:send_message_stream(<<"https://x/a2a">>, Msg, fun(_) -> ok end, #{}),
+    ?assertEqual({ok, http_pool_stream}, captured_pool()).
+
+test_stream_pool_hackney() ->
+    meck:expect(beamai_http, get_backend, fun() -> beamai_http_hackney end),
+    mock_stream_capture(),
+    Msg = beamai_a2a_client:create_text_message(<<"hi">>),
+    beamai_a2a_client:send_message_stream(<<"https://x/a2a">>, Msg, fun(_) -> ok end, #{}),
+    %% 非 Gun 后端不注入 pool 键
+    ?assertEqual(error, captured_pool()).
+
+test_stream_pool_explicit() ->
+    %% 即便 Gun 后端，调用方显式给的 pool 也应原样透传（不被覆盖成 stream）
+    meck:expect(beamai_http, get_backend, fun() -> beamai_http_gun end),
+    mock_stream_capture(),
+    Msg = beamai_a2a_client:create_text_message(<<"hi">>),
+    beamai_a2a_client:send_message_stream(<<"https://x/a2a">>, Msg, fun(_) -> ok end,
+                                          #{pool => http_pool_longpoll}),
+    ?assertEqual({ok, http_pool_longpoll}, captured_pool()).

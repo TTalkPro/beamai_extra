@@ -257,11 +257,14 @@ send_message_stream(Endpoint, Message, Callback, Opts) ->
 
     %% 使用流式 HTTP 请求
     Headers = build_request_headers(Opts),
-    HttpOpts = #{
+    HttpOpts0 = #{
         timeout => maps:get(timeout, Opts, ?CLIENT_DEFAULT_TIMEOUT),
         headers => Headers,
         init_acc => #{events => [], last_task => undefined}
     },
+    %% SSE 是长连流,按流量类别应走 http_pool_stream 而非默认的 http_pool_short
+    %% （上游把连接池拆成 short/stream/longpoll 三类，就是为隔离长流与短请求）。
+    HttpOpts = maybe_stream_pool(Opts, HttpOpts0),
 
     %% SSE 事件处理器
     Handler = fun(Chunk, Acc) ->
@@ -367,6 +370,27 @@ do_rpc_request(Endpoint, RequestJson, Opts) ->
             end;
         {error, Reason} ->
             {error, {request_failed, Reason}}
+    end.
+
+%% @private 为流式请求选连接池（后端感知）。
+%%
+%% 复刻上游 beamai_llm_http_client:maybe_inject_pool(stream, ...) 的门控——
+%% 不能直接复用它（在 beamai_llm 里，a2a 只依赖 beamai_core + beamai_agent），
+%% 且逻辑仅 4 行：
+%%   - 调用方在 Opts 里显式给了 pool → 原样透传（视为它对后端知情）；
+%%   - 否则仅当活动后端是 Gun 才注入 http_pool_stream。
+%%     **关键**：Hackney 后端把 pool 键当 hackney 池名，传 Gun 池名会指向不存在的
+%%     hackney 池，故非 Gun 后端一律不注入（见 beamai_http.erl 的池选择注释）。
+-spec maybe_stream_pool(options(), map()) -> map().
+maybe_stream_pool(Opts, HttpOpts) ->
+    case maps:find(pool, Opts) of
+        {ok, Pool} ->
+            HttpOpts#{pool => Pool};
+        error ->
+            case beamai_http:get_backend() of
+                beamai_http_gun -> HttpOpts#{pool => http_pool_stream};
+                _ -> HttpOpts
+            end
     end.
 
 %% @private 生成请求 ID
