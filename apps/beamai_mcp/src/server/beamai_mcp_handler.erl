@@ -187,7 +187,7 @@ handle_post(Body, Headers, AcceptSSE, #handler_state{server_pid = ServerPid} = S
 handle_sse_init(_Headers, #handler_state{sse_endpoint = undefined}) ->
     {error, sse_endpoint_not_configured};
 handle_sse_init(_Headers, #handler_state{sse_endpoint = Endpoint} = State) ->
-    SessionId = generate_session_id(),
+    SessionId = beamai_mcp_types:new_session_id(),
     NewState = State#handler_state{
         session_id = SessionId,
         sse_mode = true
@@ -294,12 +294,3 @@ maybe_update_session_id(#handler_state{session_id = undefined, server_pid = Serv
     end;
 maybe_update_session_id(State) ->
     State.
-
-%% @private 生成会话 ID
-%%
-%% session id 承担鉴权语义，必须 crypto 强随机。旧实现是时间戳 + 16 bit rand，
-%% 且 `~.4b' 是 **4 进制**不是 4 位 hex——熵低到可枚举。
--spec generate_session_id() -> binary().
-generate_session_id() ->
-    Hex = binary:encode_hex(crypto:strong_rand_bytes(16), lowercase),
-    <<"mcp-", Hex/binary>>.

@@ -342,7 +342,7 @@ handle_initialize(Params, #state{server_info = ServerInfo,
     %% 检查协议版本
     case lists:member(ProtocolVersion, ?MCP_SUPPORTED_VERSIONS) of
         true ->
-            SessionId = generate_session_id(),
+            SessionId = beamai_mcp_types:new_session_id(),
             Session = #mcp_session{
                 id = SessionId,
                 client_info = ClientInfo,
@@ -531,15 +531,6 @@ do_handle_notification(_Notification, State) ->
 %%====================================================================
 %% 内部函数 - 辅助函数
 %%====================================================================
-
-%% @private 生成会话 ID
-%%
-%% session id 承担鉴权语义（拿到 id 即可续接会话），必须 crypto 强随机。
-%% 旧实现是时间戳 + 16 bit rand，且 `~.4b' 是 **4 进制**不是 4 位 hex——
-%% 熵低到可枚举。
-generate_session_id() ->
-    Hex = binary:encode_hex(crypto:strong_rand_bytes(16), lowercase),
-    <<"mcp-", Hex/binary>>.
 
 %% @private 更新能力
 update_capabilities(#state{tools = Tools, resources = Resources, prompts = Prompts,

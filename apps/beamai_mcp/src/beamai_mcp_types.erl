@@ -80,6 +80,9 @@
     resource_content/2
 ]).
 
+%% 会话工具
+-export([new_session_id/0]).
+
 %%====================================================================
 %% 类型定义
 %%
@@ -451,3 +454,17 @@ add_capability(Map, Key, true) ->
     Map#{Key => #{}};
 add_capability(Map, Key, SubCaps) when is_map(SubCaps) ->
     Map#{Key => SubCaps}.
+
+%%====================================================================
+%% 会话工具
+%%====================================================================
+
+%% @doc 生成 MCP 会话 ID。
+%%
+%% session id 承担鉴权语义（拿到 id 即可续接会话），必须 crypto 强随机。
+%% 早前 server / handler / cowboy_handler 各有一份逐字节相同的实现，
+%% 这里收敛为单一来源。
+-spec new_session_id() -> binary().
+new_session_id() ->
+    Hex = binary:encode_hex(crypto:strong_rand_bytes(16), lowercase),
+    <<"mcp-", Hex/binary>>.

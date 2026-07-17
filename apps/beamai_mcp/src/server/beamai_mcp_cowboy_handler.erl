@@ -226,7 +226,7 @@ reply_json(Status, ErrorBody, Req) ->
 handle_sse_init(Req, Config) ->
     %% 会话级 server（不能用嵌入式 init/1，那条路用完即停）
     {ok, ServerPid} = beamai_mcp_server_sup:start_server(Config),
-    SessionId = generate_session_id(),
+    SessionId = beamai_mcp_types:new_session_id(),
 
     %% POST 端点 = <当前路径>/message?session_id=<id>
     BasePath = maps:get(sse_message_path, Config,
@@ -247,11 +247,6 @@ handle_sse_init(Req, Config) ->
     ok = beamai_mcp_session_registry:register_sse(SessionId, ServerPid, self()),
     State = #sse_state{server_pid = ServerPid, session_id = SessionId, config = Config},
     {cowboy_loop, Req2, State}.
-
-%% @private crypto 强随机 session id（与 handler/server 同款）
-generate_session_id() ->
-    Hex = binary:encode_hex(crypto:strong_rand_bytes(16), lowercase),
-    <<"mcp-", Hex/binary>>.
 
 %% @private 处理 SSE 模式下的消息 POST（`/message?session_id=X'）
 %%
