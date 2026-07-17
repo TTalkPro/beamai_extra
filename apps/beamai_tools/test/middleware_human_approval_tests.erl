@@ -60,7 +60,7 @@ rejection_is_encoded_json_test() ->
     {Result, _} = run(#{mode => all, approval_handler => fun(_, _) -> reject end}),
     {ok, Value, _} = Result,
     ?assert(is_binary(Value)),
-    Decoded = jsx:decode(Value, [return_maps]),
+    Decoded = json:decode(Value),
     Err = maps:get(<<"error">>, Decoded),
     ?assertEqual(<<"approval_rejected">>, maps:get(<<"type">>, Err)),
     ?assertEqual(<<"danger">>, maps:get(<<"tool">>, Err)),
@@ -157,7 +157,7 @@ run(Opts) ->
 
 %% @private 是否为一个"已拒绝"的编码结果
 is_rejection({ok, Value, _}) when is_binary(Value) ->
-    case catch jsx:decode(Value, [return_maps]) of
+    case catch json:decode(Value) of
         #{<<"error">> := #{<<"type">> := <<"approval_rejected">>}} -> true;
         _ -> false
     end;

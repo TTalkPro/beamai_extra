@@ -232,7 +232,7 @@ build_openai_request(#{api_key := ApiKey, model := ModelName, base_url := BaseUr
     #{
         url => BaseUrl,
         headers => build_auth_headers(ApiKey),
-        body => jsx:encode(#{model => ModelName, input => Texts})
+        body => beamai_utils:encode_json(#{model => ModelName, input => Texts})
     }.
 
 %% @private 构建认证请求头
@@ -273,7 +273,7 @@ parse_openai_response(#{<<"data">> := Data}) ->
     end;
 parse_openai_response(ResponseBody) when is_binary(ResponseBody) ->
     try
-        Decoded = jsx:decode(ResponseBody, [return_maps]),
+        Decoded = json:decode(ResponseBody),
         parse_openai_response(Decoded)
     catch
         _:Error -> {error, {parse_error, Error}}

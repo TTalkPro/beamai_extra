@@ -55,7 +55,7 @@ wire_schema_is_encodable_test() ->
               #{interrupt_tools => beamai_tool_human:interrupt_tools()}),
     ?assertEqual(2, length(Specs)),
     [#{type := function, function := #{name := <<"ask_human">>}} | _] = Specs,
-    ?assert(is_binary(jsx:encode(Specs))).
+    ?assert(is_binary(beamai_utils:encode_json(Specs))).
 
 %%====================================================================
 %% 拦截
