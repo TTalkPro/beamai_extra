@@ -90,20 +90,20 @@ to_json_test() ->
     ?assert(is_binary(JsonBin)),
 
     %% 解析 JSON 验证格式
-    JsonMap = jsx:decode(JsonBin, [return_maps]),
+    JsonMap = json:decode(JsonBin),
     ?assertEqual(<<"test-agent">>, maps:get(<<"name">>, JsonMap)),
     ?assertEqual(<<"A test agent">>, maps:get(<<"description">>, JsonMap)),
     ?assertEqual(<<"https://example.com/a2a">>, maps:get(<<"url">>, JsonMap)),
     ?assertEqual(<<"0.3.0">>, maps:get(<<"protocolVersion">>, JsonMap)).
 
 from_json_test() ->
-    JsonBin = jsx:encode(#{
+    JsonBin = beamai_utils:encode_json(#{
         <<"name">> => <<"test-agent">>,
         <<"description">> => <<"A test agent">>,
         <<"url">> => <<"https://example.com/a2a">>,
         <<"protocolVersion">> => <<"0.3.0">>,
         <<"skills">> => []
-    }, []),
+    }),
 
     {ok, Card} = beamai_a2a_card:from_json(JsonBin),
 

@@ -3,13 +3,13 @@
 %%%
 %%% 历史缺陷（双重编码）：beamai_a2a_jsonrpc 的错误构造器（parse_error 等）
 %%% **已返回编码好的 binary**，而 handle_json / http_handler 的调用点又套了一层
-%%% jsx:encode——结果是"装着 JSON 的 JSON 字符串"：客户端 jsx:decode 后拿到的是
+%%% encode_json——结果是"装着 JSON 的 JSON 字符串"：客户端 json:decode 后拿到的是
 %%% binary 字符串 `<<"{...}">>` 而非错误对象 `#{<<"error">> => ...}`，
 %%% 即一个畸形（spec 违规）的 JSON-RPC 响应。
 %%%
 %%% 根因：a2a 有两套返回约定相反的错误构造器——middleware 的
 %%% make_*_error_response 返回 map（需 encode），jsonrpc 的返回 binary（勿 encode），
-%%% 调用点一律 jsx:encode 就对前者对、对后者错。
+%%% 调用点一律 encode_json 就对前者对、对后者错。
 %%%
 %%% 这里锁住：错误响应必须 decode 一次即得 JSON 对象（map）。
 %%%
@@ -60,10 +60,10 @@ parse_error_with_auth_is_single_encoded(Pid) ->
 %%====================================================================
 
 %% 关键断言：decode 一次得到的是 **map**（JSON 对象），不是 binary 字符串。
-%% 双重编码时 jsx:decode 会返回 <<"{...}">>（binary），而非 #{...}。
+%% 双重编码时 json:decode 会返回 <<"{...}">>（binary），而非 #{...}。
 assert_jsonrpc_error_object(Bin, ExpectedCode) ->
     ?assert(is_binary(Bin)),
-    Decoded = jsx:decode(Bin, [return_maps]),
+    Decoded = json:decode(Bin),
     ?assert(is_map(Decoded)),                       %% ← 双重编码时这里是 binary，会挂
     ?assertEqual(<<"2.0">>, maps:get(<<"jsonrpc">>, Decoded)),
     Error = maps:get(<<"error">>, Decoded),

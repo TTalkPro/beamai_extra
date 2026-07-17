@@ -14,7 +14,7 @@ encode_request_test() ->
     JsonBin = beamai_a2a_jsonrpc:encode_request(1, <<"message/send">>, #{<<"text">> => <<"hello">>}),
     ?assert(is_binary(JsonBin)),
 
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     ?assertEqual(<<"2.0">>, maps:get(<<"jsonrpc">>, Decoded)),
     ?assertEqual(1, maps:get(<<"id">>, Decoded)),
     ?assertEqual(<<"message/send">>, maps:get(<<"method">>, Decoded)),
@@ -24,7 +24,7 @@ encode_notification_test() ->
     JsonBin = beamai_a2a_jsonrpc:encode_notification(<<"tasks/update">>, #{<<"taskId">> => <<"t1">>}),
     ?assert(is_binary(JsonBin)),
 
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     ?assertEqual(<<"2.0">>, maps:get(<<"jsonrpc">>, Decoded)),
     ?assertNot(maps:is_key(<<"id">>, Decoded)),
     ?assertEqual(<<"tasks/update">>, maps:get(<<"method">>, Decoded)).
@@ -33,7 +33,7 @@ encode_response_test() ->
     JsonBin = beamai_a2a_jsonrpc:encode_response(1, #{<<"status">> => <<"ok">>}),
     ?assert(is_binary(JsonBin)),
 
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     ?assertEqual(<<"2.0">>, maps:get(<<"jsonrpc">>, Decoded)),
     ?assertEqual(1, maps:get(<<"id">>, Decoded)),
     ?assertEqual(#{<<"status">> => <<"ok">>}, maps:get(<<"result">>, Decoded)).
@@ -42,7 +42,7 @@ encode_error_test() ->
     JsonBin = beamai_a2a_jsonrpc:encode_error(1, -32600, <<"Invalid Request">>),
     ?assert(is_binary(JsonBin)),
 
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     ?assertEqual(<<"2.0">>, maps:get(<<"jsonrpc">>, Decoded)),
     ?assertEqual(1, maps:get(<<"id">>, Decoded)),
 
@@ -53,7 +53,7 @@ encode_error_test() ->
 encode_error_with_data_test() ->
     JsonBin = beamai_a2a_jsonrpc:encode_error(1, -32001, <<"Task not found">>, #{<<"taskId">> => <<"t1">>}),
 
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(#{<<"taskId">> => <<"t1">>}, maps:get(<<"data">>, Error)).
 
@@ -62,12 +62,12 @@ encode_error_with_data_test() ->
 %%====================================================================
 
 decode_request_test() ->
-    JsonBin = jsx:encode(#{
+    JsonBin = beamai_utils:encode_json(#{
         <<"jsonrpc">> => <<"2.0">>,
         <<"id">> => 1,
         <<"method">> => <<"message/send">>,
         <<"params">> => #{<<"text">> => <<"hello">>}
-    }, []),
+    }),
 
     {ok, {Id, Method, Params}} = beamai_a2a_jsonrpc:decode_request(JsonBin),
     ?assertEqual(1, Id),
@@ -75,11 +75,11 @@ decode_request_test() ->
     ?assertEqual(#{<<"text">> => <<"hello">>}, Params).
 
 decode_request_without_params_test() ->
-    JsonBin = jsx:encode(#{
+    JsonBin = beamai_utils:encode_json(#{
         <<"jsonrpc">> => <<"2.0">>,
         <<"id">> => 2,
         <<"method">> => <<"tasks/get">>
-    }, []),
+    }),
 
     {ok, {Id, Method, Params}} = beamai_a2a_jsonrpc:decode_request(JsonBin),
     ?assertEqual(2, Id),
@@ -87,11 +87,11 @@ decode_request_without_params_test() ->
     ?assertEqual(#{}, Params).
 
 decode_notification_test() ->
-    JsonBin = jsx:encode(#{
+    JsonBin = beamai_utils:encode_json(#{
         <<"jsonrpc">> => <<"2.0">>,
         <<"method">> => <<"notify">>,
         <<"params">> => #{}
-    }, []),
+    }),
 
     {ok, {Id, Method, _}} = beamai_a2a_jsonrpc:decode_request(JsonBin),
     ?assertEqual(null, Id),  %% notification 没有 id
@@ -102,11 +102,11 @@ decode_invalid_json_test() ->
     ?assertMatch({error, parse_error}, Result).
 
 decode_response_as_request_test() ->
-    JsonBin = jsx:encode(#{
+    JsonBin = beamai_utils:encode_json(#{
         <<"jsonrpc">> => <<"2.0">>,
         <<"id">> => 1,
         <<"result">> => #{<<"status">> => <<"ok">>}
-    }, []),
+    }),
 
     Result = beamai_a2a_jsonrpc:decode_request(JsonBin),
     ?assertMatch({error, not_a_request}, Result).
@@ -151,32 +151,32 @@ is_error_test() ->
 
 parse_error_test() ->
     JsonBin = beamai_a2a_jsonrpc:parse_error(null),
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32700, maps:get(<<"code">>, Error)).
 
 invalid_request_test() ->
     JsonBin = beamai_a2a_jsonrpc:invalid_request(1),
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32600, maps:get(<<"code">>, Error)).
 
 method_not_found_test() ->
     JsonBin = beamai_a2a_jsonrpc:method_not_found(1, <<"unknown/method">>),
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32601, maps:get(<<"code">>, Error)),
     ?assertEqual(<<"unknown/method">>, maps:get(<<"method">>, maps:get(<<"data">>, Error))).
 
 invalid_params_test() ->
     JsonBin = beamai_a2a_jsonrpc:invalid_params(1, <<"Missing taskId">>),
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32602, maps:get(<<"code">>, Error)).
 
 internal_error_test() ->
     JsonBin = beamai_a2a_jsonrpc:internal_error(1),
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32603, maps:get(<<"code">>, Error)).
 
@@ -186,20 +186,20 @@ internal_error_test() ->
 
 task_not_found_error_test() ->
     JsonBin = beamai_a2a_jsonrpc:task_not_found(1, <<"task-123">>),
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32001, maps:get(<<"code">>, Error)),
     ?assertEqual(<<"task-123">>, maps:get(<<"taskId">>, maps:get(<<"data">>, Error))).
 
 task_already_completed_error_test() ->
     JsonBin = beamai_a2a_jsonrpc:task_already_completed(1, <<"task-456">>),
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32002, maps:get(<<"code">>, Error)).
 
 invalid_state_transition_error_test() ->
     JsonBin = beamai_a2a_jsonrpc:invalid_state_transition(1, completed, working),
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32003, maps:get(<<"code">>, Error)),
     Data = maps:get(<<"data">>, Error),
@@ -208,7 +208,7 @@ invalid_state_transition_error_test() ->
 
 authentication_required_error_test() ->
     JsonBin = beamai_a2a_jsonrpc:authentication_required(1),
-    Decoded = jsx:decode(JsonBin, [return_maps]),
+    Decoded = json:decode(JsonBin),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32004, maps:get(<<"code">>, Error)).
 
@@ -217,10 +217,10 @@ authentication_required_error_test() ->
 %%====================================================================
 
 decode_batch_test() ->
-    BatchJson = jsx:encode([
+    BatchJson = beamai_utils:encode_json([
         #{<<"jsonrpc">> => <<"2.0">>, <<"id">> => 1, <<"method">> => <<"m1">>, <<"params">> => #{}},
         #{<<"jsonrpc">> => <<"2.0">>, <<"id">> => 2, <<"method">> => <<"m2">>, <<"params">> => #{}}
-    ], []),
+    ]),
 
     {ok, Result} = beamai_a2a_jsonrpc:decode(BatchJson),
     ?assert(beamai_a2a_jsonrpc:is_batch(Result)),
