@@ -1,5 +1,73 @@
 # BeamAI Extra - Task List
 
+## 与上游统一 + 优化（2026-07-17）
+
+> 目标：让 beamai_extra 与上游 beamai 在依赖/约定/OTP 版本上对齐，并清理结构。
+> 所有改动**未提交**（beamai_extra + 上游各有改动，等你确认后统一提交）。
+
+### 已修·有回归测试
+
+- [x] **JSON-RPC 双重编码 bug**（你追问「为什么编码为 binary」时挖出）。
+  `beamai_a2a_jsonrpc` 的错误构造器已返回编码好的 binary，而 a2a_server / http_handler
+  的 5 个调用点又套一层 encode——客户端收到「装着 JSON 的 JSON 字符串」，畸形响应。
+  MCP 侧不受影响（调用方直接发送、不再套）。修：去掉那 5 处多余编码。
+  新增 `beamai_a2a_server_encoding_tests`（旧代码下 2 挂、修后过）。
+- [x] **`grep_files/4` O(n²) → 线性** + 顺带修正**反序输出** bug。新增 grep 行为测试。
+- [x] **三份 `generate_session_id/0` 去重** → `beamai_mcp_types:new_session_id/0`。
+- [x] **三份 `get_header/2` 去重** → `beamai_mcp_types:get_header/2`。
+- [x] **手写 ID 生成统一 + 进制笔误**（`~.8b` 8 进制、`~.4b` 4 进制）→ `beamai_id:gen_id/1`。
+- [x] **a2a SSE 流路由到 `http_pool_stream`**（后端感知，仅 Gun 注入）。3 个 meck 测试。
+
+### 已做·结构/依赖统一
+
+- [x] **删除 hackney，统一 Gun 后端**。删两个重复的 hackney MCP 传输模块
+  （`transport_http` / `_sse`），选择器只留 Gun，修过期文档（注释说默认 hackney、实际 Gun）。
+  从 mcp/a2a app.src 移除 hackney。rebar.config 的 hackney 直接依赖已由协同改动移除
+  （仍作 beamai_core/llm 传递依赖，核实过干净重 fetch 仍解析成功）。
+- [x] **删除 735 行死代码** `beamai_tool_provider_mcp` + `beamai_mcp_tool_proxy`
+  （无引用、文档引用不存在的 API、与已测试的 `beamai_mcp_adapter` 重叠；不能当测试用例）。
+  连带清空 `src/provider/` 目录与 rebar.config 的 src_dir。
+- [x] **jsx → OTP 27 stdlib `json` 全量迁移**（与上游统一）。
+  - src 38 处 + test 51 处：`jsx:encode(X[, [])` → `beamai_utils:encode_json(X)`（保 binary 契约）；
+    `jsx:decode(X, [return_maps])` → `json:decode(X)`；`jsx:is_json`（2 处）→ `try json:decode`。
+  - 删 jsx 依赖（rebar.config + 4 个 app.src + 锁），加 `{minimum_otp_vsn, "27"}`。
+  - examples 同步删 jsx/hackney 依赖与启动。
+  - 全项目 src+test **jsx 归零**，jsx 不再被 fetch。分三步验证（迁 src→测试仍用 jsx 独立验证
+    产出一致→迁 test→删依赖），每步 520 测试全过。
+
+### 升级适配（前置）
+
+- [x] **上游 HTTP 连接池拆分（short/stream/longpoll）**：升级零破坏，门面签名未变、
+  三池自动启动、不配有缺省。beamai_extra 只经 `beamai_http` 门面调用、不碰内部破坏面。
+
+### 已验证·未修（结构，仍待决策）
+
+- [ ] **两个 JSON-RPC 模块 17 个委托重复**。细看后：这些封装在上游 map 之上加了「编码成
+  binary」，**不是纯样板**；合并要么造跨 app 耦合、要么参数化，低价值。**建议不动。**
+- [ ] **`beamai_a2a_task` 的 `++[X]` 累积**（O(n²)）。单任务生命周期内量级小、prepend+读时
+  reverse 会翻转存储序影响读者，churn/风险 > 收益。**建议不动。**
+
+### 新发现·待清理 —— 已核实为**误报**，无需处理
+
+- [x] ~~`beamai_a2a_utils` 一批 unused 函数~~ **误报**。核实：`safe_get`/`safe_merge`/
+  `paginate`/`filter_by_time`/`validate_binary`/`validate_map`/`safe_execute` 等在全项目
+  **根本不存在**（0 处）——迁移时那批警告是并发修改中途的瞬时状态，干净全编**零警告**。
+  xref 另报的真实 unused export（`a2a_utils:generate_id/timestamp`、`a2a_auth:validate_key`、
+  `a2a_card:validate`、`a2a_card_cache:invalidate`）均**被测试引用**（3~7 处/个），
+  是有测试的 public API，非死代码，保留。
+
+### 上游改进建议（未提）
+
+- [ ] core 的 `beamai_http` 门面无后端感知池辅助（逻辑困在 llm 层 `maybe_inject_pool/3`）。
+  建议上游提升到 core，非 LLM 下游（a2a/mcp）就不必复刻那 4 行门控。非 bug。
+
+### 测试覆盖缺口
+
+- [ ] `beamai_a2a_server` / `beamai_a2a_handler`（agent 集成）零覆盖。
+- [ ] `beamai_rag`：`beamai_vector_store` / `beamai_rag_utils` 覆盖仍薄。
+
+---
+
 ## 缺陷追踪（2026-07-16 排查）
 
 > 本轮配合上游 beamai 升级做的缺陷排查。**严格区分三档**：
