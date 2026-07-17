@@ -167,9 +167,13 @@
   维护两个后端。
 - [ ] **两个 JSON-RPC 模块 17 个委托重复**（`beamai_a2a_jsonrpc` vs `beamai_mcp_jsonrpc`）。
   编码步骤有差异（a2a `jsx:encode` vs mcp `encode_map`），合并需参数化，中等价值。
-- [ ] **手写 ID 生成散落 + 进制笔误**。`a2a_utils`/`a2a_convert`/`a2a_client`/`tool_todo`
-  各有手写版，可统一到 `beamai_id:gen_id`。附带笔误：`a2a_convert` 的 `~.8b` 是 8 进制、
-  `a2a_client` 的 `~.4b` 是 4 进制（注释都说 hex）——低熵，但这俩是 message/request id，影响小。
+- [x] ~~**手写 ID 生成散落 + 进制笔误**~~ **已修（2026-07-17）**。
+  `a2a_convert:generate_message_id`（`~.8b` 8 进制）、`a2a_client:generate_request_id`
+  （`~.4b` 4 进制，`rand:uniform(16#FFFF)` 低熵）、`tool_todo:generate_id`（非 crypto rand）
+  三个改为委托 `beamai_id:gen_id/1`（crypto 强随机 + 时间戳），保留语义命名的薄封装、
+  call site 不动。核实过无格式依赖（无代码解析 req-/msg-/todo_ 前缀，request_id 是 JSON-RPC
+  opaque id）。`a2a_utils:generate_id`（标准 UUID v4 + crypto，本身没问题）未动——它属"疑似死代码"另议。
+  323 个受影响 app 测试全过。
 - [ ] **`beamai_a2a_task` 的 `Messages/history ++ [X]` 累积**。gen_server 每次加一条 O(n)，
   任务生命周期内 O(n²)。量级取决于单任务消息数；prepend+读时 reverse 会翻转存储序、
   影响读者，churn/风险不小。
