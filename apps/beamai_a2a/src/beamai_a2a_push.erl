@@ -469,7 +469,7 @@ build_payload(TaskId, Task) ->
         <<"task">> => beamai_a2a_convert:task_to_json(Task),
         <<"timestamp">> => erlang:system_time(millisecond)
     },
-    jsx:encode(Event, []).
+    beamai_utils:encode_json(Event).
 
 %% @private 构建额外请求头（认证等）
 build_auth_headers(undefined) ->

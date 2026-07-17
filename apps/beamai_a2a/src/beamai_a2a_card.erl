@@ -120,7 +120,7 @@ generate(Config) ->
 -spec to_json(map()) -> binary().
 to_json(Card) ->
     JsonMap = to_map(Card),
-    jsx:encode(JsonMap, []).
+    beamai_utils:encode_json(JsonMap).
 
 %% @doc 从 JSON 字符串解析 Agent Card
 %%
@@ -129,7 +129,7 @@ to_json(Card) ->
 -spec from_json(binary()) -> {ok, map()} | {error, term()}.
 from_json(JsonBin) ->
     try
-        JsonMap = jsx:decode(JsonBin, [return_maps]),
+        JsonMap = json:decode(JsonBin),
         from_map(JsonMap)
     catch
         _:Reason ->

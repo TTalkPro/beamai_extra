@@ -360,13 +360,14 @@ do_rpc_request(Endpoint, RequestJson, Opts) ->
         headers => Headers
     },
 
-    case beamai_http:post_json(Endpoint, jsx:decode(RequestJson, [return_maps]), HttpOpts) of
+    case beamai_http:post_json(Endpoint, json:decode(RequestJson), HttpOpts) of
         {ok, Response} when is_map(Response) ->
             {ok, Response};
         {ok, Response} when is_binary(Response) ->
-            case jsx:is_json(Response) of
-                true -> {ok, jsx:decode(Response, [return_maps])};
-                false -> {error, {invalid_response, Response}}
+            %% json 无 is_json/1；直接 try 解码，失败即非法 JSON。
+            try json:decode(Response) of
+                Decoded -> {ok, Decoded}
+            catch _:_ -> {error, {invalid_response, Response}}
             end;
         {error, Reason} ->
             {error, {request_failed, Reason}}
@@ -454,13 +455,9 @@ parse_sse_lines([_ | Rest], CurrentEvent, Acc) ->
 parse_json_data(<<"[DONE]">>) ->
     done;
 parse_json_data(Data) ->
-    case jsx:is_json(Data) of
-        true ->
-            try jsx:decode(Data, [return_maps])
-            catch _:_ -> Data
-            end;
-        false ->
-            Data
+    %% json 无 is_json/1；直接 try 解码，非法 JSON 时原样返回 Data。
+    try json:decode(Data)
+    catch _:_ -> Data
     end.
 
 %% @private 处理 SSE 事件

@@ -100,7 +100,7 @@ handle_by_mode(Method, Mode, Req, _Config) ->
         <<"content-type">> => <<"application/json">>,
         <<"allow">> => AllowedMethods,
         <<"access-control-allow-origin">> => <<"*">>
-    }, jsx:encode(#{
+    }, beamai_utils:encode_json(#{
         <<"error">> => <<"Method not allowed">>,
         <<"method">> => Method,
         <<"allowed">> => AllowedMethods

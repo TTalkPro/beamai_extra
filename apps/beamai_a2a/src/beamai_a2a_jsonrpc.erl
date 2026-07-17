@@ -158,27 +158,27 @@ is_batch(Msg) ->
 %% @doc 构造解析错误
 -spec parse_error(term()) -> binary().
 parse_error(Id) ->
-    jsx:encode(beamai_jsonrpc:parse_error(Id), []).
+    beamai_utils:encode_json(beamai_jsonrpc:parse_error(Id)).
 
 %% @doc 构造无效请求错误
 -spec invalid_request(term()) -> binary().
 invalid_request(Id) ->
-    jsx:encode(beamai_jsonrpc:invalid_request(Id), []).
+    beamai_utils:encode_json(beamai_jsonrpc:invalid_request(Id)).
 
 %% @doc 构造方法未找到错误
 -spec method_not_found(term(), binary()) -> binary().
 method_not_found(Id, Method) ->
-    jsx:encode(beamai_jsonrpc:method_not_found(Id, Method), []).
+    beamai_utils:encode_json(beamai_jsonrpc:method_not_found(Id, Method)).
 
 %% @doc 构造无效参数错误
 -spec invalid_params(term(), binary()) -> binary().
 invalid_params(Id, Details) ->
-    jsx:encode(beamai_jsonrpc:invalid_params(Id, Details), []).
+    beamai_utils:encode_json(beamai_jsonrpc:invalid_params(Id, Details)).
 
 %% @doc 构造内部错误
 -spec internal_error(term()) -> binary().
 internal_error(Id) ->
-    jsx:encode(beamai_jsonrpc:internal_error(Id), []).
+    beamai_utils:encode_json(beamai_jsonrpc:internal_error(Id)).
 
 %%====================================================================
 %% A2A 特定错误构造函数（返回编码后的 binary）
@@ -193,8 +193,8 @@ internal_error(Id) ->
 %% @returns JSON 编码的错误响应
 -spec task_not_found(term(), binary()) -> binary().
 task_not_found(Id, TaskId) ->
-    jsx:encode(beamai_jsonrpc:custom_error(Id, ?TASK_NOT_FOUND, <<"Task not found">>,
-                                          #{<<"taskId">> => TaskId}), []).
+    beamai_utils:encode_json(beamai_jsonrpc:custom_error(Id, ?TASK_NOT_FOUND, <<"Task not found">>,
+                                          #{<<"taskId">> => TaskId})).
 
 %% @doc 构造任务已完成错误
 %%
@@ -205,8 +205,8 @@ task_not_found(Id, TaskId) ->
 %% @returns JSON 编码的错误响应
 -spec task_already_completed(term(), binary()) -> binary().
 task_already_completed(Id, TaskId) ->
-    jsx:encode(beamai_jsonrpc:custom_error(Id, ?TASK_ALREADY_COMPLETED, <<"Task already completed">>,
-                                          #{<<"taskId">> => TaskId}), []).
+    beamai_utils:encode_json(beamai_jsonrpc:custom_error(Id, ?TASK_ALREADY_COMPLETED, <<"Task already completed">>,
+                                          #{<<"taskId">> => TaskId})).
 
 %% @doc 构造无效状态转换错误
 %%
@@ -218,11 +218,11 @@ task_already_completed(Id, TaskId) ->
 %% @returns JSON 编码的错误响应
 -spec invalid_state_transition(term(), atom(), atom()) -> binary().
 invalid_state_transition(Id, FromState, ToState) ->
-    jsx:encode(beamai_jsonrpc:custom_error(Id, ?INVALID_STATE_TRANSITION, <<"Invalid state transition">>,
+    beamai_utils:encode_json(beamai_jsonrpc:custom_error(Id, ?INVALID_STATE_TRANSITION, <<"Invalid state transition">>,
                                           #{
                                               <<"from">> => beamai_a2a_types:task_state_to_binary(FromState),
                                               <<"to">> => beamai_a2a_types:task_state_to_binary(ToState)
-                                          }), []).
+                                          })).
 
 %% @doc 构造需要认证错误
 %%
@@ -232,4 +232,4 @@ invalid_state_transition(Id, FromState, ToState) ->
 %% @returns JSON 编码的错误响应
 -spec authentication_required(term()) -> binary().
 authentication_required(Id) ->
-    jsx:encode(beamai_jsonrpc:custom_error(Id, ?AUTHENTICATION_REQUIRED, <<"Authentication required">>, null), []).
+    beamai_utils:encode_json(beamai_jsonrpc:custom_error(Id, ?AUTHENTICATION_REQUIRED, <<"Authentication required">>, null)).

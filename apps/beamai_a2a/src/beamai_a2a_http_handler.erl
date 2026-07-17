@@ -131,22 +131,22 @@ handle_post(Body, Headers, #handler_state{server_pid = ServerPid} = State) ->
                 {ok, Response, RateLimitInfo} ->
                     %% 成功
                     RespHeaders = merge_headers(BaseHeaders, build_rate_limit_headers(RateLimitInfo)),
-                    {ok, jsx:encode(Response, []), RespHeaders, State};
+                    {ok, beamai_utils:encode_json(Response), RespHeaders, State};
 
                 {error, auth_error, ErrorResponse} ->
                     %% 认证错误
-                    {error, auth_error, jsx:encode(ErrorResponse, []), BaseHeaders, State};
+                    {error, auth_error, beamai_utils:encode_json(ErrorResponse), BaseHeaders, State};
 
                 {error, rate_limited, ErrorResponse} when is_map(ErrorResponse) ->
                     %% 限流 - ErrorResponse 包含限流信息
                     RateLimitInfo = extract_rate_limit_from_error(ErrorResponse),
                     RespHeaders = merge_headers(BaseHeaders, build_rate_limit_headers(RateLimitInfo)),
-                    {error, rate_limited, jsx:encode(ErrorResponse, []), RespHeaders, State};
+                    {error, rate_limited, beamai_utils:encode_json(ErrorResponse), RespHeaders, State};
 
                 {error, _Reason, RateLimitInfo} ->
                     %% 其他错误
                     RespHeaders = merge_headers(BaseHeaders, build_rate_limit_headers(RateLimitInfo)),
-                    %% internal_error/1 已返回编码好的 binary，不能再 jsx:encode。
+                    %% internal_error/1 已返回编码好的 binary，不能再 encode_json（否则双重编码）。
                     %% 对比上面 auth_error/rate_limited：那两条走 middleware 的
                     %% make_*_error_response（返回 **map**），才需要 encode——
                     %% a2a 两套错误构造器返回约定相反，别一律 encode。
@@ -179,7 +179,7 @@ handle_agent_card(#handler_state{server_pid = ServerPid}) ->
         <<"access-control-allow-origin">> => <<"*">>,
         <<"cache-control">> => <<"public, max-age=3600">>
     },
-    {ok, jsx:encode(Card, []), RespHeaders}.
+    {ok, beamai_utils:encode_json(Card), RespHeaders}.
 
 %% @doc 构建限流响应头
 %%
