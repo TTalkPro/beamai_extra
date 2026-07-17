@@ -18,7 +18,10 @@ server_test_() ->
       fun handle_json_unknown_method/1,
       fun handle_json_tasks_get_unknown/1,
       fun handle_request_map_unknown_method/1,
-      fun handle_json_parse_error/1]}.
+      fun handle_json_parse_error/1,
+      fun batch_returns_json_array/1,
+      fun batch_preserves_order_and_ids/1,
+      fun batch_single_element/1]}.
 
 setup() ->
     {ok, Pid} = beamai_a2a_server:start_link(#{
@@ -84,8 +87,62 @@ handle_json_parse_error(Pid) ->
     end).
 
 %%====================================================================
+%% Batch（JSON-RPC 2.0 批处理）
+%%
+%% 关键：batch 响应必须是一个 JSON **数组**（每元素是独立响应对象），
+%% 且只编码一次。这依赖 dispatch/handler 路径返回 map、边界统一 encode——
+%% 若某响应被提前编码成 binary，塞进数组再 encode 就会双重编码（数组元素
+%% 变成字符串）。此前无测试守着，仅靠 probe 验过。
+%%====================================================================
+
+%% batch 请求 → decode 后是含 N 个对象的数组
+batch_returns_json_array(Pid) ->
+    ?_test(begin
+        Batch = beamai_utils:encode_json([
+            rpc(1, <<"tasks/get">>, #{<<"taskId">> => <<"a">>}),
+            rpc(2, <<"tasks/get">>, #{<<"taskId">> => <<"b">>})
+        ]),
+        {ok, Bin} = beamai_a2a_server:handle_json(Pid, Batch),
+        Decoded = json:decode(Bin),
+        ?assert(is_list(Decoded)),                 %% ← 双重编码时这里会是 binary
+        ?assertEqual(2, length(Decoded)),
+        %% 每个元素本身是响应对象（map），不是被再编码的字符串
+        [?assert(is_map(E)) || E <- Decoded]
+    end).
+
+%% batch 保持顺序与 id 对应
+batch_preserves_order_and_ids(Pid) ->
+    ?_test(begin
+        Batch = beamai_utils:encode_json([
+            rpc(11, <<"tasks/get">>, #{<<"taskId">> => <<"x">>}),
+            rpc(22, <<"bogus/method">>, #{}),
+            rpc(33, <<"tasks/get">>, #{<<"taskId">> => <<"z">>})
+        ]),
+        {ok, Bin} = beamai_a2a_server:handle_json(Pid, Batch),
+        Decoded = json:decode(Bin),
+        ?assertEqual([11, 22, 33], [maps:get(<<"id">>, E) || E <- Decoded]),
+        %% 第 2 个是未知方法 → -32601，其余是任务未找到 → -32001
+        ?assertEqual([-32001, -32601, -32001],
+                     [err_code(E) || E <- Decoded])
+    end).
+
+%% 单元素 batch 仍返回数组（不退化成单对象）
+batch_single_element(Pid) ->
+    ?_test(begin
+        Batch = beamai_utils:encode_json([rpc(1, <<"bogus">>, #{})]),
+        {ok, Bin} = beamai_a2a_server:handle_json(Pid, Batch),
+        Decoded = json:decode(Bin),
+        ?assert(is_list(Decoded)),
+        ?assertEqual(1, length(Decoded))
+    end).
+
+%%====================================================================
 %% 辅助
 %%====================================================================
+
+rpc(Id, Method, Params) ->
+    #{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
+      <<"method">> => Method, <<"params">> => Params}.
 
 err_code(Resp) ->
     maps:get(<<"code">>, maps:get(<<"error">>, Resp)).
