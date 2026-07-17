@@ -61,10 +61,32 @@
 - [ ] core 的 `beamai_http` 门面无后端感知池辅助（逻辑困在 llm 层 `maybe_inject_pool/3`）。
   建议上游提升到 core，非 LLM 下游（a2a/mcp）就不必复刻那 4 行门控。非 bug。
 
-### 测试覆盖缺口
+### 测试覆盖缺口 —— 已补
 
-- [ ] `beamai_a2a_server` / `beamai_a2a_handler`（agent 集成）零覆盖。
-- [ ] `beamai_rag`：`beamai_vector_store` / `beamai_rag_utils` 覆盖仍薄。
+- [x] **`beamai_a2a_handler`**（JSON-RPC 分发器，此前零直接覆盖）→ `beamai_a2a_handler_tests`
+  11 个：dispatch 路由（未知方法 -32601）、5 个方法缺 taskId → -32602、未知任务 -32001、
+  Context 错误路径不改。覆盖不依赖 agent/task/push 进程的路径。
+- [x] **`beamai_a2a_server`**（gen_server 层）→ `beamai_a2a_server_tests` 5 个：agent card、
+  handle_json / handle_request 经「JSON 解码 → dispatch」链路（-32601 / -32001 / -32700）。
+  （成功路径需 LLM/进程，由 input_required / http_handler 集成测试承担。）
+- [x] **`beamai_rag_utils`**（此前零覆盖）→ `beamai_rag_utils_tests` 8 个：类型转换、向量数学
+  （dot_product/vector_norm/safe_divide 边界）、map/列表工具。
+  （`beamai_vector_store` 已有 `beamai_vector_store_tests`，非零覆盖。）
+- 单元测试总数 520 → **544**，全过。
+
+### Live 冒烟测试（保留，未提交）
+
+> 真连外部服务的端到端验证——把 jsx→json 迁移 + gun 后端 + 连接池串起来对真实服务跑通。
+> 需相应环境/服务；examples 下手动运行，非 `rebar3 eunit` 的一部分。
+
+- [x] **`examples/src/live_minimax.erl`** — 真连 MiniMax（anthropic 兼容，需 `MINIMAX_API_KEY`）。
+  三段全过：原始 chat、agent 单轮、agent + 工具调用循环。
+  验证请求/响应/工具 schema 的 json 编解码 + gun HTTP + 池路由 + tool_calls 回灌。
+- [x] **`examples/src/live_embedding.erl`** — 真连本地 Qwen3-Embedding
+  （llama.cpp OpenAI 兼容，1024 维，`http://192.168.186.1:8080/v1/embeddings`，无需 key）。
+  三段全过：单条 embed_text、批量 embed_batch、余弦相似度语义
+  （猫-狗 0.80 > 猫-股市 0.27）。验证 embedding 路径 json 编解码 + 向量数学。
+  换服务改文件顶部 `?BASE_URL` / `?MODEL` / `?DIM` 三个宏即可。
 
 ---
 
@@ -193,10 +215,11 @@
 - [x] ~~`beamai_embeddings` 的 `rand:seed/2` 污染调用者进程字典~~ **已修**（见上方已修区）
 - [ ] stdio 传输 `stderr_to_stdout` 把 server 日志混进 JSON 流（**stdio 暂不考虑，可忽略**）
 
-### 测试覆盖缺口（非 bug，无测试）
+### 测试覆盖缺口（非 bug，无测试）—— 已于 2026-07-17 补齐，详见顶部小结
 
-- [ ] `beamai_a2a`：有 12 个测试，但 `beamai_a2a_server` / `beamai_a2a_handler`（agent 集成）零覆盖
-- [ ] `beamai_rag`：`beamai_embeddings` / `beamai_vector_store` / `beamai_rag_utils` 零覆盖
+- [x] ~~`beamai_a2a_server` / `beamai_a2a_handler` 零覆盖~~ 已补（handler 11 + server 5 测试）
+- [x] ~~`beamai_rag`：`embeddings` / `vector_store` / `rag_utils` 零覆盖~~
+  已补（rag_utils 8 测试；embeddings/vector_store 本已有测试文件）+ live embedding 冒烟
 
 ### 疑似死代码
 
