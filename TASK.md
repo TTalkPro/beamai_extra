@@ -12,6 +12,23 @@
   的 5 个调用点又套一层 encode——客户端收到「装着 JSON 的 JSON 字符串」，畸形响应。
   MCP 侧不受影响（调用方直接发送、不再套）。修：去掉那 5 处多余编码。
   新增 `beamai_a2a_server_encoding_tests`（旧代码下 2 挂、修后过）。
+- [x] **JSON-RPC batch 支持 + 约定统一（1→2→3 计划，2026-07-17）**。
+  - **① A2A batch 回归测试**：A2A 早已支持 batch（`do_handle_request({batch,_})` 折叠、
+    收集 map、边界一次性 encode），但无测试守着。新增 3 个
+    （`beamai_a2a_server_tests`：数组形状 / 保序+id对应 / 单元素不退化）。
+  - **② MCP batch 支持（此前完全没有）**。`beamai_mcp_server` 重构：把
+    `do_handle_request` 的单请求核心抽成 map 产出的 `build_response/2`（用上游
+    `beamai_jsonrpc` 的 map 构造器 + `custom_error/4`），编码统一在 `do_handle_request`
+    边界完成；新增 `{batch,_}` 子句（逐个 build → 收集 map → **一次性** encode 成 JSON
+    数组，避免元素被二次编码成字符串）；通知无 id 不产响应、全通知 → `no_response`
+    （handler/cowboy 回 202）、空数组 → invalid_request。新增 5 个
+    `beamai_mcp_server_tests`（数组保序 / 跳过通知 / 全通知no_response / 空数组 / 错误成功混合）。
+  - **③ A2A jsonrpc 错误构造器统一返回 map**（消除文档化的「两套约定相反、不能一律
+    encode」易错混用）。`beamai_a2a_jsonrpc` 9 个错误构造器去掉 encode 包装、返回 map；
+    http_handler(3处)/server(2处) 改为在 HTTP 边界统一 `encode_json`；jsonrpc 测试改为
+    直接断言 map。**MCP 侧刻意不动**：MCP server 成功路径在自己边界已 encode 成 binary，
+    若把 mcp_jsonrpc 也翻成 map 反而会在 handler 里重新制造「binary 成功 + map 错误」的
+    混用；MCP 现状（server=map内部→边界encode，decode失败路径=binary 构造器）本就自洽。
 - [x] **`grep_files/4` O(n²) → 线性** + 顺带修正**反序输出** bug。新增 grep 行为测试。
 - [x] **三份 `generate_session_id/0` 去重** → `beamai_mcp_types:new_session_id/0`。
 - [x] **三份 `get_header/2` 去重** → `beamai_mcp_types:get_header/2`。
@@ -252,12 +269,15 @@
 
 ### 已验证·未修（结构，需你拍板）
 
-- [ ] **hackney vs gun 两套传输后端并存**（~1300 行，`transport_sse`/`_sse_gun`、
-  `transport_http`/`_http_gun`）。两套都是活的（经 `beamai_mcp_transport:get_*_module/1`
-  运行时选，默认 gun）——**是重复，不是死代码**。合并是大重构非删除，取决于是否长期
-  维护两个后端。
-- [ ] **两个 JSON-RPC 模块 17 个委托重复**（`beamai_a2a_jsonrpc` vs `beamai_mcp_jsonrpc`）。
-  编码步骤有差异（a2a `jsx:encode` vs mcp `encode_map`），合并需参数化，中等价值。
+- [x] ~~**hackney vs gun 两套传输后端并存**~~ **已解决（2026-07-17）**：hackney 传输
+  已随上游 `beamai_http_hackney` 一并摘除，`apps/beamai_mcp/src/transport/` 只剩
+  `_http_gun`/`_sse_gun`/`_stdio`，`rebar.config` / `beamai_mcp_transport.erl` 里仅存
+  说明移除的注释。不再并存。
+- [ ] **两个 JSON-RPC 模块的委托重复**（`beamai_a2a_jsonrpc` vs `beamai_mcp_jsonrpc`）。
+  两者的通用委托（encode/decode/类型检查）逐字相同，但**错误构造器现约定不同**：
+  a2a 返回 **map**（边界统一 encode），mcp 返回 **binary**（decode 失败路径直接作 body）。
+  这是各自 app 用法决定的（见上方 ③ 的说明），不是可无脑合并的重复；若要合并需把
+  「返回 map / 返回 binary」参数化，中等价值、低优先。
 - [x] ~~**手写 ID 生成散落 + 进制笔误**~~ **已修（2026-07-17）**。
   `a2a_convert:generate_message_id`（`~.8b` 8 进制）、`a2a_client:generate_request_id`
   （`~.4b` 4 进制，`rand:uniform(16#FFFF)` 低熵）、`tool_todo:generate_id`（非 crypto rand）
