@@ -277,23 +277,28 @@ get_files_for_grep(Path, FilePattern) ->
     filelib:wildcard(filename:join(PathStr, "**/" ++ PatternStr)).
 
 grep_files(Files, RE, MaxResults) ->
-    grep_files(Files, RE, MaxResults, []).
+    grep_files(Files, RE, MaxResults, [], 0).
 
-grep_files([], _RE, _MaxResults, Acc) -> lists:reverse(Acc);
-grep_files(_, _RE, MaxResults, Acc) when length(Acc) >= MaxResults -> lists:reverse(Acc);
-grep_files([File | Rest], RE, MaxResults, Acc) ->
-    case filelib:is_regular(File) of
-        true ->
-            case file:read_file(File) of
-                {ok, Content} ->
-                    Matches = find_matches(Content, RE, File),
-                    NewAcc = Acc ++ lists:sublist(Matches, MaxResults - length(Acc)),
-                    grep_files(Rest, RE, MaxResults, NewAcc);
-                {error, _} ->
-                    grep_files(Rest, RE, MaxResults, Acc)
-            end;
-        false ->
-            grep_files(Rest, RE, MaxResults, Acc)
+%% Acc 反向累积、Count 随手记；末尾一次 lists:reverse 得正序结果。
+%%
+%% 旧实现每轮 `Acc ++ lists:sublist(...)`（尾追加 O(n)）+ 两次 `length(Acc)`
+%% （O(n)），对文件列表整体是 O(n²)；且它前向追加后又整体 reverse，输出其实是
+%% **反序**的（潜在 bug）。现在既线性、又是正确的文件/行顺序。
+grep_files([], _RE, _MaxResults, Acc, _Count) ->
+    lists:reverse(Acc);
+grep_files(_, _RE, MaxResults, Acc, Count) when Count >= MaxResults ->
+    lists:reverse(Acc);
+grep_files([File | Rest], RE, MaxResults, Acc, Count) ->
+    case filelib:is_regular(File) andalso file:read_file(File) of
+        {ok, Content} ->
+            Take = lists:sublist(find_matches(Content, RE, File), MaxResults - Count),
+            %% 反向前置：Take 本身正序，reverse 后前置到反向 Acc 上，
+            %% 末尾整体 reverse 即还原为正序
+            grep_files(Rest, RE, MaxResults,
+                       lists:reverse(Take) ++ Acc, Count + length(Take));
+        _ ->
+            %% 非普通文件或读取失败：跳过
+            grep_files(Rest, RE, MaxResults, Acc, Count)
     end.
 
 find_matches(Content, RE, File) ->
