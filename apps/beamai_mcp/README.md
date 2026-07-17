@@ -337,7 +337,8 @@ Config = #{
 
 - beamai_core
 - jsx
-- hackney
+- gun（HTTP/SSE 传输的后端；仅用 stdio 传输时可不启动）
+- cowboy（可选，仅 server 端 beamai_mcp_cowboy_handler 需要）
 
 ## 许可证
 

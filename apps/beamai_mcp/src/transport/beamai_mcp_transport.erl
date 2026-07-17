@@ -89,9 +89,12 @@
 %%
 %% @param Config 传输配置
 %%   - transport: stdio | sse | http
-%%   - backend: hackney | gun （可选，默认 hackney）
 %%   - 其他传输特定配置
 %% @returns {ok, Transport} | {error, Reason}
+%%
+%% 注：HTTP/SSE 传输统一走 Gun 后端（支持 HTTP/2）。原先并存的 hackney 后端
+%% （beamai_mcp_transport_http / _sse）与 Gun 版是两套重复实现，且从未成为默认，
+%% 已删除。`backend' 配置键随之废弃。
 -spec create(map()) -> {ok, transport()} | {error, term()}.
 create(#{transport := stdio} = Config) ->
     case beamai_mcp_transport_stdio:connect(Config) of
@@ -99,41 +102,19 @@ create(#{transport := stdio} = Config) ->
         Error -> Error
     end;
 create(#{transport := sse} = Config) ->
-    Module = get_sse_module(Config),
-    case Module:connect(Config) of
-        {ok, State} -> {ok, {Module, State}};
+    case beamai_mcp_transport_sse_gun:connect(Config) of
+        {ok, State} -> {ok, {beamai_mcp_transport_sse_gun, State}};
         Error -> Error
     end;
 create(#{transport := http} = Config) ->
-    Module = get_http_module(Config),
-    case Module:connect(Config) of
-        {ok, State} -> {ok, {Module, State}};
+    case beamai_mcp_transport_http_gun:connect(Config) of
+        {ok, State} -> {ok, {beamai_mcp_transport_http_gun, State}};
         Error -> Error
     end;
 create(#{transport := Transport}) ->
     {error, {unsupported_transport, Transport}};
 create(_) ->
     {error, missing_transport}.
-
-%% @private 获取 HTTP 传输模块
--spec get_http_module(map()) -> module().
-get_http_module(#{backend := hackney}) ->
-    beamai_mcp_transport_http;
-get_http_module(#{backend := gun}) ->
-    beamai_mcp_transport_http_gun;
-get_http_module(_) ->
-    %% 默认使用 gun（支持 HTTP/2）
-    beamai_mcp_transport_http_gun.
-
-%% @private 获取 SSE 传输模块
--spec get_sse_module(map()) -> module().
-get_sse_module(#{backend := hackney}) ->
-    beamai_mcp_transport_sse;
-get_sse_module(#{backend := gun}) ->
-    beamai_mcp_transport_sse_gun;
-get_sse_module(_) ->
-    %% 默认使用 gun（支持 HTTP/2）
-    beamai_mcp_transport_sse_gun.
 
 %% @doc 建立连接
 %%

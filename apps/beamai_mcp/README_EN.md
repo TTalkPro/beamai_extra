@@ -337,7 +337,8 @@ Config = #{
 
 - beamai_core
 - jsx
-- hackney
+- gun (backend for the HTTP/SSE transports; not needed for stdio-only use)
+- cowboy (optional, only for the server-side beamai_mcp_cowboy_handler)
 
 ## License
 

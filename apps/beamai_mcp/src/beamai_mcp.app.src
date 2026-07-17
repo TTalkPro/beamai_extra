@@ -11,12 +11,11 @@
         kernel,
         stdlib,
         jsx,
-        hackney,
         beamai_core
     ]},
     %% 可选依赖：
-    %% - cowboy: 仅在使用 beamai_mcp_cowboy_handler 时需要
-    %% - gun: 使用 Gun 作为 HTTP 后端时需要
+    %% - cowboy: 仅在使用 beamai_mcp_cowboy_handler（server 端）时需要
+    %% - gun: HTTP/SSE 传输的唯一后端；仅使用 stdio 传输时可不启动
     {optional_applications, [cowboy, gun]},
     {env, [
         {default_timeout, 30000},
@@ -33,10 +32,7 @@
         %% Transport (Client)
         beamai_mcp_transport,
         beamai_mcp_transport_stdio,
-        %% Hackney 后端（默认）
-        beamai_mcp_transport_sse,
-        beamai_mcp_transport_http,
-        %% Gun 后端（可选，支持 HTTP/2）
+        %% HTTP/SSE 传输：Gun 后端（HTTP/2）
         beamai_mcp_transport_sse_gun,
         beamai_mcp_transport_http_gun,
         %% Client
