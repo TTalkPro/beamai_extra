@@ -132,9 +132,71 @@
 
 ### 疑似死代码
 
-- [ ] `beamai_tool_provider_mcp`、`beamai_mcp_tool_proxy`：只在 app.src 列出，无代码引用；
-  前者文档还引用不存在的 `beamai_tool_provider` behaviour 和 `beamai_tools:get_tools/2`。
-  确认后删除或接线
+- [x] ~~`beamai_tool_provider_mcp`、`beamai_mcp_tool_proxy`~~ **仍待处理**（735 行，仅 app.src 引用、
+  无代码/测试引用；前者文档引用不存在的 `beamai_tool_provider` behaviour 和 `beamai_tools:get_tools/2`）。
+  2026-07-17 复核仍确认为死代码；删除 vs 保留为外部 API 需产品决策，暂未动。
+
+---
+
+## 优化与升级适配（2026-07-17）
+
+### 已修·有回归测试（结构优化）
+
+> 检查代码找可优化点。结论：无算法/性能热点（扫过 `length==0` 判空、循环内
+> `Acc++[X]`、循环内 `lists:member` —— 均无真实 offender），优化空间在结构层。
+
+- [x] **`beamai_tool_file:grep_files/4` 真 O(n²) → 线性**（唯一的算法优化）。
+  每轮 `Acc ++ lists:sublist(...)`（尾追加 O(n)）+ 两次 `length(Acc)`（O(n)），
+  对文件列表整体二次。改 running counter + 反向累积、末尾一次 reverse。
+  **顺带修潜在 bug**：旧实现前向追加后又整体 `lists:reverse`，输出其实是**反序**的
+  （最后一条匹配排最前）；新版是正确的文件序 + 行号递增。此前零行为测试，
+  新增 `beamai_tool_file_grep_tests`（4 例，锁正序 + max_results 截断）。
+- [x] **三份逐字节相同的 `generate_session_id/0` → 一处**。
+  `cowboy_handler` / `handler` / `server` 各一份 crypto 强随机代码，
+  收敛到 `beamai_mcp_types:new_session_id/0`。
+- [x] **三份逐字节相同的 `get_header/2`（大小写不敏感取头）→ 一处**。
+  两个 HTTP 传输 + handler 各一份，收敛到 `beamai_mcp_types:get_header/2`。
+  （`beamai_a2a_middleware` 那份**行为不同**——只小写 header 名、要求调用方传已小写的
+  Name——未并入，避免误改语义。）
+
+### 已验证·未修（结构，需你拍板）
+
+- [ ] **hackney vs gun 两套传输后端并存**（~1300 行，`transport_sse`/`_sse_gun`、
+  `transport_http`/`_http_gun`）。两套都是活的（经 `beamai_mcp_transport:get_*_module/1`
+  运行时选，默认 gun）——**是重复，不是死代码**。合并是大重构非删除，取决于是否长期
+  维护两个后端。
+- [ ] **两个 JSON-RPC 模块 17 个委托重复**（`beamai_a2a_jsonrpc` vs `beamai_mcp_jsonrpc`）。
+  编码步骤有差异（a2a `jsx:encode` vs mcp `encode_map`），合并需参数化，中等价值。
+- [ ] **手写 ID 生成散落 + 进制笔误**。`a2a_utils`/`a2a_convert`/`a2a_client`/`tool_todo`
+  各有手写版，可统一到 `beamai_id:gen_id`。附带笔误：`a2a_convert` 的 `~.8b` 是 8 进制、
+  `a2a_client` 的 `~.4b` 是 4 进制（注释都说 hex）——低熵，但这俩是 message/request id，影响小。
+- [ ] **`beamai_a2a_task` 的 `Messages/history ++ [X]` 累积**。gen_server 每次加一条 O(n)，
+  任务生命周期内 O(n²)。量级取决于单任务消息数；prepend+读时 reverse 会翻转存储序、
+  影响读者，churn/风险不小。
+
+### 上游 HTTP 连接池升级（1c6f24d..faaadb0）—— 适配
+
+> 上游把单例 HTTP 池拆成三个命名池：`http_pool_short`（短请求）/ `http_pool_stream`
+> （SSE 流）/ `http_pool_longpoll`（长轮询）。
+
+- [x] **升级零破坏，无需为兼容改动**。三下游 API 面（`beamai_http:*` /
+  `beamai_chat_completion:*` / `beamai_llm_http_client:*`）全向后兼容，`pool` 选项本就存在
+  且可选；三池由 `beamai_core_sup` 自动启动，`http_pools` 不配也有可用缺省。
+  破坏性变更只在 beamai_core 内部（`beamai_http_pool` API 加池名首参、
+  `beamai_http_gun:request_async/5` 返回值变 4 元组），beamai_extra 只经门面调用、不碰这些。
+  升级后 515 测试直接通过。
+- [x] **采纳：a2a SSE 流路由到 `http_pool_stream`**（`beamai_a2a_client:send_message_stream`）。
+  此前默认走 short 池——正是池拆分要隔离的场景（长流不占短请求池连接）。
+  **关键陷阱**：Hackney 后端把 `pool` 键当自己的池名，传 Gun 池名会指向不存在的池；
+  故本地复刻上游 `beamai_llm_http_client:maybe_inject_pool(stream,...)` 的后端门控
+  （仅 Gun 注入，显式 pool 优先）——不给 a2a 加 llm 依赖。3 个 meck 测试锁三路径。
+
+### 上游改进建议（未提，供参考）
+
+- [ ] core 的 `beamai_http` 门面**没有**后端感知的池选择辅助，那段逻辑只在上层
+  `beamai_llm_http_client:maybe_inject_pool/3`——门面注释反而指向上层函数。任何非 LLM 下游
+  （a2a、将来的 mcp）想正确路由都得复刻那 4 行门控。建议上游把它提升到 core
+  `beamai_http`（如 `stream_pool_opt/2`）。非 bug，是分层改进。
 
 ---
 
