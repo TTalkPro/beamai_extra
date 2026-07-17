@@ -149,34 +149,31 @@ is_error_test() ->
 %% 标准错误测试
 %%====================================================================
 
+%% 错误构造器现返回 **map**（HTTP 边界统一 encode），故直接断言 map。
 parse_error_test() ->
-    JsonBin = beamai_a2a_jsonrpc:parse_error(null),
-    Decoded = json:decode(JsonBin),
+    Decoded = beamai_a2a_jsonrpc:parse_error(null),
+    ?assert(is_map(Decoded)),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32700, maps:get(<<"code">>, Error)).
 
 invalid_request_test() ->
-    JsonBin = beamai_a2a_jsonrpc:invalid_request(1),
-    Decoded = json:decode(JsonBin),
+    Decoded = beamai_a2a_jsonrpc:invalid_request(1),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32600, maps:get(<<"code">>, Error)).
 
 method_not_found_test() ->
-    JsonBin = beamai_a2a_jsonrpc:method_not_found(1, <<"unknown/method">>),
-    Decoded = json:decode(JsonBin),
+    Decoded = beamai_a2a_jsonrpc:method_not_found(1, <<"unknown/method">>),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32601, maps:get(<<"code">>, Error)),
     ?assertEqual(<<"unknown/method">>, maps:get(<<"method">>, maps:get(<<"data">>, Error))).
 
 invalid_params_test() ->
-    JsonBin = beamai_a2a_jsonrpc:invalid_params(1, <<"Missing taskId">>),
-    Decoded = json:decode(JsonBin),
+    Decoded = beamai_a2a_jsonrpc:invalid_params(1, <<"Missing taskId">>),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32602, maps:get(<<"code">>, Error)).
 
 internal_error_test() ->
-    JsonBin = beamai_a2a_jsonrpc:internal_error(1),
-    Decoded = json:decode(JsonBin),
+    Decoded = beamai_a2a_jsonrpc:internal_error(1),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32603, maps:get(<<"code">>, Error)).
 
@@ -185,21 +182,18 @@ internal_error_test() ->
 %%====================================================================
 
 task_not_found_error_test() ->
-    JsonBin = beamai_a2a_jsonrpc:task_not_found(1, <<"task-123">>),
-    Decoded = json:decode(JsonBin),
+    Decoded = beamai_a2a_jsonrpc:task_not_found(1, <<"task-123">>),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32001, maps:get(<<"code">>, Error)),
     ?assertEqual(<<"task-123">>, maps:get(<<"taskId">>, maps:get(<<"data">>, Error))).
 
 task_already_completed_error_test() ->
-    JsonBin = beamai_a2a_jsonrpc:task_already_completed(1, <<"task-456">>),
-    Decoded = json:decode(JsonBin),
+    Decoded = beamai_a2a_jsonrpc:task_already_completed(1, <<"task-456">>),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32002, maps:get(<<"code">>, Error)).
 
 invalid_state_transition_error_test() ->
-    JsonBin = beamai_a2a_jsonrpc:invalid_state_transition(1, completed, working),
-    Decoded = json:decode(JsonBin),
+    Decoded = beamai_a2a_jsonrpc:invalid_state_transition(1, completed, working),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32003, maps:get(<<"code">>, Error)),
     Data = maps:get(<<"data">>, Error),
@@ -207,8 +201,7 @@ invalid_state_transition_error_test() ->
     ?assertEqual(<<"working">>, maps:get(<<"to">>, Data)).
 
 authentication_required_error_test() ->
-    JsonBin = beamai_a2a_jsonrpc:authentication_required(1),
-    Decoded = json:decode(JsonBin),
+    Decoded = beamai_a2a_jsonrpc:authentication_required(1),
     Error = maps:get(<<"error">>, Decoded),
     ?assertEqual(-32004, maps:get(<<"code">>, Error)).
 

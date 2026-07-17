@@ -152,36 +152,40 @@ is_batch(Msg) ->
     beamai_jsonrpc:is_batch(Msg).
 
 %%====================================================================
-%% 委托实现 - 标准错误（返回编码后的 binary）
+%% 委托实现 - 标准错误（返回响应 **map**）
+%%
+%% 统一返回 map：调用方在 HTTP 边界统一 encode_json（与 handler 分发出的
+%% 错误 map、成功响应 map 同一约定）。此前这些返回已编码 binary，导致
+%% http_handler/server 里"部分分支 encode、部分不 encode"的易错混用。
 %%====================================================================
 
 %% @doc 构造解析错误
--spec parse_error(term()) -> binary().
+-spec parse_error(term()) -> map().
 parse_error(Id) ->
-    beamai_utils:encode_json(beamai_jsonrpc:parse_error(Id)).
+    beamai_jsonrpc:parse_error(Id).
 
 %% @doc 构造无效请求错误
--spec invalid_request(term()) -> binary().
+-spec invalid_request(term()) -> map().
 invalid_request(Id) ->
-    beamai_utils:encode_json(beamai_jsonrpc:invalid_request(Id)).
+    beamai_jsonrpc:invalid_request(Id).
 
 %% @doc 构造方法未找到错误
--spec method_not_found(term(), binary()) -> binary().
+-spec method_not_found(term(), binary()) -> map().
 method_not_found(Id, Method) ->
-    beamai_utils:encode_json(beamai_jsonrpc:method_not_found(Id, Method)).
+    beamai_jsonrpc:method_not_found(Id, Method).
 
 %% @doc 构造无效参数错误
--spec invalid_params(term(), binary()) -> binary().
+-spec invalid_params(term(), binary()) -> map().
 invalid_params(Id, Details) ->
-    beamai_utils:encode_json(beamai_jsonrpc:invalid_params(Id, Details)).
+    beamai_jsonrpc:invalid_params(Id, Details).
 
 %% @doc 构造内部错误
--spec internal_error(term()) -> binary().
+-spec internal_error(term()) -> map().
 internal_error(Id) ->
-    beamai_utils:encode_json(beamai_jsonrpc:internal_error(Id)).
+    beamai_jsonrpc:internal_error(Id).
 
 %%====================================================================
-%% A2A 特定错误构造函数（返回编码后的 binary）
+%% A2A 特定错误构造函数（返回响应 **map**）
 %%====================================================================
 
 %% @doc 构造任务未找到错误
@@ -190,11 +194,11 @@ internal_error(Id) ->
 %%
 %% @param Id 请求 ID
 %% @param TaskId 未找到的任务 ID
-%% @returns JSON 编码的错误响应
--spec task_not_found(term(), binary()) -> binary().
+%% @returns JSON-RPC 错误响应 map
+-spec task_not_found(term(), binary()) -> map().
 task_not_found(Id, TaskId) ->
-    beamai_utils:encode_json(beamai_jsonrpc:custom_error(Id, ?TASK_NOT_FOUND, <<"Task not found">>,
-                                          #{<<"taskId">> => TaskId})).
+    beamai_jsonrpc:custom_error(Id, ?TASK_NOT_FOUND, <<"Task not found">>,
+                                #{<<"taskId">> => TaskId}).
 
 %% @doc 构造任务已完成错误
 %%
@@ -202,11 +206,11 @@ task_not_found(Id, TaskId) ->
 %%
 %% @param Id 请求 ID
 %% @param TaskId 已完成的任务 ID
-%% @returns JSON 编码的错误响应
--spec task_already_completed(term(), binary()) -> binary().
+%% @returns JSON-RPC 错误响应 map
+-spec task_already_completed(term(), binary()) -> map().
 task_already_completed(Id, TaskId) ->
-    beamai_utils:encode_json(beamai_jsonrpc:custom_error(Id, ?TASK_ALREADY_COMPLETED, <<"Task already completed">>,
-                                          #{<<"taskId">> => TaskId})).
+    beamai_jsonrpc:custom_error(Id, ?TASK_ALREADY_COMPLETED, <<"Task already completed">>,
+                                #{<<"taskId">> => TaskId}).
 
 %% @doc 构造无效状态转换错误
 %%
@@ -215,21 +219,21 @@ task_already_completed(Id, TaskId) ->
 %% @param Id 请求 ID
 %% @param FromState 原状态
 %% @param ToState 目标状态
-%% @returns JSON 编码的错误响应
--spec invalid_state_transition(term(), atom(), atom()) -> binary().
+%% @returns JSON-RPC 错误响应 map
+-spec invalid_state_transition(term(), atom(), atom()) -> map().
 invalid_state_transition(Id, FromState, ToState) ->
-    beamai_utils:encode_json(beamai_jsonrpc:custom_error(Id, ?INVALID_STATE_TRANSITION, <<"Invalid state transition">>,
-                                          #{
-                                              <<"from">> => beamai_a2a_types:task_state_to_binary(FromState),
-                                              <<"to">> => beamai_a2a_types:task_state_to_binary(ToState)
-                                          })).
+    beamai_jsonrpc:custom_error(Id, ?INVALID_STATE_TRANSITION, <<"Invalid state transition">>,
+                                #{
+                                    <<"from">> => beamai_a2a_types:task_state_to_binary(FromState),
+                                    <<"to">> => beamai_a2a_types:task_state_to_binary(ToState)
+                                }).
 
 %% @doc 构造需要认证错误
 %%
 %% 错误码: -32004
 %%
 %% @param Id 请求 ID
-%% @returns JSON 编码的错误响应
--spec authentication_required(term()) -> binary().
+%% @returns JSON-RPC 错误响应 map
+-spec authentication_required(term()) -> map().
 authentication_required(Id) ->
-    beamai_utils:encode_json(beamai_jsonrpc:custom_error(Id, ?AUTHENTICATION_REQUIRED, <<"Authentication required">>, null)).
+    beamai_jsonrpc:custom_error(Id, ?AUTHENTICATION_REQUIRED, <<"Authentication required">>, null).

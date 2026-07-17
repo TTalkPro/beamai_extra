@@ -144,25 +144,23 @@ handle_post(Body, Headers, #handler_state{server_pid = ServerPid} = State) ->
                     {error, rate_limited, beamai_utils:encode_json(ErrorResponse), RespHeaders, State};
 
                 {error, _Reason, RateLimitInfo} ->
-                    %% 其他错误
+                    %% 其他错误。jsonrpc 错误构造器现统一返回 map，与上面
+                    %% auth_error/rate_limited 的 middleware 错误 map 同一约定，
+                    %% 一律在此 encode_json（不再有"部分分支 encode"的混用）。
                     RespHeaders = merge_headers(BaseHeaders, build_rate_limit_headers(RateLimitInfo)),
-                    %% internal_error/1 已返回编码好的 binary，不能再 encode_json（否则双重编码）。
-                    %% 对比上面 auth_error/rate_limited：那两条走 middleware 的
-                    %% make_*_error_response（返回 **map**），才需要 encode——
-                    %% a2a 两套错误构造器返回约定相反，别一律 encode。
                     ErrorResp = beamai_a2a_jsonrpc:internal_error(maps:get(<<"id">>, Request, null)),
-                    {ok, ErrorResp, RespHeaders, State}
+                    {ok, beamai_utils:encode_json(ErrorResp), RespHeaders, State}
             end;
 
         {error, parse_error} ->
-            %% JSON 解析错误。parse_error/1 已是 binary，勿再 encode。
+            %% JSON 解析错误
             ErrorResp = beamai_a2a_jsonrpc:parse_error(null),
-            {error, parse_error, ErrorResp, BaseHeaders, State};
+            {error, parse_error, beamai_utils:encode_json(ErrorResp), BaseHeaders, State};
 
         {error, _Reason} ->
-            %% 无效请求。invalid_request/1 已是 binary，勿再 encode。
+            %% 无效请求
             ErrorResp = beamai_a2a_jsonrpc:invalid_request(null),
-            {error, parse_error, ErrorResp, BaseHeaders, State}
+            {error, parse_error, beamai_utils:encode_json(ErrorResp), BaseHeaders, State}
     end.
 
 %% @doc 处理 Agent Card 请求
