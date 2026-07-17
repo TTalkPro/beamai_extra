@@ -379,8 +379,9 @@ do_rpc_request(Endpoint, RequestJson, Opts) ->
 %% 且逻辑仅 4 行：
 %%   - 调用方在 Opts 里显式给了 pool → 原样透传（视为它对后端知情）；
 %%   - 否则仅当活动后端是 Gun 才注入 http_pool_stream。
-%%     **关键**：Hackney 后端把 pool 键当 hackney 池名，传 Gun 池名会指向不存在的
-%%     hackney 池，故非 Gun 后端一律不注入（见 beamai_http.erl 的池选择注释）。
+%%     **关键**：http_pool_stream 是 beamai_core_sup 起的 Gun 池，池名只对 Gun 后端
+%%     有意义。上游 beamai_http 仍允许经 set_env 切到别的后端，那些后端会把 pool 键
+%%     解释成自己的池名而指向不存在的池，故非 Gun 后端一律不注入。
 -spec maybe_stream_pool(options(), map()) -> map().
 maybe_stream_pool(Opts, HttpOpts) ->
     case maps:find(pool, Opts) of
@@ -396,9 +397,10 @@ maybe_stream_pool(Opts, HttpOpts) ->
 %% @private 生成请求 ID
 -spec generate_request_id() -> binary().
 generate_request_id() ->
-    Timestamp = erlang:system_time(microsecond),
-    Random = rand:uniform(16#FFFF),
-    iolist_to_binary(io_lib:format("req-~.16b-~.4b", [Timestamp, Random])).
+    %% 委托 beamai_id:gen_id（crypto 强随机 + 时间戳）。旧实现是
+    %% `~.16b-~.4b'——`~.4b' 是 **4 进制**（注释暗示 hex），随机部分
+    %% `rand:uniform(16#FFFF)' 熵极低。JSON-RPC id 只需唯一、可回环，格式不限。
+    beamai_id:gen_id(<<"req">>).
 
 %% @private 处理 SSE 数据块
 -spec handle_sse_chunk(binary(), map(), stream_callback()) ->

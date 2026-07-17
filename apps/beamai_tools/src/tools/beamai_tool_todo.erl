@@ -121,8 +121,9 @@ add_metadata(Todo) ->
     }.
 
 generate_id() ->
-    Rand = rand:uniform(16#FFFFFFFF),
-    iolist_to_binary(io_lib:format("todo_~8.16.0b", [Rand])).
+    %% 委托 beamai_id:gen_id（crypto 强随机 + 时间戳）。旧实现格式正确（hex）但用
+    %% 非 crypto 的 rand:uniform，且仅 32 bit 随机，并发建多条 todo 有撞的可能。
+    beamai_id:gen_id(<<"todo">>).
 
 compute_stats(Todos) ->
     Total = length(Todos),

@@ -265,5 +265,7 @@ normalize_part(Part) when is_map(Part) ->
 %% @returns 消息 ID 二进制字符串
 -spec generate_message_id() -> binary().
 generate_message_id() ->
-    Random = rand:uniform(16#FFFFFFFF),
-    iolist_to_binary(io_lib:format("msg-~.8b", [Random])).
+    %% 委托 beamai_id:gen_id（crypto 强随机 + 时间戳）。旧实现是
+    %% `rand:uniform + ~.8b'——`~.8b' 是 **8 进制**（注释暗示 hex），且非 crypto，
+    %% 熵低易撞。
+    beamai_id:gen_id(<<"msg">>).
