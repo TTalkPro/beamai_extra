@@ -61,8 +61,13 @@
 
 - [ ] **两个 JSON-RPC 模块 17 个委托重复**。细看后：这些封装在上游 map 之上加了「编码成
   binary」，**不是纯样板**；合并要么造跨 app 耦合、要么参数化，低价值。**建议不动。**
-- [ ] **`beamai_a2a_task` 的 `++[X]` 累积**（O(n²)）。单任务生命周期内量级小、prepend+读时
-  reverse 会翻转存储序影响读者，churn/风险 > 收益。**建议不动。**
+- [x] ~~**`beamai_a2a_task` 的 `++[X]` 累积**（O(n²)）~~ **已修（2026-07-17）**。
+  三处 `List ++ [X]`（messages/history/artifacts）改为 **newest-first prepend**（O(1)），
+  唯一读出口 `state_to_map/1` 统一 `lists:reverse`。批量产出物路径用
+  `lists:reverse(Batch) ++ Existing`（成本只与批量大小相关）。核实过读者只有
+  `state_to_map`（record 私有、跨模块只经 get_task 拿到已还原的时间序 map），无副作用。
+  新增 4 个顺序回归测试（多条 add 保序 / init 消息仍居首 / 批量产出物保序）；
+  既有 `status_history_test` 作为翻转守卫仍绿。556 测试全过、Dialyzer 无新增警告。
 
 ### 新发现·待清理 —— 已核实为**误报**，无需处理
 
@@ -285,9 +290,9 @@
   call site 不动。核实过无格式依赖（无代码解析 req-/msg-/todo_ 前缀，request_id 是 JSON-RPC
   opaque id）。`a2a_utils:generate_id`（标准 UUID v4 + crypto，本身没问题）未动——它属"疑似死代码"另议。
   323 个受影响 app 测试全过。
-- [ ] **`beamai_a2a_task` 的 `Messages/history ++ [X]` 累积**。gen_server 每次加一条 O(n)，
-  任务生命周期内 O(n²)。量级取决于单任务消息数；prepend+读时 reverse 会翻转存储序、
-  影响读者，churn/风险不小。
+- [x] ~~**`beamai_a2a_task` 的 `Messages/history ++ [X]` 累积**~~ **已修（2026-07-17）**，
+  详见顶部「与上游统一 + 优化」小结：newest-first prepend + `state_to_map` 单点 reverse，
+  4 个顺序回归测试守着。
 
 ### 上游 HTTP 连接池升级（1c6f24d..faaadb0）—— 适配
 
