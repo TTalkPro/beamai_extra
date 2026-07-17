@@ -164,7 +164,10 @@ handle_json(Server, JsonBin) ->
                     {error, Reason}
             end;
         {error, parse_error} ->
-            {ok, jsx:encode(beamai_a2a_jsonrpc:parse_error(null), [])};
+            %% parse_error/1 已返回编码好的 binary，不能再 jsx:encode（否则双重编码：
+            %% 客户端收到的是"装着 JSON 的 JSON 字符串"）。成功路径的 Response 是 map，
+            %% 才需要编码——两者最终都产出 binary body。
+            {ok, beamai_a2a_jsonrpc:parse_error(null)};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -235,8 +238,8 @@ handle_json_with_auth(Server, JsonBin, Headers) ->
                     {error, Type, jsx:encode(Response, [])}
             end;
         {error, parse_error} ->
-            %% 解析错误不需要认证检查
-            {error, parse_error, jsx:encode(beamai_a2a_jsonrpc:parse_error(null), [])};
+            %% 解析错误不需要认证检查。parse_error/1 已是编码好的 binary，勿再 encode。
+            {error, parse_error, beamai_a2a_jsonrpc:parse_error(null)};
         {error, Reason} ->
             {error, Reason, #{}}
     end.
