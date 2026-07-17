@@ -10,7 +10,6 @@
     {applications, [
         kernel,
         stdlib,
-        jsx,
         beamai_core
     ]},
     %% 可选依赖：

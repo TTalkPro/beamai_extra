@@ -2,7 +2,7 @@
     {description, "BeamAI Tools System - Tools, Middleware, and Tool Modules"},
     {vsn, "1.0.0"},
     {registered, []},
-    {applications, [kernel, stdlib, jsx, beamai_core, beamai_llm]},
+    {applications, [kernel, stdlib, beamai_core, beamai_llm]},
     {env, []},
     {modules, []}
 ]}.

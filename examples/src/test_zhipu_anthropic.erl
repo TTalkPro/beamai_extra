@@ -266,8 +266,7 @@ test_agent_with_tools() ->
 %%====================================================================
 
 ensure_apps() ->
-    application:ensure_all_started(jsx),
-    application:ensure_all_started(hackney),
+    %% JSON 用 OTP 27 stdlib json（无需 app）；HTTP 后端用 gun。jsx/hackney 已移除。
     application:ensure_all_started(gun),
     application:ensure_all_started(beamai_core).
 
