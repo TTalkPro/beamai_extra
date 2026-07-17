@@ -210,8 +210,8 @@ receive_response(Ref, Timeout, State) ->
             {error, {http_error, Status, Reason}};
         {hackney_response, Ref, {headers, Headers}} ->
             %% 检查 Content-Type 和 Session-Id
-            ContentType = get_header(Headers, <<"content-type">>),
-            NewSessionId = get_header(Headers, <<"mcp-session-id">>),
+            ContentType = beamai_mcp_types:get_header(Headers, <<"content-type">>),
+            NewSessionId = beamai_mcp_types:get_header(Headers, <<"mcp-session-id">>),
             NewState = case NewSessionId of
                 undefined -> State;
                 _ -> State#http_state{session_id = NewSessionId}
@@ -294,15 +294,6 @@ receive_sse_response(Ref, Timeout, #http_state{buffer = Buffer} = State) ->
     after Timeout ->
         hackney:close(Ref),
         {error, timeout}
-    end.
-
-%% @private 获取响应头
--spec get_header([{binary(), binary()}], binary()) -> binary() | undefined.
-get_header(Headers, Name) ->
-    LowerName = string:lowercase(Name),
-    case lists:keyfind(LowerName, 1, [{string:lowercase(K), V} || {K, V} <- Headers]) of
-        {_, Value} -> Value;
-        false -> undefined
     end.
 
 %% @private 检查是否为 SSE Content-Type

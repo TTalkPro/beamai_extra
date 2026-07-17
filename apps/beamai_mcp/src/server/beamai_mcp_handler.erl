@@ -139,7 +139,7 @@ handle_post(Body, Headers, State) ->
 -spec handle_post(binary(), [{binary(), binary()}], boolean(), handler_state()) -> response().
 handle_post(Body, Headers, AcceptSSE, #handler_state{server_pid = ServerPid} = State) ->
     %% 提取会话 ID
-    SessionId = get_header(Headers, <<"mcp-session-id">>),
+    SessionId = beamai_mcp_types:get_header(Headers, <<"mcp-session-id">>),
     NewState = State#handler_state{session_id = SessionId},
 
     %% 解码请求
@@ -268,20 +268,13 @@ close(#handler_state{server_pid = ServerPid}) ->
 %% @private 检查是否接受 SSE
 -spec accepts_sse([{binary(), binary()}]) -> boolean().
 accepts_sse(Headers) ->
-    case get_header(Headers, <<"accept">>) of
+    case beamai_mcp_types:get_header(Headers, <<"accept">>) of
         undefined -> false;
         Accept ->
             binary:match(Accept, <<"text/event-stream">>) =/= nomatch
     end.
 
 %% @private 获取请求头
--spec get_header([{binary(), binary()}], binary()) -> binary() | undefined.
-get_header(Headers, Name) ->
-    LowerName = string:lowercase(Name),
-    case lists:keyfind(LowerName, 1, [{string:lowercase(K), V} || {K, V} <- Headers]) of
-        {_, Value} -> Value;
-        false -> undefined
-    end.
 
 %% @private 可能更新会话 ID
 -spec maybe_update_session_id(handler_state()) -> handler_state().
@@ -294,3 +287,4 @@ maybe_update_session_id(#handler_state{session_id = undefined, server_pid = Serv
     end;
 maybe_update_session_id(State) ->
     State.
+

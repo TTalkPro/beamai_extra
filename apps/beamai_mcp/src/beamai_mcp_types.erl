@@ -83,6 +83,9 @@
 %% 会话工具
 -export([new_session_id/0]).
 
+%% HTTP 工具
+-export([get_header/2]).
+
 %%====================================================================
 %% 类型定义
 %%
@@ -468,3 +471,15 @@ add_capability(Map, Key, SubCaps) when is_map(SubCaps) ->
 new_session_id() ->
     Hex = binary:encode_hex(crypto:strong_rand_bytes(16), lowercase),
     <<"mcp-", Hex/binary>>.
+
+%% @doc 大小写不敏感地从 HTTP 头列表取值，缺失返回 undefined。
+%%
+%% 早前 transport_http / transport_http_gun / handler 各有一份逐字节相同的实现，
+%% 这里收敛为单一来源。
+-spec get_header([{binary(), binary()}], binary()) -> binary() | undefined.
+get_header(Headers, Name) ->
+    LowerName = string:lowercase(Name),
+    case lists:keyfind(LowerName, 1, [{string:lowercase(K), V} || {K, V} <- Headers]) of
+        {_, Value} -> Value;
+        false -> undefined
+    end.

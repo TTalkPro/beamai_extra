@@ -233,8 +233,8 @@ receive_response(ConnPid, StreamRef, Timeout, State) ->
         {gun_response, ConnPid, StreamRef, nofin, Status, Headers}
           when Status >= 200, Status < 300 ->
             %% 检查 Content-Type 和 Session-Id
-            ContentType = get_header(Headers, <<"content-type">>),
-            NewSessionId = get_header(Headers, <<"mcp-session-id">>),
+            ContentType = beamai_mcp_types:get_header(Headers, <<"content-type">>),
+            NewSessionId = beamai_mcp_types:get_header(Headers, <<"mcp-session-id">>),
             NewState = case NewSessionId of
                 undefined -> State;
                 _ -> State#http_gun_state{session_id = NewSessionId}
@@ -321,13 +321,6 @@ receive_sse_response(ConnPid, StreamRef, Timeout, #http_gun_state{buffer = Buffe
     end.
 
 %% @private 获取响应头
--spec get_header([{binary(), binary()}], binary()) -> binary() | undefined.
-get_header(Headers, Name) ->
-    LowerName = string:lowercase(Name),
-    case lists:keyfind(LowerName, 1, [{string:lowercase(K), V} || {K, V} <- Headers]) of
-        {_, Value} -> Value;
-        false -> undefined
-    end.
 
 %% @private 检查是否为 SSE Content-Type
 -spec is_sse_content_type(binary() | undefined) -> boolean().
