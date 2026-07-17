@@ -6,7 +6,6 @@
         kernel,
         stdlib,
         jsx,
-        hackney,
         crypto,
         beamai_core,
         beamai_agent

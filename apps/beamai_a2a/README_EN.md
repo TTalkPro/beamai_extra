@@ -267,8 +267,9 @@ submitted -> working -> completed
 - beamai_core
 - beamai_llm
 - jsx
-- hackney
 - cowboy (optional, for HTTP service)
+
+HTTP requests go through the `beamai_http` abstraction rather than a specific client; the backend is supplied by beamai_core (Gun by default).
 
 ## License
 

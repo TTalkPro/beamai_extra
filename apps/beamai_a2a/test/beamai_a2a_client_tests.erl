@@ -34,7 +34,7 @@ client_test_() ->
         {"任务取消测试", fun test_cancel_task/0},
         {"错误处理测试", fun test_error_handling/0},
         {"流式请求 Gun 后端走 stream 池", fun test_stream_pool_gun/0},
-        {"流式请求 Hackney 后端不注入池", fun test_stream_pool_hackney/0},
+        {"流式请求非 Gun 后端不注入池", fun test_stream_pool_non_gun/0},
         {"流式请求显式 pool 优先", fun test_stream_pool_explicit/0}
      ]}.
 
@@ -339,8 +339,11 @@ test_stream_pool_gun() ->
     beamai_a2a_client:send_message_stream(<<"https://x/a2a">>, Msg, fun(_) -> ok end, #{}),
     ?assertEqual({ok, http_pool_stream}, captured_pool()).
 
-test_stream_pool_hackney() ->
-    meck:expect(beamai_http, get_backend, fun() -> beamai_http_hackney end),
+test_stream_pool_non_gun() ->
+    %% maybe_stream_pool 的门控是 `beamai_http_gun -> 注入; _ -> 不注入'——
+    %% catch-all 分支对任意非 Gun 后端行为一致，故用占位原子表达该契约，
+    %% 不绑定到具体后端模块。
+    meck:expect(beamai_http, get_backend, fun() -> beamai_http_other end),
     mock_stream_capture(),
     Msg = beamai_a2a_client:create_text_message(<<"hi">>),
     beamai_a2a_client:send_message_stream(<<"https://x/a2a">>, Msg, fun(_) -> ok end, #{}),

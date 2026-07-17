@@ -327,8 +327,9 @@ IsoTs = beamai_a2a_utils:timestamp_iso8601(),
 - beamai_core
 - beamai_llm
 - jsx
-- hackney
 - cowboy（可选，用于 HTTP 服务）
+
+HTTP 请求经 `beamai_http` 抽象层发出，不直接依赖具体客户端；后端由 beamai_core 提供（默认 Gun）。
 
 ## 许可证
 
