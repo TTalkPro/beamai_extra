@@ -25,7 +25,12 @@ beamai_mcp_server_test_() ->
       fun test_prompts_list/1,
       fun test_prompts_get/1,
       fun test_register_unregister/1,
-      fun test_uninitialized_error/1
+      fun test_uninitialized_error/1,
+      fun test_batch_returns_array/1,
+      fun test_batch_skips_notifications/1,
+      fun test_batch_all_notifications/1,
+      fun test_batch_empty/1,
+      fun test_batch_error_and_success_mixed/1
      ]}.
 
 setup() ->
@@ -445,8 +450,88 @@ test_uninitialized_error(Pid) ->
     end}.
 
 %%====================================================================
+%% 批处理测试（JSON-RPC 2.0 batch）
+%%
+%% 关键不变量：批处理响应是 JSON **数组**，每元素为独立响应对象、只编码一次；
+%% 通知（无 id）不产生响应；全通知 → 无响应体（no_response）；空数组 → 非法请求。
+%% 此前 MCP 完全无 batch 支持（do_handle_request 无 {batch,_} 子句，会落到
+%% invalid_request）。这些测试守住重构后的行为。
+%%====================================================================
+
+test_batch_returns_array(Pid) ->
+    {"批处理返回数组且保序", fun() ->
+        initialize_server(Pid),
+        Batch = {batch, [
+            rpc(101, <<"ping">>, #{}),
+            rpc(102, <<"tools/list">>, #{}),
+            rpc(103, <<"ping">>, #{})
+        ]},
+        {ok, Bin} = beamai_mcp_server:handle_request(Pid, Batch),
+        Decoded = json:decode(Bin),
+        ?assert(is_list(Decoded)),                 %% ← 双重编码时这里会是 binary
+        ?assertEqual(3, length(Decoded)),
+        ?assertEqual([101, 102, 103], [maps:get(<<"id">>, R) || R <- Decoded]),
+        [?assert(is_map(R)) || R <- Decoded]
+    end}.
+
+test_batch_skips_notifications(Pid) ->
+    {"批处理跳过通知（无 id 不产生响应）", fun() ->
+        initialize_server(Pid),
+        Batch = {batch, [
+            rpc(201, <<"ping">>, #{}),
+            notif(<<"notifications/initialized">>, #{}),
+            rpc(202, <<"ping">>, #{})
+        ]},
+        {ok, Bin} = beamai_mcp_server:handle_request(Pid, Batch),
+        Decoded = json:decode(Bin),
+        ?assertEqual([201, 202], [maps:get(<<"id">>, R) || R <- Decoded])
+    end}.
+
+test_batch_all_notifications(Pid) ->
+    {"全是通知 → 无响应体 no_response", fun() ->
+        Batch = {batch, [
+            notif(<<"notifications/initialized">>, #{}),
+            notif(<<"notifications/cancelled">>, #{<<"requestId">> => 1})
+        ]},
+        ?assertEqual({ok, no_response},
+                     beamai_mcp_server:handle_request(Pid, Batch))
+    end}.
+
+test_batch_empty(Pid) ->
+    {"空批处理数组 → 非法请求 -32600", fun() ->
+        {ok, Bin} = beamai_mcp_server:handle_request(Pid, {batch, []}),
+        Decoded = json:decode(Bin),
+        ?assert(is_map(Decoded)),
+        ?assertEqual(?MCP_ERROR_INVALID_REQUEST,
+                     maps:get(<<"code">>, maps:get(<<"error">>, Decoded)))
+    end}.
+
+test_batch_error_and_success_mixed(Pid) ->
+    {"批处理内错误与成功共存，各自独立", fun() ->
+        initialize_server(Pid),
+        Batch = {batch, [
+            rpc(301, <<"ping">>, #{}),
+            rpc(302, <<"no/such/method">>, #{})
+        ]},
+        {ok, Bin} = beamai_mcp_server:handle_request(Pid, Batch),
+        [R1, R2] = json:decode(Bin),
+        ?assertEqual(301, maps:get(<<"id">>, R1)),
+        ?assert(maps:is_key(<<"result">>, R1)),
+        ?assertEqual(302, maps:get(<<"id">>, R2)),
+        ?assertEqual(?MCP_ERROR_METHOD_NOT_FOUND,
+                     maps:get(<<"code">>, maps:get(<<"error">>, R2)))
+    end}.
+
+%%====================================================================
 %% 辅助函数
 %%====================================================================
+
+rpc(Id, Method, Params) ->
+    #{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
+      <<"method">> => Method, <<"params">> => Params}.
+
+notif(Method, Params) ->
+    #{<<"jsonrpc">> => <<"2.0">>, <<"method">> => Method, <<"params">> => Params}.
 
 initialize_server(Pid) ->
     InitRequest = #{

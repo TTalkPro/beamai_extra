@@ -115,7 +115,9 @@ stop(Pid) ->
 %% @param Pid 服务器进程
 %% @param Request JSON 请求（binary 或已解码的 map）
 %% @returns {ok, Response} | {error, Reason}
--spec handle_request(pid(), binary() | map()) -> {ok, binary()} | {error, term()}.
+%% 返回 {ok, no_response} 表示无响应体（批处理内全是通知）——调用方应回 202/204。
+-spec handle_request(pid(), binary() | map() | {batch, [map()]}) ->
+    {ok, binary() | no_response} | {error, term()}.
 handle_request(Pid, Request) when is_binary(Request) ->
     case beamai_mcp_jsonrpc:decode(Request) of
         {ok, Decoded} ->
@@ -123,6 +125,8 @@ handle_request(Pid, Request) when is_binary(Request) ->
         {error, _} = Error ->
             Error
     end;
+handle_request(Pid, {batch, _} = Request) ->
+    gen_server:call(Pid, {handle_request, Request});
 handle_request(Pid, Request) when is_map(Request) ->
     gen_server:call(Pid, {handle_request, Request}).
 
@@ -280,26 +284,60 @@ code_change(_OldVsn, State, _Extra) ->
 %% 内部函数 - 请求处理
 %%====================================================================
 
-%% @private 处理请求
-do_handle_request(#{<<"id">> := Id, <<"method">> := Method} = Req, State) ->
+%% @private 处理请求（单个或批处理），产出可直接作为 HTTP body 的 binary
+%%          （或 no_response 表示无响应体）。
+%%
+%% 单个请求：产出一个响应对象的 JSON。
+%% 批处理（JSON-RPC 2.0）：逐个处理，收集有响应的对象（通知不产生响应），
+%%   最后**一次性**编码为 JSON 数组——关键是先收集 map 再统一 encode，
+%%   若每个响应先各自编码成 binary 再塞进数组，数组元素会被二次编码成字符串。
+%% 空数组 / 全是通知：按规范分别为 invalid_request / 无响应体。
+do_handle_request({batch, []}, State) ->
+    %% 空批处理数组是非法请求
+    {beamai_mcp_jsonrpc:invalid_request(null), State};
+do_handle_request({batch, Requests}, State) ->
+    {RevResponses, NewState} =
+        lists:foldl(
+          fun(Req, {Acc, S}) ->
+              case build_response(Req, S) of
+                  {no_response, S1} -> {Acc, S1};
+                  {RespMap, S1} -> {[RespMap | Acc], S1}
+              end
+          end, {[], State}, Requests),
+    case RevResponses of
+        [] -> {no_response, NewState};   %% 全是通知：无响应体，调用方回 202/204
+        _  -> {beamai_utils:encode_json(lists:reverse(RevResponses)), NewState}
+    end;
+do_handle_request(Request, State) ->
+    case build_response(Request, State) of
+        {no_response, NewState} -> {no_response, NewState};
+        {RespMap, NewState} -> {beamai_utils:encode_json(RespMap), NewState}
+    end.
+
+%% @private 处理单个请求，产出响应 **map**（通知返回 no_response，均不编码）。
+%%          编码由 do_handle_request 在边界统一完成，使批处理能一次性编码为数组。
+build_response(#{<<"id">> := Id, <<"method">> := Method} = Req, State) ->
     Params = maps:get(<<"params">>, Req, #{}),
     case dispatch_method(Method, Params, Id, State) of
         {ok, Result, NewState} ->
-            Response = beamai_mcp_jsonrpc:encode_response(Id, Result),
-            {Response, NewState};
+            {response_map(Id, Result), NewState};
         {error, Code, Message, NewState} ->
-            Response = beamai_mcp_jsonrpc:encode_error(Id, Code, Message),
-            {Response, NewState};
+            {beamai_jsonrpc:custom_error(Id, Code, Message, null), NewState};
         {error, Code, Message, Data, NewState} ->
-            Response = beamai_mcp_jsonrpc:encode_error(Id, Code, Message, Data),
-            {Response, NewState}
+            {beamai_jsonrpc:custom_error(Id, Code, Message, Data), NewState}
     end;
-do_handle_request(#{<<"id">> := Id}, State) ->
-    Response = beamai_mcp_jsonrpc:invalid_request(Id),
-    {Response, State};
-do_handle_request(_, State) ->
-    Response = beamai_mcp_jsonrpc:invalid_request(null),
-    {Response, State}.
+build_response(#{<<"method">> := _} = Notification, State) ->
+    %% 批处理中的通知（有 method 无 id）：执行副作用，不产生响应
+    NewState = do_handle_notification(Notification, State),
+    {no_response, NewState};
+build_response(#{<<"id">> := Id}, State) ->
+    {beamai_jsonrpc:invalid_request(Id), State};
+build_response(_, State) ->
+    {beamai_jsonrpc:invalid_request(null), State}.
+
+%% @private JSON-RPC 成功响应 map（beamai_jsonrpc 只提供 binary 版 encode_response）
+response_map(Id, Result) ->
+    #{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id, <<"result">> => Result}.
 
 %% @private 方法分发
 dispatch_method(?MCP_METHOD_INITIALIZE, Params, _Id, State) ->

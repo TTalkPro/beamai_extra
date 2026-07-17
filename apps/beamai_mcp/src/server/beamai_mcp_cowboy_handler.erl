@@ -174,6 +174,11 @@ reply_dispatched(sse, Response, SessionId, Req) ->
     RespHeaders = build_response_headers(sse, SessionId),
     Req2 = cowboy_req:stream_reply(200, RespHeaders, Req),
     cowboy_req:stream_body(iolist_to_binary(Response), fin, Req2),
+    {ok, Req2, undefined};
+reply_dispatched(no_content, _Response, SessionId, Req) ->
+    %% 批处理内全是通知：无响应体，按 MCP 规范回 202 Accepted
+    RespHeaders = build_response_headers(json, SessionId),
+    Req2 = cowboy_req:reply(202, RespHeaders, <<>>, Req),
     {ok, Req2, undefined}.
 
 %% @private DELETE：客户端显式终止会话（规范允许；204 成功，404 查无此会话）

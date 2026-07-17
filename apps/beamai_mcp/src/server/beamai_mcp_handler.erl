@@ -147,6 +147,10 @@ handle_post(Body, Headers, AcceptSSE, #handler_state{server_pid = ServerPid} = S
         {ok, Request} ->
             %% 处理请求
             case beamai_mcp_server:handle_request(ServerPid, Request) of
+                {ok, no_response} ->
+                    %% 批处理内全是通知：无响应体（HTTP 202）
+                    FinalState = maybe_update_session_id(NewState),
+                    {no_content, <<>>, FinalState};
                 {ok, Response} ->
                     %% 更新会话 ID
                     FinalState = maybe_update_session_id(NewState),
