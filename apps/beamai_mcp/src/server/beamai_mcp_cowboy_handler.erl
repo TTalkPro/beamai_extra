@@ -95,7 +95,7 @@ handle_by_mode(Method, Mode, Req, _Config) ->
     Req2 = cowboy_req:reply(405, #{
         <<"content-type">> => <<"application/json">>,
         <<"allow">> => allowed_methods(Mode)
-    }, jsx:encode(#{
+    }, beamai_utils:encode_json(#{
         <<"error">> => <<"Method not allowed">>,
         <<"method">> => Method
     }), Req),
@@ -194,7 +194,7 @@ handle_session_delete(Req, _Config) ->
 
 %% @private 请求体是否为 initialize（决定能否免 session id 头）
 is_initialize_request(Body) ->
-    try jsx:decode(Body, [return_maps]) of
+    try json:decode(Body) of
         #{<<"method">> := <<"initialize">>} -> true;
         _ -> false
     catch
@@ -233,7 +233,7 @@ handle_sse_init(Req, Config) ->
                         <<(cowboy_req:path(Req))/binary, "/message">>),
     Endpoint = <<BasePath/binary, "?session_id=", SessionId/binary>>,
     EndpointEvent = beamai_mcp_handler:format_sse_response(
-                      <<"endpoint">>, jsx:encode(#{<<"uri">> => Endpoint})),
+                      <<"endpoint">>, beamai_utils:encode_json(#{<<"uri">> => Endpoint})),
 
     RespHeaders = #{
         <<"content-type">> => <<"text/event-stream">>,
@@ -266,7 +266,7 @@ handle_sse_message(Req, _Config) ->
                     LoopPid ! {send_event, <<"message">>, Response},
                     Req3 = cowboy_req:reply(202, #{
                         <<"content-type">> => <<"application/json">>
-                    }, jsx:encode(#{<<"status">> => <<"accepted">>}), Req2),
+                    }, beamai_utils:encode_json(#{<<"status">> => <<"accepted">>}), Req2),
                     {ok, Req3, undefined};
                 {error, not_found} ->
                     Req3 = cowboy_req:reply(404, #{}, <<>>, Req2),

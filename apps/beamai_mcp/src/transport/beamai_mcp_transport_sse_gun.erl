@@ -290,7 +290,7 @@ find_endpoint_event([_ | Rest]) ->
 %% 先尝试 JSON（自家服务端格式），失败则作为原始 URI 字符串处理（MCP 规范格式）。
 -spec parse_endpoint_data(binary()) -> {ok, binary()} | not_found.
 parse_endpoint_data(Data) ->
-    try jsx:decode(Data, [return_maps]) of
+    try json:decode(Data) of
         #{<<"uri">> := Uri} when is_binary(Uri) -> {ok, Uri};
         #{<<"url">> := Url} when is_binary(Url) -> {ok, Url};
         _ -> try_raw_uri(Data)

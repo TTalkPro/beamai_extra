@@ -193,7 +193,7 @@ handle_sse_init(_Headers, #handler_state{sse_endpoint = Endpoint} = State) ->
         sse_mode = true
     },
     %% 发送 endpoint 事件
-    EndpointData = jsx:encode(#{<<"uri">> => Endpoint}),
+    EndpointData = beamai_utils:encode_json(#{<<"uri">> => Endpoint}),
     InitialEvent = format_sse_response(<<"endpoint">>, EndpointData),
     {ok, InitialEvent, NewState}.
 

@@ -192,7 +192,7 @@ extract_content(#{<<"content">> := Contents}) when is_list(Contents) ->
 extract_content(Result) when is_map(Result) ->
     %% 尝试转换为 JSON
     try
-        jsx:encode(Result)
+        beamai_utils:encode_json(Result)
     catch
         _:_ -> <<"Success">>
     end;

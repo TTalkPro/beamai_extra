@@ -247,7 +247,7 @@ prompt_not_found(Id, PromptName) ->
 
 %% @private 将 map 编码为 JSON binary
 %%
-%% 统一的 JSON 编码函数，减少重复的 jsx:encode 调用。
+%% 统一的 JSON 编码函数，减少重复的 encode_json 调用。
 -spec encode_map(map()) -> binary().
 encode_map(Map) ->
-    jsx:encode(Map, []).
+    beamai_utils:encode_json(Map).
