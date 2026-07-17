@@ -79,20 +79,20 @@ request_response_flows_over_sse(Port) ->
                     <<"clientInfo">> => #{<<"name">> => <<"c">>, <<"version">> => <<"1">>}})),
     {ok, InitResp, Buf1, N1} = recv_nth_message(Conn, StreamRef, Buf0, 1, 3000),
     ?assertMatch(#{<<"result">> := #{<<"serverInfo">> := _}},
-                 jsx:decode(InitResp, [return_maps])),
+                 json:decode(InitResp)),
 
     post(Url, rpc(2, <<"tools/call">>,
                   #{<<"name">> => <<"echo">>,
                     <<"arguments">> => #{<<"text">> => <<"hi over sse">>}})),
     {ok, Response, _Buf2, _N2} = recv_nth_message(Conn, StreamRef, Buf1, N1, 3000),
     #{<<"result">> := #{<<"content">> := [C], <<"isError">> := false}} =
-        jsx:decode(Response, [return_maps]),
+        json:decode(Response),
     ?assertEqual(<<"hi over sse">>, maps:get(<<"text">>, C)),
     gun:close(Conn).
 
 post_to_unknown_session_is_404(Port) ->
     Url = message_url(Port, <<"mcp-nope">>),
-    Msg = jsx:encode(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => 1,
+    Msg = beamai_utils:encode_json(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => 1,
                        <<"method">> => <<"tools/list">>, <<"params">> => #{}}),
     {ok, {{_, Status, _}, _, _}} =
         httpc:request(post, {Url, [], "application/json", Msg}, [], []),
@@ -100,7 +100,7 @@ post_to_unknown_session_is_404(Port) ->
 
 post_without_session_id_is_400(Port) ->
     Url = lists:flatten(io_lib:format("http://127.0.0.1:~p/mcp/sse/message", [Port])),
-    Msg = jsx:encode(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => 1,
+    Msg = beamai_utils:encode_json(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => 1,
                        <<"method">> => <<"tools/list">>, <<"params">> => #{}}),
     {ok, {{_, Status, _}, _, _}} =
         httpc:request(post, {Url, [], "application/json", Msg}, [], []),
@@ -120,7 +120,7 @@ open_sse(Port) ->
 recv_endpoint(Conn, StreamRef, Timeout) ->
     case recv_nth(Conn, StreamRef, <<>>, 0, Timeout) of
         {ok, #{event := <<"endpoint">>, data := Data}, Buf, _N} ->
-            #{<<"uri">> := Uri} = jsx:decode(Data, [return_maps]),
+            #{<<"uri">> := Uri} = json:decode(Data),
             {ok, Uri, Buf};
         Other -> Other
     end.
@@ -170,7 +170,7 @@ message_url(Port, Sid) ->
                                 [Port, binary_to_list(Sid)])).
 
 rpc(Id, Method, Params) ->
-    jsx:encode(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
+    beamai_utils:encode_json(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
                  <<"method">> => Method, <<"params">> => Params}).
 
 %% POST 一条消息到 message 端点，断言 202 Accepted

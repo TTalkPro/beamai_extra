@@ -16,9 +16,9 @@ connect(Config) ->
 send(_Message, #{mute := true} = State) ->
     {ok, State};
 send(Message, #{queue := Q} = State) ->
-    case jsx:decode(Message, [return_maps]) of
+    case json:decode(Message) of
         #{<<"method">> := <<"initialize">>, <<"id">> := Id} ->
-            Resp = jsx:encode(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
+            Resp = beamai_utils:encode_json(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
                 <<"result">> => #{
                     <<"protocolVersion">> => <<"2024-11-05">>,
                     <<"capabilities">> => #{<<"tools">> => #{}},
@@ -26,13 +26,13 @@ send(Message, #{queue := Q} = State) ->
                                           <<"version">> => <<"1">>}}}),
             {ok, State#{queue => Q ++ [Resp]}};
         #{<<"method">> := <<"tools/list">>, <<"id">> := Id} ->
-            Resp = jsx:encode(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
+            Resp = beamai_utils:encode_json(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
                 <<"result">> => #{<<"tools">> => [#{<<"name">> => <<"mock_tool">>,
                     <<"description">> => <<"a tool">>,
                     <<"inputSchema">> => #{<<"type">> => <<"object">>}}]}}),
             {ok, State#{queue => Q ++ [Resp]}};
         #{<<"method">> := <<"tools/call">>, <<"id">> := Id} ->
-            Resp = jsx:encode(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
+            Resp = beamai_utils:encode_json(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
                 <<"result">> => #{<<"content">> =>
                     [#{<<"type">> => <<"text">>, <<"text">> => <<"tool ran">>}],
                     <<"isError">> => false}}),

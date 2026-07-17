@@ -66,7 +66,7 @@ test_init({State, _Config}) ->
 test_handle_post_json({State, _Config}) ->
     {"POST JSON 响应测试", fun() ->
         %% 构造初始化请求
-        InitRequest = jsx:encode(#{
+        InitRequest = beamai_utils:encode_json(#{
             <<"jsonrpc">> => <<"2.0">>,
             <<"id">> => 1,
             <<"method">> => <<"initialize">>,
@@ -83,7 +83,7 @@ test_handle_post_json({State, _Config}) ->
         {json, Response, NewState} = beamai_mcp_handler:handle_post(InitRequest, Headers, State),
 
         ?assert(is_binary(Response)),
-        Decoded = jsx:decode(Response, [return_maps]),
+        Decoded = json:decode(Response),
         ?assertEqual(1, maps:get(<<"id">>, Decoded)),
         ?assert(maps:is_key(<<"result">>, Decoded)),
 
@@ -97,7 +97,7 @@ test_handle_post_sse({State, _Config}) ->
         {_, _, State1} = do_initialize(State),
 
         %% 发送 ping 请求，接受 SSE
-        PingRequest = jsx:encode(#{
+        PingRequest = beamai_utils:encode_json(#{
             <<"jsonrpc">> => <<"2.0">>,
             <<"id">> => 2,
             <<"method">> => <<"ping">>,
@@ -145,7 +145,7 @@ test_handle_sse_message({State, _Config}) ->
         {_, _, State1} = do_initialize(State),
 
         %% 发送工具列表请求
-        Request = jsx:encode(#{
+        Request = beamai_utils:encode_json(#{
             <<"jsonrpc">> => <<"2.0">>,
             <<"id">> => 3,
             <<"method">> => <<"tools/list">>,
@@ -201,7 +201,7 @@ test_parse_error({State, _Config}) ->
 
         {json, Response, _NewState} = beamai_mcp_handler:handle_post(InvalidJson, Headers, State),
 
-        Decoded = jsx:decode(Response, [return_maps]),
+        Decoded = json:decode(Response),
         ?assert(maps:is_key(<<"error">>, Decoded)),
         Error = maps:get(<<"error">>, Decoded),
         ?assertEqual(?MCP_ERROR_PARSE, maps:get(<<"code">>, Error))
@@ -212,7 +212,7 @@ test_parse_error({State, _Config}) ->
 %%====================================================================
 
 do_initialize(State) ->
-    InitRequest = jsx:encode(#{
+    InitRequest = beamai_utils:encode_json(#{
         <<"jsonrpc">> => <<"2.0">>,
         <<"id">> => 0,
         <<"method">> => <<"initialize">>,

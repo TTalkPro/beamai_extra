@@ -66,11 +66,11 @@ full_session_round_trip(Url) ->
     {200, Hdrs, Body} = post(Url, [], initialize_body()),
     Sid = proplists:get_value("mcp-session-id", Hdrs),
     ?assertNotEqual(undefined, Sid),
-    ?assertMatch(#{<<"result">> := #{<<"serverInfo">> := _}}, jsx:decode(Body, [return_maps])),
+    ?assertMatch(#{<<"result">> := #{<<"serverInfo">> := _}}, json:decode(Body)),
 
     %% 同一会话：tools/list
     {200, _, Body2} = post(Url, [{"mcp-session-id", Sid}], rpc(2, <<"tools/list">>, #{})),
-    #{<<"result">> := #{<<"tools">> := ToolList}} = jsx:decode(Body2, [return_maps]),
+    #{<<"result">> := #{<<"tools">> := ToolList}} = json:decode(Body2),
     ?assertEqual([<<"bad_return">>, <<"echo">>],
                  lists:sort([maps:get(<<"name">>, T) || T <- ToolList])),
 
@@ -80,7 +80,7 @@ full_session_round_trip(Url) ->
                                #{<<"name">> => <<"echo">>,
                                  <<"arguments">> => #{<<"text">> => <<"你好"/utf8>>}})),
     #{<<"result">> := #{<<"content">> := [C], <<"isError">> := false}} =
-        jsx:decode(Body3, [return_maps]),
+        json:decode(Body3),
     ?assertEqual(<<"你好"/utf8>>, maps:get(<<"text">>, C)).
 
 %% 规范：未知会话回 404，客户端据此重新 initialize
@@ -114,7 +114,7 @@ sessions_are_isolated(Url) ->
         httpc:request(delete, {Url, [{"mcp-session-id", Sid1}]}, [], []),
     {Status, _, Body} = post(Url, [{"mcp-session-id", Sid2}], rpc(5, <<"tools/list">>, #{})),
     ?assertEqual(200, Status),
-    ?assertMatch(#{<<"result">> := _}, jsx:decode(Body, [return_maps])).
+    ?assertMatch(#{<<"result">> := _}, json:decode(Body)).
 
 %% 回归测试：工具返回裸值曾致 try_clause 崩掉 server（catch 接不住 of 分支）。
 %% 现在应归一为 isError:true，且会话继续可用。
@@ -124,7 +124,7 @@ bad_tool_return_does_not_kill_session(Url) ->
     {200, _, Body} = post(Url, [{"mcp-session-id", Sid}],
                           rpc(2, <<"tools/call">>,
                               #{<<"name">> => <<"bad_return">>, <<"arguments">> => #{}})),
-    #{<<"result">> := #{<<"isError">> := IsErr}} = jsx:decode(Body, [return_maps]),
+    #{<<"result">> := #{<<"isError">> := IsErr}} = json:decode(Body),
     ?assertEqual(true, IsErr),
     %% 会话没死
     {Status, _, _} = post(Url, [{"mcp-session-id", Sid}], rpc(3, <<"tools/list">>, #{})),
@@ -137,7 +137,7 @@ subscribe_without_uri_does_not_kill_session(Url) ->
     Sid = proplists:get_value("mcp-session-id", Hdrs),
     {200, _, Body} = post(Url, [{"mcp-session-id", Sid}],
                           rpc(2, <<"resources/subscribe">>, #{})),
-    #{<<"error">> := #{<<"code">> := Code}} = jsx:decode(Body, [return_maps]),
+    #{<<"error">> := #{<<"code">> := Code}} = json:decode(Body),
     ?assertEqual(-32602, Code),
     {Status, _, _} = post(Url, [{"mcp-session-id", Sid}], rpc(3, <<"tools/list">>, #{})),
     ?assertEqual(200, Status).
@@ -153,7 +153,7 @@ initialize_body() ->
           <<"clientInfo">> => #{<<"name">> => <<"test-client">>, <<"version">> => <<"1">>}}).
 
 rpc(Id, Method, Params) ->
-    jsx:encode(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
+    beamai_utils:encode_json(#{<<"jsonrpc">> => <<"2.0">>, <<"id">> => Id,
                  <<"method">> => Method, <<"params">> => Params}).
 
 post(Url, Headers, Body) ->
