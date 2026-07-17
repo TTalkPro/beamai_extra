@@ -162,6 +162,70 @@ add_artifact_test() ->
     beamai_a2a_task:stop(Pid).
 
 %%====================================================================
+%% 顺序不变量（守 O(n²)→O(1) 重构：内部 newest-first 存储 + 读时 reverse）
+%%
+%% 上面 add_message/add_artifact 只加**一条**，翻转 bug 检不出来；这里多次
+%% 追加并断言读出的是**时间序**（oldest-first）。
+%%====================================================================
+
+add_messages_preserve_order_test() ->
+    {ok, Pid} = beamai_a2a_task:start(#{}),
+    Msg = fun(N) -> #{role => agent, parts => [#{kind => text, text => N}]} end,
+    ok = beamai_a2a_task:add_message(Pid, Msg(<<"m1">>)),
+    ok = beamai_a2a_task:add_message(Pid, Msg(<<"m2">>)),
+    ok = beamai_a2a_task:add_message(Pid, Msg(<<"m3">>)),
+
+    {ok, Task} = beamai_a2a_task:get(Pid),
+    Texts = [hd(maps:get(parts, M)) || M <- maps:get(messages, Task)],
+    ?assertEqual([<<"m1">>, <<"m2">>, <<"m3">>],
+                 [maps:get(text, P) || P <- Texts]),
+
+    beamai_a2a_task:stop(Pid).
+
+%% 初始消息（最旧）在多次追加后仍排最前
+init_message_stays_first_test() ->
+    Init = #{role => user, parts => [#{kind => text, text => <<"init">>}]},
+    {ok, Pid} = beamai_a2a_task:start(#{message => Init}),
+    ok = beamai_a2a_task:add_message(Pid,
+            #{role => agent, parts => [#{kind => text, text => <<"reply">>}]}),
+
+    {ok, Task} = beamai_a2a_task:get(Pid),
+    [First, Second] = maps:get(messages, Task),
+    ?assertEqual(<<"init">>, maps:get(text, hd(maps:get(parts, First)))),
+    ?assertEqual(<<"reply">>, maps:get(text, hd(maps:get(parts, Second)))),
+
+    beamai_a2a_task:stop(Pid).
+
+add_artifacts_preserve_order_test() ->
+    {ok, Pid} = beamai_a2a_task:start(#{}),
+    Art = fun(N) -> #{name => N, parts => [#{kind => text, text => N}]} end,
+    ok = beamai_a2a_task:add_artifact(Pid, Art(<<"a1">>)),
+    ok = beamai_a2a_task:add_artifact(Pid, Art(<<"a2">>)),
+    ok = beamai_a2a_task:add_artifact(Pid, Art(<<"a3">>)),
+
+    {ok, Task} = beamai_a2a_task:get(Pid),
+    ?assertEqual([<<"a1">>, <<"a2">>, <<"a3">>],
+                 [maps:get(name, A) || A <- maps:get(artifacts, Task)]),
+
+    beamai_a2a_task:stop(Pid).
+
+%% update_status 的 {State, Msg, [Artifacts]} 批量产出物路径：批内保序，
+%% 且接在先前单条 add_artifact 之后（守 `lists:reverse(Batch) ++ Existing`）
+add_artifacts_batch_via_status_test() ->
+    {ok, Pid} = beamai_a2a_task:start(#{}),
+    ok = beamai_a2a_task:add_artifact(Pid,
+            #{name => <<"a0">>, parts => [#{kind => text, text => <<"a0">>}]}),
+    Batch = [#{name => <<"b1">>, parts => []},
+             #{name => <<"b2">>, parts => []}],
+    ok = beamai_a2a_task:update_status(Pid, {working, undefined, Batch}),
+
+    {ok, Task} = beamai_a2a_task:get(Pid),
+    ?assertEqual([<<"a0">>, <<"b1">>, <<"b2">>],
+                 [maps:get(name, A) || A <- maps:get(artifacts, Task)]),
+
+    beamai_a2a_task:stop(Pid).
+
+%%====================================================================
 %% 取消测试
 %%====================================================================
 

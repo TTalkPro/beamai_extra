@@ -265,8 +265,11 @@ handle_call({update_status, NewStatus}, _From, State) ->
 
 handle_call({add_message, Message}, _From, State) ->
     #task_state{messages = Messages} = State,
+    %% newest-first 存储：prepend O(1)，读时（state_to_map）统一 reverse。
+    %% 见 do_update_status/state_to_map 的同款约定。旧写法 `Messages ++ [Message]`
+    %% 每次 O(n)，任务生命周期内 O(n²)。
     NewState = State#task_state{
-        messages = Messages ++ [Message],
+        messages = [Message | Messages],
         updated_at = erlang:system_time(millisecond)
     },
     {reply, ok, NewState};
@@ -275,8 +278,9 @@ handle_call({add_artifact, Artifact}, _From, State) ->
     #task_state{artifacts = Artifacts} = State,
     %% 确保 Artifact 有 ID
     ArtifactWithId = ensure_artifact_id(Artifact),
+    %% newest-first 存储：prepend O(1)（同上）
     NewState = State#task_state{
-        artifacts = Artifacts ++ [ArtifactWithId],
+        artifacts = [ArtifactWithId | Artifacts],
         updated_at = erlang:system_time(millisecond)
     },
     {reply, ok, NewState};
@@ -331,14 +335,16 @@ do_update_status(NewStatus, State) ->
             %% 解析新状态
             {NewState, NewMessage, NewArtifacts} = parse_new_status(NewStatus),
 
-            %% 更新状态
+            %% 更新状态（history/artifacts 均 newest-first 存储，读时 reverse）
             UpdatedState = State#task_state{
                 status = NewState,
                 status_message = NewMessage,
-                history = State#task_state.history ++ [HistoryEntry],
+                history = [HistoryEntry | State#task_state.history],
                 artifacts = case NewArtifacts of
                     undefined -> State#task_state.artifacts;
-                    _ -> State#task_state.artifacts ++ NewArtifacts
+                    %% NewArtifacts 是按时间序的小批量；reverse 后 prepend，
+                    %% 使存储保持 newest-first、且 ++ 成本只与批量大小相关（非全表 O(n)）。
+                    _ -> lists:reverse(NewArtifacts) ++ State#task_state.artifacts
                 end,
                 updated_at = Now
             },
@@ -403,6 +409,10 @@ can_transition(CurrentState, NewState) ->
     end.
 
 %% @private 将状态记录转换为 map
+%%
+%% history/artifacts/messages 内部按 **newest-first** 存储（写时 prepend O(1)），
+%% 这里是唯一的读出口，统一 reverse 还原成时间序（oldest-first）后交给调用方。
+%% 改动这三处存储序时务必同步这里，否则客户端看到的顺序会翻转。
 state_to_map(#task_state{} = State) ->
     #{
         id => State#task_state.id,
@@ -412,9 +422,9 @@ state_to_map(#task_state{} = State) ->
             message => State#task_state.status_message,
             timestamp => State#task_state.updated_at
         },
-        history => State#task_state.history,
-        artifacts => State#task_state.artifacts,
-        messages => State#task_state.messages,
+        history => lists:reverse(State#task_state.history),
+        artifacts => lists:reverse(State#task_state.artifacts),
+        messages => lists:reverse(State#task_state.messages),
         metadata => State#task_state.metadata,
         created_at => State#task_state.created_at,
         updated_at => State#task_state.updated_at
