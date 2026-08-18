@@ -82,7 +82,11 @@
 
 -type search_result() :: #{
     document := document(),
-    score := float()
+    score := float(),
+    %% 以下字段由 beamai_rag_reranker 重排后追加：
+    %% score 被覆盖为重排得分，原相似度保留在 vector_score
+    rerank_score => float(),
+    vector_score => float()
 }.
 
 -export_type([document_id/0, document/0, vector_store/0, search_opts/0, search_result/0]).
