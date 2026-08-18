@@ -7,9 +7,13 @@
         stdlib,
         crypto,
         beamai_core,
-        beamai_agent
+        beamai_agent,
+        %% Cowboy 是可选依赖（见下方 optional_applications），
+        %% 仅在使用 beamai_a2a_cowboy_handler 时需要。
+        %% 注：optional_applications 的条目必须同时出现在 applications 中，
+        %% 否则该声明无效（OTP application 规范）。
+        cowboy
     ]},
-    %% Cowboy 是可选依赖，仅在使用 beamai_a2a_cowboy_handler 时需要
     {optional_applications, [cowboy]},
     {env, []},
     {mod, {beamai_a2a_app, []}},

@@ -10,11 +10,15 @@
     {applications, [
         kernel,
         stdlib,
-        beamai_core
+        beamai_core,
+        %% 可选依赖（见下方 optional_applications）：
+        %% - cowboy: 仅在使用 beamai_mcp_cowboy_handler（server 端）时需要
+        %% - gun: HTTP/SSE 传输的唯一后端；仅使用 stdio 传输时可不启动
+        %% 注：optional_applications 的条目必须同时出现在 applications 中，
+        %% 否则该声明无效（OTP application 规范）。
+        cowboy,
+        gun
     ]},
-    %% 可选依赖：
-    %% - cowboy: 仅在使用 beamai_mcp_cowboy_handler（server 端）时需要
-    %% - gun: HTTP/SSE 传输的唯一后端；仅使用 stdio 传输时可不启动
     {optional_applications, [cowboy, gun]},
     {env, [
         {default_timeout, 30000},
