@@ -1,9 +1,12 @@
 %%%-------------------------------------------------------------------
 %%% @doc 文本嵌入模块
 %%%
-%%% 提供文本向量化功能，支持多种嵌入模型：
-%%% - OpenAI Embeddings API (text-embedding-3-small 等)
-%%% - 本地嵌入模型（用于测试）
+%%% 提供文本向量化功能，支持三类嵌入模型：
+%%% - provider：委托 beamai_llm 的 beamai_embedding（推荐）
+%%%   覆盖 openai / dashscope / zhipu / siliconflow / ollama / mock，
+%%%   自带按厂商上限自动分批、瞬态错误重试、维度参数门控
+%%% - openai：本模块内置的 OpenAI Embeddings 直连实现（保留兼容）
+%%% - local：哈希伪向量（用于离线测试）
 %%%
 %%% 主要功能：
 %%% - 单文本嵌入：将文本转换为向量
@@ -12,8 +15,8 @@
 %%%
 %%% 使用示例：
 %%% <pre>
-%%% %% 创建嵌入模型
-%%% Model = beamai_embeddings:new_openai(#{api_key => &lt;&lt;"sk-..."&gt;&gt;}),
+%%% %% 创建嵌入模型（推荐：走 beamai_embedding，可换任意厂商）
+%%% Model = beamai_embeddings:new_provider(siliconflow, #{api_key => &lt;&lt;"sk-..."&gt;&gt;}),
 %%%
 %%% %% 嵌入文本
 %%% {ok, Vector} = beamai_embeddings:embed_text(Model, &lt;&lt;"Hello"&gt;&gt;),
@@ -39,6 +42,8 @@
 
 %% 模型创建
 -export([
+    new/1,
+    new_provider/1, new_provider/2,
     new_openai/0, new_openai/1,
     new_local/0, new_local/1
 ]).
@@ -67,16 +72,24 @@
 %%====================================================================
 
 -type embedding_model() :: #{
-    type := openai | local,
+    type := provider | openai | local,
     api_key => binary(),
     model => binary(),
     base_url => binary(),
-    dimension => pos_integer()
+    dimension => pos_integer(),
+    %% type = provider 时：beamai_embedding 配置与调用选项
+    config => map(),
+    call_opts => map(),
+    text_type => auto | binary()
 }.
 
 -type vector() :: [float()].
 
--export_type([embedding_model/0, vector/0]).
+%% beamai_embedding 的 Provider 标识（openai / dashscope / zhipu /
+%% siliconflow / ollama / mock，或自定义模块）
+-type provider() :: atom() | {custom, module()}.
+
+-export_type([embedding_model/0, vector/0, provider/0]).
 
 %%====================================================================
 %% 常量定义
@@ -86,15 +99,71 @@
 -define(OPENAI_URL, <<"https://api.openai.com/v1/embeddings">>).
 -define(OPENAI_DIMENSION, 1536).
 -define(LOCAL_DIMENSION, 384).
+
+%% provider 模型的调用选项白名单（透传给 beamai_embedding）
+-define(PROVIDER_CALL_KEYS, [batch_size, max_retries, retry_delay, on_retry]).
+
+%% 检索场景的 text_type：查询与文档分别标注（DashScope 等支持，其余厂商忽略）
+-define(QUERY_TEXT_TYPE, <<"query">>).
+-define(DOCUMENT_TEXT_TYPE, <<"document">>).
 -define(HTTP_TIMEOUT, 60000).
 
 %%====================================================================
 %% 模型创建 API
 %%====================================================================
 
+%% @doc 按配置构造嵌入模型（多形态入口）
+%%
+%% 接受四种入参，便于上层（如 beamai_rag:new/1）直接透传用户配置：
+%%   - `undefined'：本地伪向量模型（离线默认）
+%%   - 已构造的 embedding_model（含 `type'）：原样返回
+%%   - beamai_embedding 配置（含 `'__embedding_config__''）：包装为 provider 模型
+%%   - 选项 map（含 `provider'）：由本模块创建 beamai_embedding 配置
+-spec new(undefined | map()) -> embedding_model().
+new(undefined) ->
+    new_local();
+new(#{type := _} = Model) ->
+    Model;
+new(#{'__embedding_config__' := true} = Config) ->
+    wrap_provider(Config, #{});
+new(#{provider := Provider} = Opts) ->
+    new_provider(Provider, Opts);
+new(_Other) ->
+    new_local().
+
+%% @doc 创建 provider 嵌入模型（委托 beamai_embedding）
+%%
+%% 直接给出已建好的 beamai_embedding 配置时原样使用。
+-spec new_provider(provider() | map()) -> embedding_model().
+new_provider(#{'__embedding_config__' := true} = Config) ->
+    wrap_provider(Config, #{});
+new_provider(Provider) ->
+    new_provider(Provider, #{}).
+
+%% @doc 创建 provider 嵌入模型
+%%
+%% 选项除 beamai_embedding 的配置（api_key / model / base_url / dimensions 等）外，
+%% 本模块另外消费：
+%%   - batch_size / max_retries / retry_delay / on_retry：调用级选项
+%%   - text_type：`auto'（默认）时按用途自动标注 query / document，
+%%     给定 binary 则固定使用该值；不支持该参数的厂商会忽略
+%%
+%% ```erlang
+%% Model = beamai_embeddings:new_provider(dashscope, #{
+%%     api_key => ApiKey,
+%%     model => <<"text-embedding-v4">>,
+%%     dimensions => 1024
+%% }).
+%% ```
+-spec new_provider(provider(), map()) -> embedding_model().
+new_provider(Provider, Opts) ->
+    ProviderOpts = maps:without([provider, text_type | ?PROVIDER_CALL_KEYS], Opts),
+    wrap_provider(safe_create(Provider, ProviderOpts), Opts).
+
 %% @doc 创建默认 OpenAI 嵌入模型
 %%
 %% 从环境变量 OPENAI_API_KEY 读取 API Key。
+%% 新代码建议改用 new_provider/2（同样支持 OpenAI，并自带分批与重试）。
 -spec new_openai() -> embedding_model().
 new_openai() ->
     new_openai(#{}).
@@ -142,6 +211,8 @@ new_local(Opts) ->
 %%
 %% 根据模型类型分派到对应实现。
 -spec embed_text(embedding_model(), binary()) -> {ok, vector()} | {error, term()}.
+embed_text(#{type := provider} = Model, Text) ->
+    embed_single_provider(Model, Text);
 embed_text(#{type := openai} = Model, Text) ->
     embed_single_openai(Model, Text);
 embed_text(#{type := local} = Model, Text) ->
@@ -149,8 +220,11 @@ embed_text(#{type := local} = Model, Text) ->
 
 %% @doc 批量嵌入文本
 %%
-%% OpenAI 使用批量 API 提高效率，本地模型逐个处理。
+%% provider 模型由 beamai_embedding 按厂商上限自动分批；
+%% OpenAI 内置实现使用批量 API；本地模型逐个处理。
 -spec embed_batch(embedding_model(), [binary()]) -> {ok, [vector()]} | {error, term()}.
+embed_batch(#{type := provider} = Model, Texts) ->
+    embed_batch_provider(Model, Texts);
 embed_batch(#{type := openai} = Model, Texts) ->
     embed_batch_openai(Model, Texts);
 embed_batch(#{type := local} = Model, Texts) ->
@@ -207,6 +281,65 @@ embed(Text) ->
 -spec embed_all([binary()]) -> {ok, [vector()]} | {error, term()}.
 embed_all(Texts) ->
     embed_batch(get_default_model(), Texts).
+
+%%====================================================================
+%% Provider 实现（委托 beamai_embedding，私有）
+%%====================================================================
+
+%% @private 包装为 provider 模型
+wrap_provider(Config, Opts) ->
+    Model = #{
+        type => provider,
+        config => Config,
+        call_opts => maps:with(?PROVIDER_CALL_KEYS, Opts),
+        text_type => maps:get(text_type, Opts, auto)
+    },
+    case maps:get(dimensions, Config, undefined) of
+        Dim when is_integer(Dim), Dim > 0 -> Model#{dimension => Dim};
+        _ -> Model
+    end.
+
+%% @private 创建 beamai_embedding 配置
+%% beamai_llm 对 beamai_rag 是可选依赖，缺席时给出明确错误。
+safe_create(Provider, Opts) ->
+    try beamai_embedding:create(Provider, Opts)
+    catch error:undef -> error({embedding_unavailable, beamai_embedding})
+    end.
+
+%% @private 嵌入单个文本（provider）
+%% 单条文本视为检索查询，text_type 为 auto 时标注 query。
+-spec embed_single_provider(embedding_model(), binary()) -> {ok, vector()} | {error, term()}.
+embed_single_provider(#{config := Config} = Model, Text) ->
+    Opts = provider_opts(Model, ?QUERY_TEXT_TYPE),
+    safe_embed(fun() -> beamai_embedding:embed(Config, Text, Opts) end).
+
+%% @private 批量嵌入（provider）
+%% 批量文本视为待索引文档，text_type 为 auto 时标注 document。
+-spec embed_batch_provider(embedding_model(), [binary()]) ->
+    {ok, [vector()]} | {error, term()}.
+embed_batch_provider(#{config := Config} = Model, Texts) ->
+    Opts = provider_opts(Model, ?DOCUMENT_TEXT_TYPE),
+    safe_embed(fun() -> beamai_embedding:embed_many(Config, Texts, Opts) end).
+
+%% @private 组装调用选项（含 text_type 策略）
+provider_opts(Model, AutoTextType) ->
+    CallOpts = maps:get(call_opts, Model, #{}),
+    case maps:get(text_type, Model, auto) of
+        auto -> CallOpts#{text_type => AutoTextType};
+        TextType when is_binary(TextType) -> CallOpts#{text_type => TextType};
+        _ -> CallOpts
+    end.
+
+%% @private 调用 beamai_embedding，缺席时给出明确错误
+safe_embed(Fun) ->
+    try Fun()
+    catch
+        error:undef ->
+            {error, {embedding_unavailable, beamai_embedding}};
+        Class:Reason:Stack ->
+            logger:warning("RAG embedding call failed: ~p:~p~n~p", [Class, Reason, Stack]),
+            {error, {embedding_call_failed, Class, Reason}}
+    end.
 
 %%====================================================================
 %% OpenAI 实现（私有）

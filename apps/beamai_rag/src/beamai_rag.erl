@@ -11,7 +11,8 @@
 %%% <pre>
 %%% %% 创建管道
 %%% Pipeline = beamai_rag:new(#{
-%%%     embeddings => beamai_embeddings:new_openai(),
+%%%     embeddings => #{provider => openai, api_key => ApiKey},
+%%%     reranker => #{provider => siliconflow, api_key => RerankKey},
 %%%     llm => #{provider => openai, model => &lt;&lt;"gpt-4"&gt;&gt;}
 %%% }),
 %%%
@@ -98,7 +99,8 @@ new() ->
 %% @doc 创建自定义 RAG 管道
 %%
 %% 选项：
-%% - embeddings: 嵌入模型
+%% - embeddings: 嵌入模型，可为已构造的模型，也可直接给配置：
+%%   `#{provider => siliconflow, api_key => Key}'（见 beamai_embeddings:new/1）
 %% - vector_store: 向量存储
 %% - text_splitter: 分割器配置
 %% - llm: LLM 配置
@@ -106,7 +108,7 @@ new() ->
 -spec new(map()) -> rag_pipeline().
 new(Opts) ->
     #{
-        embeddings => maps:get(embeddings, Opts, beamai_embeddings:new_local()),
+        embeddings => beamai_embeddings:new(maps:get(embeddings, Opts, undefined)),
         vector_store => maps:get(vector_store, Opts, beamai_vector_store:new()),
         text_splitter => beamai_rag_splitter:new(maps:get(text_splitter, Opts, #{})),
         llm => maps:get(llm, Opts, default_llm_config()),
