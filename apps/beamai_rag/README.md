@@ -10,6 +10,7 @@
 - 向量嵌入
 - 向量存储
 - 相似度搜索
+- 重排序（Cross-Encoder 两阶段检索）
 - 与 LLM 集成
 
 ## 模块概览
@@ -17,6 +18,7 @@
 - **beamai_rag** - RAG 主模块
 - **beamai_embeddings** - 嵌入向量生成
 - **beamai_vector_store** - 向量存储
+- **beamai_rag_reranker** - 重排序适配（接 beamai_llm 的 beamai_rerank）
 - **beamai_rag_splitter** - 文档分割器
 - **beamai_rag_utils** - 工具函数
 
@@ -142,6 +144,57 @@ lists:foreach(fun(#{content := Content, score := Score}) ->
     io:format("Score: ~.3f~nContent: ~s~n~n", [Score, Content])
 end, Results).
 ```
+
+### 重排序（两阶段检索）
+
+向量召回负责「广」，重排序负责「准」：先多召回一批候选，再由 Cross-Encoder
+重排模型按 query 相关性打分，截取 top_k 送入上下文。
+重排能力来自 beamai_llm 的 `beamai_rerank`（siliconflow / dashscope / jina /
+cohere / voyage / mock）。
+
+```erlang
+Rag = beamai_rag:new(#{
+    embeddings => beamai_embeddings:new_openai(#{api_key => EmbKey}),
+    reranker => #{
+        provider => siliconflow,
+        api_key => RerankKey,
+        model => <<"BAAI/bge-reranker-v2-m3">>,
+        candidate_multiplier => 4,   %% 粗排候选 = top_k * 4（默认 4）
+        on_error => fallback         %% fallback（默认）| fail
+    }
+}),
+
+%% 召回 20 条 → 重排 → 返回最相关的 5 条
+{ok, Results} = beamai_rag:retrieve(Rag, <<"Erlang OTP 监督树"/utf8>>, #{top_k => 5}),
+
+%% 每条结果的得分字段：
+%%   score        - 重排得分（覆盖，供下游统一使用）
+%%   rerank_score - 重排模型给出的相关性得分
+%%   vector_score - 向量检索阶段的原始相似度
+```
+
+调用级控制：
+
+```erlang
+%% 本次不重排
+beamai_rag:retrieve(Rag, Query, #{top_k => 5, reranker => false}),
+
+%% 本次自定义候选数（不小于 top_k）
+beamai_rag:retrieve(Rag, Query, #{top_k => 5, candidate_top_k => 50}),
+
+%% query/3 同样透传 reranker / candidate_top_k
+beamai_rag:query(Rag, Question, #{top_k => 3, candidate_top_k => 30}).
+```
+
+回调（与 retriever 回调并列，写在同一个 `callbacks` map）：
+`on_rerank_start(Query, Candidates, Meta)`、`on_rerank_end(Results, Meta)`、
+`on_rerank_error(Reason, Meta)`。
+
+失败策略：
+
+- `fallback`（默认）：重排请求失败时记 warning，退回向量检索顺序并截到 top_k。
+  返回的仍是真实召回结果，只是未经重排
+- `fail`：返回 `{error, {rerank_error, Reason}}`，由调用方决定
 
 ## 配置选项
 
