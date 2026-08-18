@@ -473,7 +473,7 @@ BeamAI 支持 Gun 和 Hackney 两种 HTTP 后端，默认使用 Gun（支持 HTT
 | **beamai_deepagent** | Deep Agent：SubAgent 编排、任务规划、并行执行、自我反思 | 本项目 | [README](apps/beamai_deepagent/README.md) |
 | **beamai_a2a** | A2A 协议：Agent 间通信、服务端/客户端 | 本项目 | [README](apps/beamai_a2a/README.md) |
 | **beamai_mcp** | MCP 协议：Model Context Protocol 实现 | 本项目 | [README](apps/beamai_mcp/README.md) |
-| **beamai_rag** | RAG 功能：向量嵌入、相似度搜索 | 本项目 | [README](apps/beamai_rag/README.md) |
+| **beamai_rag** | RAG 功能：文档分割、向量嵌入、相似度搜索、重排序、上下文生成 | 本项目 | [README](apps/beamai_rag/README.md) |
 
 ## 运行示例
 

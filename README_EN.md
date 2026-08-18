@@ -472,7 +472,7 @@ BeamAI supports both Gun and Hackney HTTP backends, with Gun as the default (sup
 | **beamai_deepagent** | Deep Agent: SubAgent orchestration, task planning, parallel execution, self-reflection | Project | [README](apps/beamai_deepagent/README_EN.md) |
 | **beamai_a2a** | A2A protocol: inter-Agent communication, server/client | Project | [README](apps/beamai_a2a/README_EN.md) |
 | **beamai_mcp** | MCP protocol: Model Context Protocol implementation | Project | [README](apps/beamai_mcp/README_EN.md) |
-| **beamai_rag** | RAG functionality: vector embeddings, similarity search | Project | [README](apps/beamai_rag/README_EN.md) |
+| **beamai_rag** | RAG functionality: splitting, vector embeddings, similarity search, reranking, grounded generation | Project | [README](apps/beamai_rag/README_EN.md) |
 
 ## Running Examples
 

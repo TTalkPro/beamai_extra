@@ -209,13 +209,24 @@ application:set_env(beamai_core, http_backend, beamai_http_hackney).
 #### beamai_rag (RAG System)
 
 **Dependencies**:
-- beamai_core
+- beamai_core (beamai_http / beamai_id / beamai_utils)
+- beamai_llm (**optional**, declared in `optional_applications`):
+  - `beamai_embedding` — provider-backed text embeddings (openai / dashscope /
+    zhipu / siliconflow / ollama / mock, with auto batching and retries)
+  - `beamai_rerank` — cross-encoder reranking (stage two of two-stage retrieval)
+  - `beamai_chat_completion` — answer generation after retrieval
+
+> Without beamai_llm, local hash embeddings and in-memory retrieval keep working;
+> provider embeddings and reranking return `{error, {embedding_unavailable, _}}` /
+> `{error, {rerank_unavailable, _}}`, and generation returns
+> `{error, {llm_call_failed, ...}}`.
 
 **Provides**:
-- RAG pipeline (beamai_rag)
+- RAG pipeline (beamai_rag): index -> retrieve (optional rerank) -> generate
 - Document splitting (beamai_rag_splitter)
-- Vector store (beamai_vector_store)
-- Embedding support (beamai_embeddings)
+- Vector store (beamai_vector_store, in-memory)
+- Embedding support (beamai_embeddings: provider / built-in OpenAI / local modes)
+- Rerank adapter (beamai_rag_reranker)
 
 #### beamai_agent (Agent System)
 

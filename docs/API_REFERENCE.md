@@ -1198,52 +1198,87 @@ beamai_mcp_server:register_resource(Server, Resource).
 
 ## beamai_rag - RAG 功能
 
-检索增强生成模块。
+检索增强生成模块。完整说明见 [apps/beamai_rag/README.md](../apps/beamai_rag/README.md)。
 
-### 向量嵌入
-
-```erlang
-%% 生成嵌入
--spec embed(binary(), config()) -> {ok, [float()]} | {error, term()}.
--spec embed_batch([binary()], config()) -> {ok, [[float()]]} | {error, term()}.
-beamai_embeddings:embed(Text, Config).
-beamai_embeddings:embed_batch(Texts, Config).
-```
-
-### 向量存储
-
-```erlang
-%% 创建存储
--spec new(config()) -> {ok, store()}.
-beamai_vector_store:new(Config).
-
-%% 添加向量
--spec add(store(), binary(), [float()], map()) -> {ok, store()}.
-beamai_vector_store:add(Store, Id, Vector, Metadata).
-
-%% 相似度搜索
--spec search(store(), [float()], integer()) -> {ok, [result()]}.
-beamai_vector_store:search(Store, QueryVector, TopK).
-```
+管道是**不可变值**：索引与生成都返回新管道，需接住后往下传。
 
 ### RAG 流程
 
 ```erlang
-%% 初始化
--spec init(config()) -> {ok, rag_state()}.
-beamai_rag:init(Config).
+%% 创建管道（直接返回管道，不是 {ok, _}）
+-spec new(map()) -> rag_pipeline().
+Rag0 = beamai_rag:new(#{
+    embeddings => #{provider => siliconflow, api_key => EmbKey},
+    reranker => #{provider => siliconflow, api_key => RerankKey},  %% 可选
+    llm => #{provider => openai, model => <<"gpt-4o">>, api_key => LLMKey}
+}),
 
-%% 添加文档
--spec add_documents(rag_state(), [document()]) -> {ok, rag_state()}.
-beamai_rag:add_documents(State, Documents).
+%% 索引文档（分割 → 嵌入 → 存储）
+-spec index_document(rag_pipeline(), binary(), map()) ->
+    {ok, binary(), rag_pipeline()} | {error, term()}.
+{ok, DocId, Rag1} = beamai_rag:index_document(Rag0, Content, Metadata),
 
-%% 检索
--spec retrieve(rag_state(), binary(), integer()) -> {ok, [chunk()]}.
-beamai_rag:retrieve(State, Query, TopK).
+%% 批量索引：入参为 [{Content, Metadata}]
+{ok, DocIds, Rag2} = beamai_rag:index_documents(Rag1, Documents, #{}),
 
-%% RAG 查询（检索 + 生成）
--spec query(rag_state(), binary()) -> {ok, response()}.
-beamai_rag:query(State, Question).
+%% 检索（启用 reranker 时自动走两阶段：粗排候选 → 重排 → top_k）
+-spec retrieve(rag_pipeline(), binary(), map()) ->
+    {ok, [search_result()]} | {error, term()}.
+{ok, Results} = beamai_rag:retrieve(Rag2, Query, #{top_k => 5}),
+
+%% 检索 + 生成
+-spec query(rag_pipeline(), binary(), map()) ->
+    {ok, binary(), rag_pipeline()} | {error, term()}.
+{ok, Answer, Rag3} = beamai_rag:query(Rag2, Question, #{top_k => 3}).
+```
+
+检索结果形态（文档在 `document` 字段下）：
+
+```erlang
+#{document := #{id := _, content := _, embedding := _, metadata := _},
+  score := float(),          %% 启用重排后为重排得分
+  rerank_score => float(),   %% 仅重排后存在
+  vector_score => float()}   %% 仅重排后存在：向量阶段原始相似度
+```
+
+### 向量嵌入
+
+```erlang
+%% 构造模型：provider（委托 beamai_llm 的 beamai_embedding）/ 内置 OpenAI / 本地伪向量
+-spec new_provider(atom() | {custom, module()}, map()) -> embedding_model().
+Model = beamai_embeddings:new_provider(dashscope, #{api_key => Key}),
+
+%% 嵌入（provider 形态按厂商上限自动分批）
+-spec embed_text(embedding_model(), binary()) -> {ok, vector()} | {error, term()}.
+-spec embed_batch(embedding_model(), [binary()]) -> {ok, [vector()]} | {error, term()}.
+beamai_embeddings:embed_text(Model, Text).
+beamai_embeddings:embed_batch(Model, Texts).
+```
+
+### 向量存储（内存实现）
+
+```erlang
+%% 创建存储（选项当前被忽略）
+-spec new() -> vector_store().
+Store = beamai_vector_store:new(),
+
+%% 添加文档（需含 content 与 embedding，id 由存储生成）
+-spec add_document(vector_store(), map()) -> {ok, document_id(), vector_store()}.
+{ok, DocId, Store1} = beamai_vector_store:add_document(Store, DocInput),
+
+%% 相似度搜索：选项为 #{top_k, min_score, filter}
+-spec search(vector_store(), vector(), map()) -> {ok, [search_result()]}.
+{ok, Results} = beamai_vector_store:search(Store1, QueryVector, #{top_k => 5}).
+```
+
+### 重排序
+
+```erlang
+%% 由管道自动调用；也可单独使用
+-spec rerank(reranker(), binary(), [search_result()], map()) ->
+    {ok, [search_result()]} | {error, term()}.
+Reranker = beamai_rag_reranker:new(#{provider => cohere, api_key => Key}),
+{ok, Ranked} = beamai_rag_reranker:rerank(Reranker, Query, Candidates, #{top_n => 5}).
 ```
 
 ---

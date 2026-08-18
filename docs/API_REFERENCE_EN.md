@@ -1055,52 +1055,89 @@ beamai_mcp_server:register_resource(Server, Resource).
 
 ## beamai_rag - RAG Functionality
 
-Retrieval Augmented Generation module.
+Retrieval Augmented Generation module. Full details in
+[apps/beamai_rag/README_EN.md](../apps/beamai_rag/README_EN.md).
 
-### Vector Embeddings
-
-```erlang
-%% Generate embeddings
--spec embed(binary(), config()) -> {ok, [float()]} | {error, term()}.
--spec embed_batch([binary()], config()) -> {ok, [[float()]]} | {error, term()}.
-beamai_embeddings:embed(Text, Config).
-beamai_embeddings:embed_batch(Texts, Config).
-```
-
-### Vector Store
-
-```erlang
-%% Create store
--spec new(config()) -> {ok, store()}.
-beamai_vector_store:new(Config).
-
-%% Add vector
--spec add(store(), binary(), [float()], map()) -> {ok, store()}.
-beamai_vector_store:add(Store, Id, Vector, Metadata).
-
-%% Similarity search
--spec search(store(), [float()], integer()) -> {ok, [result()]}.
-beamai_vector_store:search(Store, QueryVector, TopK).
-```
+The pipeline is an **immutable value**: indexing and generation return a new
+pipeline that must be carried forward.
 
 ### RAG Workflow
 
 ```erlang
-%% Initialize
--spec init(config()) -> {ok, rag_state()}.
-beamai_rag:init(Config).
+%% Create a pipeline (returns the pipeline directly, not {ok, _})
+-spec new(map()) -> rag_pipeline().
+Rag0 = beamai_rag:new(#{
+    embeddings => #{provider => siliconflow, api_key => EmbKey},
+    reranker => #{provider => siliconflow, api_key => RerankKey},  %% optional
+    llm => #{provider => openai, model => <<"gpt-4o">>, api_key => LLMKey}
+}),
 
-%% Add documents
--spec add_documents(rag_state(), [document()]) -> {ok, rag_state()}.
-beamai_rag:add_documents(State, Documents).
+%% Index a document (split -> embed -> store)
+-spec index_document(rag_pipeline(), binary(), map()) ->
+    {ok, binary(), rag_pipeline()} | {error, term()}.
+{ok, DocId, Rag1} = beamai_rag:index_document(Rag0, Content, Metadata),
 
-%% Retrieve
--spec retrieve(rag_state(), binary(), integer()) -> {ok, [chunk()]}.
-beamai_rag:retrieve(State, Query, TopK).
+%% Bulk indexing: input is [{Content, Metadata}]
+{ok, DocIds, Rag2} = beamai_rag:index_documents(Rag1, Documents, #{}),
 
-%% RAG query (retrieve + generate)
--spec query(rag_state(), binary()) -> {ok, response()}.
-beamai_rag:query(State, Question).
+%% Retrieval (two-stage automatically when a reranker is configured)
+-spec retrieve(rag_pipeline(), binary(), map()) ->
+    {ok, [search_result()]} | {error, term()}.
+{ok, Results} = beamai_rag:retrieve(Rag2, Query, #{top_k => 5}),
+
+%% Retrieval + generation
+-spec query(rag_pipeline(), binary(), map()) ->
+    {ok, binary(), rag_pipeline()} | {error, term()}.
+{ok, Answer, Rag3} = beamai_rag:query(Rag2, Question, #{top_k => 3}).
+```
+
+Search result shape (the document is nested under `document`):
+
+```erlang
+#{document := #{id := _, content := _, embedding := _, metadata := _},
+  score := float(),          %% rerank score once reranking is enabled
+  rerank_score => float(),   %% present only after reranking
+  vector_score => float()}   %% present only after reranking
+```
+
+### Vector Embeddings
+
+```erlang
+%% Model construction: provider (backed by beamai_embedding) / built-in OpenAI / local
+-spec new_provider(atom() | {custom, module()}, map()) -> embedding_model().
+Model = beamai_embeddings:new_provider(dashscope, #{api_key => Key}),
+
+%% Embedding (provider mode batches automatically against the provider limit)
+-spec embed_text(embedding_model(), binary()) -> {ok, vector()} | {error, term()}.
+-spec embed_batch(embedding_model(), [binary()]) -> {ok, [vector()]} | {error, term()}.
+beamai_embeddings:embed_text(Model, Text).
+beamai_embeddings:embed_batch(Model, Texts).
+```
+
+### Vector Store (In-Memory)
+
+```erlang
+%% Create a store (options are currently ignored)
+-spec new() -> vector_store().
+Store = beamai_vector_store:new(),
+
+%% Add a document (needs content and embedding; the store generates the id)
+-spec add_document(vector_store(), map()) -> {ok, document_id(), vector_store()}.
+{ok, DocId, Store1} = beamai_vector_store:add_document(Store, DocInput),
+
+%% Similarity search: options are #{top_k, min_score, filter}
+-spec search(vector_store(), vector(), map()) -> {ok, [search_result()]}.
+{ok, Results} = beamai_vector_store:search(Store1, QueryVector, #{top_k => 5}).
+```
+
+### Reranking
+
+```erlang
+%% Called by the pipeline automatically; usable standalone too
+-spec rerank(reranker(), binary(), [search_result()], map()) ->
+    {ok, [search_result()]} | {error, term()}.
+Reranker = beamai_rag_reranker:new(#{provider => cohere, api_key => Key}),
+{ok, Ranked} = beamai_rag_reranker:rerank(Reranker, Query, Candidates, #{top_n => 5}).
 ```
 
 ---

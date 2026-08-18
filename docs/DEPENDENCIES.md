@@ -207,13 +207,23 @@ application:set_env(beamai_core, http_backend, beamai_http_hackney).
 #### beamai_rag（RAG 系统）
 
 **依赖**:
-- beamai_core
+- beamai_core（beamai_http / beamai_id / beamai_utils）
+- beamai_llm（**可选**，声明在 `optional_applications`）：
+  - `beamai_embedding` — provider 形态的文本向量化（openai / dashscope /
+    zhipu / siliconflow / ollama / mock，自动分批与重试）
+  - `beamai_rerank` — Cross-Encoder 重排序（两阶段检索的第二阶段）
+  - `beamai_chat_completion` — 检索后的答案生成
+
+> 不带 beamai_llm 运行时，本地伪向量嵌入与内存检索照常工作；provider 嵌入与
+> 重排返回 `{error, {embedding_unavailable, _}}` / `{error, {rerank_unavailable, _}}`，
+> 生成阶段返回 `{error, {llm_call_failed, ...}}`。
 
 **提供功能**:
-- RAG 管道（beamai_rag）
+- RAG 管道（beamai_rag）：索引 → 检索（可选重排）→ 生成
 - 文档分割（beamai_rag_splitter）
-- 向量存储（beamai_vector_store）
-- 嵌入支持（beamai_embeddings）
+- 向量存储（beamai_vector_store，内存实现）
+- 嵌入支持（beamai_embeddings：provider / 内置 OpenAI / 本地伪向量三种形态）
+- 重排序适配（beamai_rag_reranker）
 
 #### beamai_agent（Agent 系统）
 
