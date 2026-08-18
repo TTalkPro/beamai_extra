@@ -66,7 +66,8 @@
     embeddings := beamai_embeddings:embedding_model(),
     vector_store := beamai_vector_store:vector_store(),
     text_splitter := beamai_rag_splitter:splitter(),
-    llm := map()
+    llm := map(),
+    reranker := beamai_rag_reranker:reranker()
 }.
 
 %% 复用 beamai_rag_splitter 的类型
@@ -101,13 +102,15 @@ new() ->
 %% - vector_store: 向量存储
 %% - text_splitter: 分割器配置
 %% - llm: LLM 配置
+%% - reranker: 重排序配置（默认不启用），见 beamai_rag_reranker:new/1
 -spec new(map()) -> rag_pipeline().
 new(Opts) ->
     #{
         embeddings => maps:get(embeddings, Opts, beamai_embeddings:new_local()),
         vector_store => maps:get(vector_store, Opts, beamai_vector_store:new()),
         text_splitter => beamai_rag_splitter:new(maps:get(text_splitter, Opts, #{})),
-        llm => maps:get(llm, Opts, default_llm_config())
+        llm => maps:get(llm, Opts, default_llm_config()),
+        reranker => beamai_rag_reranker:new(maps:get(reranker, Opts, undefined))
     }.
 
 %%====================================================================
@@ -182,20 +185,32 @@ retrieve(Pipeline, Query) ->
 
 %% @doc 检索相关文档
 %%
+%% 未启用重排序时为单阶段：向量召回 top_k 条直接返回。
+%% 启用重排序后为两阶段：向量召回 candidate_top_k 条（默认 top_k * 4）
+%% 交给重排模型打分，再截取 top_k 条返回。
+%%
 %% 选项：
 %% - top_k: 返回结果数量（默认 5）
 %% - min_score: 最低相似度分数（默认 0.0）
+%% - reranker: 覆盖管道的重排序配置；`false' 表示本次不重排
+%% - candidate_top_k: 重排前的粗排候选数（默认 top_k * candidate_multiplier）
+%% - max_retries / retry_delay / on_retry: 重排请求的重试策略
 %% - callbacks: 回调函数映射
 %%   - on_retriever_start: fun(Query, Metadata) -> ok
 %%   - on_retriever_end: fun(Documents, Metadata) -> ok
 %%   - on_retriever_error: fun(Error, Metadata) -> ok
+%%   - on_rerank_start: fun(Query, Candidates, Metadata) -> ok
+%%   - on_rerank_end: fun(Documents, Metadata) -> ok
+%%   - on_rerank_error: fun(Error, Metadata) -> ok
 %% - callback_meta: 回调元数据（默认 #{}）
 -spec retrieve(rag_pipeline(), binary(), map()) ->
     {ok, [beamai_vector_store:search_result()]} | {error, term()}.
 retrieve(Pipeline, Query, Opts) ->
     #{embeddings := Model, vector_store := Store} = Pipeline,
+    Reranker = resolve_reranker(Pipeline, Opts),
+    TopK = maps:get(top_k, Opts, ?TOP_K),
     SearchOpts = #{
-        top_k => maps:get(top_k, Opts, ?TOP_K),
+        top_k => beamai_rag_reranker:candidate_top_k(Reranker, TopK, Opts),
         min_score => maps:get(min_score, Opts, 0.0)
     },
 
@@ -207,10 +222,16 @@ retrieve(Pipeline, Query, Opts) ->
     invoke_callback(on_retriever_start, [Query], Callbacks, Meta),
 
     case embed_and_search(Model, Store, Query, SearchOpts) of
-        {ok, Results} ->
-            %% 调用 on_retriever_end 回调
-            invoke_callback(on_retriever_end, [Results], Callbacks, Meta),
-            {ok, Results};
+        {ok, Candidates} ->
+            case apply_rerank(Reranker, Query, Candidates, TopK, Opts, Callbacks, Meta) of
+                {ok, Results} ->
+                    %% 调用 on_retriever_end 回调
+                    invoke_callback(on_retriever_end, [Results], Callbacks, Meta),
+                    {ok, Results};
+                {error, Reason} ->
+                    invoke_callback(on_retriever_error, [Reason], Callbacks, Meta),
+                    {error, Reason}
+            end;
         {error, Reason} ->
             %% 调用 on_retriever_error 回调
             invoke_callback(on_retriever_error, [Reason], Callbacks, Meta),
@@ -233,6 +254,7 @@ query(Pipeline, Question) ->
 %% 选项：
 %% - top_k: 检索结果数量
 %% - max_context_length: 最大上下文长度
+%% - reranker / candidate_top_k: 重排序控制（透传给 retrieve）
 %% - callbacks: 回调函数映射（传递给 retrieve）
 %% - callback_meta: 回调元数据
 -spec query(rag_pipeline(), binary(), map()) ->
@@ -241,12 +263,12 @@ query(Pipeline, Question, Opts) ->
     TopK = maps:get(top_k, Opts, ?TOP_K),
     MaxContext = maps:get(max_context_length, Opts, ?MAX_CONTEXT),
 
-    %% 构建 retrieve 选项（包含回调）
-    RetrieveOpts = #{
+    %% 构建 retrieve 选项（包含回调与重排序控制）
+    RetrieveOpts = maps:merge(maps:with([reranker, candidate_top_k], Opts), #{
         top_k => TopK,
         callbacks => maps:get(callbacks, Opts, #{}),
         callback_meta => maps:get(callback_meta, Opts, #{})
-    },
+    }),
 
     case retrieve(Pipeline, Question, RetrieveOpts) of
         {ok, Results} ->
@@ -317,6 +339,57 @@ embed_and_search(Model, Store, Query, SearchOpts) ->
             beamai_vector_store:search(Store, QueryVector, SearchOpts);
         {error, Reason} ->
             {error, {embedding_error, Reason}}
+    end.
+
+%%====================================================================
+%% 私有函数 - 重排序
+%%====================================================================
+
+%% @private 解析本次调用生效的重排序器
+%% 调用级 Opts 覆盖管道配置：`reranker => false' 可临时关闭。
+-spec resolve_reranker(rag_pipeline(), map()) -> beamai_rag_reranker:reranker().
+resolve_reranker(Pipeline, Opts) ->
+    case maps:find(reranker, Opts) of
+        {ok, Override} -> beamai_rag_reranker:new(Override);
+        error -> maps:get(reranker, Pipeline, disabled)
+    end.
+
+%% @private 对候选结果执行重排序
+%%
+%% 未启用时直接截取 top_k；启用时按重排得分重排并截断。
+%% 重排失败按策略处理：`fallback'（默认）退回向量顺序，`fail' 上抛错误。
+-spec apply_rerank(beamai_rag_reranker:reranker(), binary(),
+                   [beamai_vector_store:search_result()], pos_integer(),
+                   map(), map(), map()) ->
+    {ok, [beamai_vector_store:search_result()]} | {error, term()}.
+apply_rerank(Reranker, Query, Candidates, TopK, Opts, Callbacks, Meta) ->
+    case beamai_rag_reranker:enabled(Reranker) of
+        false ->
+            {ok, Candidates};
+        true ->
+            invoke_callback(on_rerank_start, [Query, Candidates], Callbacks, Meta),
+            RerankOpts = maps:merge(maps:with([max_retries, retry_delay, on_retry], Opts),
+                                    #{top_n => TopK}),
+            case beamai_rag_reranker:rerank(Reranker, Query, Candidates, RerankOpts) of
+                {ok, Results} ->
+                    invoke_callback(on_rerank_end, [Results], Callbacks, Meta),
+                    {ok, Results};
+                {error, Reason} ->
+                    invoke_callback(on_rerank_error, [Reason], Callbacks, Meta),
+                    handle_rerank_error(Reranker, Reason, Candidates, TopK)
+            end
+    end.
+
+%% @private 重排失败的降级处理
+handle_rerank_error(Reranker, Reason, Candidates, TopK) ->
+    case beamai_rag_reranker:on_error(Reranker) of
+        fallback ->
+            %% 退回的是向量检索的真实结果（只是没经过重排），不是伪造内容；
+            %% 需要严格语义的场景可配置 on_error => fail。
+            logger:warning("RAG rerank failed, falling back to vector order: ~p", [Reason]),
+            {ok, lists:sublist(Candidates, TopK)};
+        fail ->
+            {error, {rerank_error, Reason}}
     end.
 
 %%====================================================================

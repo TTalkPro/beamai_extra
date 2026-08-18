@@ -11,6 +11,7 @@
     {env, []},
     {modules, [
         beamai_rag,
+        beamai_rag_reranker,
         beamai_embeddings,
         beamai_vector_store,
         beamai_rag_splitter,
