@@ -101,7 +101,7 @@ timeout_is_retried_by_middleware_test() ->
     ]),
     K = beamai_chat_client:add_tool(
           beamai_chat_client:new(#{}, beamai_middleware_runner:to_filters(Chain)), Tool),
-    ?assertMatch({error, _}, beamai_tool_executor:invoke(K, <<"slow">>, #{}, beamai_context:new())),
+    ?assertMatch({error, _}, beamai_chat_client:invoke_tool(K, <<"slow">>, #{}, beamai_context:new())),
     ?assertEqual(3, counters:get(Counter, 1)).
 
 %%====================================================================

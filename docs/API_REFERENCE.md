@@ -867,7 +867,7 @@ beamai_chat_client:invoke(ChatClient, Messages, Opts).
 %% 调用单个工具
 -spec invoke_tool(chat_client(), binary(), map(), beamai_context:t()) ->
     {ok, term(), beamai_context:t()} | {error, term()}.
-beamai_tool_executor:invoke(ChatClient, ToolName, Args, Context).
+beamai_chat_client:invoke_tool(ChatClient, ToolName, Args, Context).
 
 %% 查询工具
 -spec get_tool(chat_client(), binary()) -> {ok, tool_spec()} | error.
@@ -876,12 +876,12 @@ beamai_tool_executor:invoke(ChatClient, ToolName, Args, Context).
 -spec get_tool_specs(chat_client()) -> [map()].
 -spec get_tool_schemas(chat_client()) -> [map()].
 -spec get_tool_schemas(chat_client(), atom()) -> [map()].
-beamai_tool_registry:resolve(beamai_chat_client:tools(ChatClient), Name).
-beamai_tool_registry:list(beamai_chat_client:tools(ChatClient)).
-beamai_tool_registry:by_tag(beamai_chat_client:tools(ChatClient), Tag).
-beamai_tool_registry:specs(beamai_chat_client:tools(ChatClient)).
-beamai_tool_registry:schemas(beamai_chat_client:tools(ChatClient)).          %% 默认 OpenAI 格式
-beamai_tool_registry:schemas(beamai_chat_client:tools(ChatClient), Provider). %% 指定 Provider 格式
+beamai_chat_client:get_tool(ChatClient, Name).
+beamai_chat_client:list_tools(ChatClient).
+beamai_chat_client:get_tools_by_tag(ChatClient, Tag).
+beamai_chat_client:get_tool_specs(ChatClient).
+beamai_chat_client:get_tool_schemas(ChatClient).          %% 默认 OpenAI 格式
+beamai_chat_client:get_tool_schemas(ChatClient, Provider). %% 指定 Provider 格式
 
 %% 获取 LLM 服务配置
 -spec model(chat_client()) -> beamai_chat_model:config() | undefined.

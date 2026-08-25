@@ -142,4 +142,4 @@ invoke(Handler, Opts0) ->
     Chain = beamai_middleware_runner:init([{middleware_tool_retry, Opts}]),
     ChatClient = beamai_chat_client:add_tool(
                beamai_chat_client:new(#{}, beamai_middleware_runner:to_filters(Chain)), Tool),
-    beamai_tool_executor:invoke(ChatClient, <<"flaky">>, #{}, beamai_context:new()).
+    beamai_chat_client:invoke_tool(ChatClient, <<"flaky">>, #{}, beamai_context:new()).

@@ -311,7 +311,7 @@ Tool = #{
 ChatClient2 = beamai_chat_client:add_tool(ChatClient1, Tool),
 
 %% 调用注册的工具
-{ok, Result, _NewCtx} = beamai_tool_executor:invoke(ChatClient2, <<"read_file">>, #{
+{ok, Result, _NewCtx} = beamai_chat_client:invoke_tool(ChatClient2, <<"read_file">>, #{
     <<"path">> => <<"/tmp/test.txt">>
 }, beamai_context:new()).
 ```
