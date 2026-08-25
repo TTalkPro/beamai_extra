@@ -1,7 +1,7 @@
 %%%-------------------------------------------------------------------
 %%% @doc 测试桩：假 LLM provider。
 %%%
-%%% beamai_kernel 的 chat_terminal 用 `maps:get(module, LlmConfig, beamai_chat_completion)'
+%%% beamai_chat_client 的 chat_terminal 用 `maps:get(module, LlmConfig, beamai_chat_completion)'
 %%% 决定调谁，把它设成本模块即可在不发网络请求的前提下跑通 around_chat 链。
 %%% @end
 %%%-------------------------------------------------------------------

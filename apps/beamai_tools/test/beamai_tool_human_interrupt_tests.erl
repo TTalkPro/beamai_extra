@@ -30,8 +30,8 @@ interrupt_tools_shape_test() ->
     [?assertEqual(error, maps:find(handler, T)) || T <- Tools].
 
 %% 阻塞式 handler 已彻底删除：本模块不再是 beamai_tool_behaviour，
-%% 不提供 kernel 工具，只剩 interrupt 描述符。
-%% （挂进 plugins 会让模型看到重名工具——wire schema 是 kernel 工具 ++ interrupt 规格）
+%% 不提供 chat_client 工具，只剩 interrupt 描述符。
+%% （挂进 plugins 会让模型看到重名工具——wire schema 是 chat_client 工具 ++ interrupt 规格）
 blocking_handler_path_is_gone_test() ->
     code:ensure_loaded(beamai_tool_human),
     ?assertNot(erlang:function_exported(beamai_tool_human, tools, 0)),

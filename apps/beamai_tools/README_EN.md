@@ -35,21 +35,21 @@ Tool system module providing tool module loading, Middleware system, and built-i
 - **beamai_tool_file** - File operations (read, write, list, glob)
 - **beamai_tool_shell** - Shell command execution
 - **beamai_tool_todo** - Task management
-- **beamai_tool_human** - Human-in-the-loop (interrupt tool descriptors, used via the agent's `interrupt_tools`; not registered into the kernel)
+- **beamai_tool_human** - Human-in-the-loop (interrupt tool descriptors, used via the agent's `interrupt_tools`; not registered into the ChatClient)
 
 ## API Documentation
 
 ### beamai_tools
 
 ```erlang
-%% Load a single tool module into Kernel
-beamai_tools:load(Kernel, beamai_tool_file) -> Kernel1.
+%% Load a single tool module into ChatClient
+beamai_tools:load(ChatClient, beamai_tool_file) -> ChatClient1.
 
 %% Load multiple tool modules
-beamai_tools:load_all(Kernel, [beamai_tool_file, beamai_tool_shell]) -> Kernel1.
+beamai_tools:load_all(ChatClient, [beamai_tool_file, beamai_tool_shell]) -> ChatClient1.
 
 %% Add Middleware
-beamai_tools:with_middleware(Kernel, Middlewares) -> Kernel1.
+beamai_tools:with_middleware(ChatClient, Middlewares) -> ChatClient1.
 
 %% Get preset Middleware configuration
 beamai_tools:presets(default) -> [MiddlewareSpec].
@@ -70,25 +70,25 @@ beamai_tools:define_tool(Name, Description, Handler, Parameters, Opts) -> ToolSp
 ### Basic Usage
 
 ```erlang
-%% Create Kernel and load tools
-Kernel = beamai_kernel:new(),
-Kernel1 = beamai_tools:load_all(Kernel, [beamai_tool_file, beamai_tool_shell]),
+%% Create ChatClient and load tools
+ChatClient = beamai_chat_client:new(),
+ChatClient1 = beamai_tools:load_all(ChatClient, [beamai_tool_file, beamai_tool_shell]),
 
 %% Get tool specs for Agent use
-Tools = beamai_kernel:get_tool_specs(Kernel1).
+Tools = beamai_tool_registry:specs(beamai_chat_client:tools(ChatClient1)).
 ```
 
 ### Using Middleware
 
 ```erlang
 %% Use preset Middleware
-Kernel = beamai_kernel:new(),
-Kernel1 = beamai_tools:load_all(Kernel, [beamai_tool_file]),
-Kernel2 = beamai_tools:with_middleware(Kernel1,
+ChatClient = beamai_chat_client:new(),
+ChatClient1 = beamai_tools:load_all(ChatClient, [beamai_tool_file]),
+ChatClient2 = beamai_tools:with_middleware(ChatClient1,
     beamai_middleware_presets:production()),
 
 %% Or use custom Middleware configuration
-Kernel3 = beamai_tools:with_middleware(Kernel1, [
+ChatClient3 = beamai_tools:with_middleware(ChatClient1, [
     {middleware_call_limit, #{max_model_calls => 20}},
     {middleware_tool_retry, #{max_retries => 3}}
 ]).
@@ -113,8 +113,8 @@ Tool = beamai_tools:define_tool(
     }
 ),
 
-Kernel = beamai_kernel:new(),
-Kernel1 = beamai_kernel:add_tools(Kernel, [Tool]).
+ChatClient = beamai_chat_client:new(),
+ChatClient1 = beamai_chat_client:add_tools(ChatClient, [Tool]).
 ```
 
 ## Middleware Presets
@@ -129,7 +129,7 @@ Kernel1 = beamai_kernel:add_tools(Kernel, [Tool]).
 
 ## Dependencies
 
-- beamai_core (Kernel, tool behaviour definition)
+- beamai_core (ChatClient, tool behaviour definition)
 - jsx (JSON encoding/decoding)
 
 ## License

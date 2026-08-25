@@ -12,8 +12,8 @@
 
 ## 特性
 
-- **Kernel/Tool 架构**: 语义化的工具注册和调用系统
-  - 基于 Semantic Kernel 理念的 Kernel 核心
+- **ChatClient/Tool 架构**: 语义化的工具注册和调用系统
+  - 基于 Semantic Kernel 理念的 ChatClient 核心
   - 统一的 Tool 定义和管理
   - Filter 过滤器和安全验证
 
@@ -90,18 +90,18 @@ beamai_agent:messages(Agent1).      %% => 消息历史列表
 beamai_agent:last_response(Agent1). %% => 上一次助手回复
 ```
 
-### 4. Simple Agent（使用 Kernel + Tool 注册工具）
+### 4. Simple Agent（使用 ChatClient + Tool 注册工具）
 
 ```erlang
-%% 方式一：直接在 Agent 中定义工具（通过 Kernel 自动构建）
-Kernel0 = beamai_kernel:new(),
+%% 方式一：直接在 Agent 中定义工具（通过 ChatClient 自动构建）
+ChatClient0 = beamai_chat_client:new(),
 LlmConfig = beamai_chat_completion:create(anthropic, #{
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
     model => <<"glm-4.7">>
 }),
-K1 = beamai_kernel:add_service(Kernel0, LlmConfig),
-K2 = beamai_kernel:add_tool(K1, #{
+K1 = beamai_chat_client:add_service(ChatClient0, LlmConfig),
+K2 = beamai_chat_client:add_tool(K1, #{
     name => <<"get_weather">>,
     description => <<"获取城市天气"/utf8>>,
     parameters => #{
@@ -112,9 +112,9 @@ K2 = beamai_kernel:add_tool(K1, #{
     end
 }),
 
-%% 使用预构建 Kernel 创建 Agent
+%% 使用预构建 ChatClient 创建 Agent
 {ok, Agent0} = beamai_agent:new(#{
-    kernel => K2,
+    chat_client => K2,
     system_prompt => <<"你是天气助手。"/utf8>>
 }),
 {ok, Result, _} = beamai_agent:run(Agent0, <<"北京天气怎么样？"/utf8>>).
@@ -190,7 +190,7 @@ Trace = beamai_deepagent:get_trace(Result).
 ```
 beamai (外部依赖)
 ├── beamai_core/        # 核心框架
-│   ├── Kernel         # beamai_kernel, beamai_tool, beamai_context,
+│   ├── ChatClient         # beamai_chat_client, beamai_tool, beamai_context,
 │   │                  # beamai_filter, beamai_prompt, beamai_result
 │   ├── LLM            # beamai_llm_response (统一 LLM 响应访问器)
 │   ├── Process        # beamai_process, beamai_process_builder,
@@ -279,23 +279,23 @@ apps/
 
 **依赖说明：**
 - 本项目通过 `rebar.config` 依赖 [BeamAI](https://github.com/TTalkPro/beamai) 的 main 分支
-- 核心功能（Kernel、Process Framework、Graph、LLM、Memory）由 BeamAI 提供
+- 核心功能（ChatClient、Process Framework、Graph、LLM、Memory）由 BeamAI 提供
 - 本项目专注于 Agent 实现、协议支持（A2A、MCP）、工具系统和 RAG 功能
 
 详见 [DEPENDENCIES.md](doc/DEPENDENCIES.md)
 
 ## 核心概念
 
-### 1. Kernel 架构
+### 1. ChatClient 架构
 
-Kernel 是 BeamAI 的核心抽象，管理 Tool 的注册与调用：
+ChatClient 是 BeamAI 的核心抽象，管理 Tool 的注册与调用：
 
 ```erlang
-%% 创建 Kernel 实例
-Kernel = beamai_kernel:new(),
+%% 创建 ChatClient 实例
+ChatClient = beamai_chat_client:new(),
 
 %% 从 Tool 模块加载工具
-Kernel1 = beamai_kernel:add_tool_module(Kernel, beamai_tool_file),
+ChatClient1 = beamai_chat_client:add_tool_module(ChatClient, beamai_tool_file),
 
 %% 或添加单个工具
 Tool = #{
@@ -308,10 +308,10 @@ Tool = #{
         file:read_file(Path)
     end
 },
-Kernel2 = beamai_kernel:add_tool(Kernel1, Tool),
+ChatClient2 = beamai_chat_client:add_tool(ChatClient1, Tool),
 
 %% 调用注册的工具
-{ok, Result, _NewCtx} = beamai_kernel:invoke_tool(Kernel2, <<"read_file">>, #{
+{ok, Result, _NewCtx} = beamai_tool_executor:invoke(ChatClient2, <<"read_file">>, #{
     <<"path">> => <<"/tmp/test.txt">>
 }, beamai_context:new()).
 ```
@@ -465,7 +465,7 @@ BeamAI 支持 Gun 和 Hackney 两种 HTTP 后端，默认使用 Gun（支持 HTT
 
 | 模块 | 说明 | 来源 | 文档 |
 |------|------|------|------|
-| **beamai_core** | 核心框架：Kernel、Process Framework、Graph 引擎、HTTP、Behaviours | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
+| **beamai_core** | 核心框架：ChatClient、Process Framework、Graph 引擎、HTTP、Behaviours | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
 | **beamai_llm** | LLM 客户端：支持 OpenAI、Anthropic、DeepSeek、Zhipu、DashScope、Ollama | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
 | **beamai_memory** | 记忆管理：Checkpoint、Store、时间旅行、分支 | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
 | **beamai_tools** | 工具和中间件系统：Tool 模块、Middleware、安全验证 | 本项目 | [README](apps/beamai_tools/README.md) |

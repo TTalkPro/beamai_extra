@@ -71,7 +71,7 @@ around_tool(Req, State, Next) ->
                     %%
                     %% 关键是必须自己 encode。以前直接把裸元组
                     %% `{error, {approval_rejected, rejected_by_user}}' 塞进 result，
-                    %% kernel 的 `{ok, #{result := V}} -> {ok, V, W}' 把它当成功值透出，
+                    %% chat_client 的 `{ok, #{result := V}} -> {ok, V, W}' 把它当成功值透出，
                     %% 最后由 beamai_agent_utils 的 encode_result 兜底成
                     %% `io_lib:format("~p")' —— 模型收到的是一串 Erlang 项式
                     %% （`<<"..">>'、`#{k => v}'），不是它认识的 JSON。

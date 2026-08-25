@@ -28,7 +28,7 @@
 
 4. **Project Structure Result**
    - **Core Dependencies** (from BeamAI):
-     - beamai_core - Kernel, Process Framework, Graph Engine, HTTP, Behaviours
+     - beamai_core - ChatClient, Process Framework, Graph Engine, HTTP, Behaviours
      - beamai_llm - LLM Chat Completion, Output Parser, Providers
      - beamai_memory - Memory Store, Snapshot, Checkpoint
 
@@ -65,10 +65,10 @@
 - Added interrupt support for human-in-the-loop in pregel_worker
 - Error handling refactor with compute_status types
 
-### Phase 1: Kernel + Plugin + Function (Pre-Restructuring)
+### Phase 1: ChatClient + Plugin + Function (Pre-Restructuring)
 
 All completed - now part of external beamai dependency:
-- beamai_kernel, beamai_function, beamai_plugin, beamai_context, beamai_result
+- beamai_chat_client, beamai_function, beamai_plugin, beamai_context, beamai_result
 - beamai_filter, beamai_service, beamai_chat_completion, beamai_prompt
 - Connectors for OpenAI, Anthropic, Zhipu, Ollama
 - Tool calling loop and facade API

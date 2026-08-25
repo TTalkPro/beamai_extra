@@ -1,5 +1,5 @@
 {application, beamai_examples, [
-    {description, "BeamAI Kernel Examples"},
+    {description, "BeamAI ChatClient Examples"},
     {vsn, "1.0.0"},
     {registered, []},
     {applications, [

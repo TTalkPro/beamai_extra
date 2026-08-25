@@ -95,7 +95,7 @@ around_chat(Req, State, Next) ->
 %% @private halt：抛出，让 beamai_filter_chain:run/4 在最外层收敛成 {error, Reason}。
 %%
 %% 必须 throw，不能返回 `#{response => Error}' / `#{result => Error}'——
-%% kernel 对这两条链的成功路径是 `{ok, #{response := R}} -> {ok, R, Ctx}' 和
+%% chat_client 对这两条链的成功路径是 `{ok, #{response := R}} -> {ok, R, Ctx}' 和
 %% `{ok, #{result := V}} -> {ok, V, W}'，返回错误值等于**报告成功**：
 %% 实测 halt 时 invoke_chat 返回 `{ok, {limit_exceeded, ...}, Ctx}'，agent 拿它
 %% 当 LLM 响应用，content 解出 null、tool_calls 解出 []——于是"halt"变成了

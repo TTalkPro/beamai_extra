@@ -196,10 +196,10 @@ test_agent_with_tools() ->
     ensure_apps(),
     LLM = create_llm(),
 
-    %% 构建带工具的 Kernel
-    Kernel0 = beamai_kernel:new(),
-    K1 = beamai_kernel:add_service(Kernel0, LLM),
-    K2 = beamai_kernel:add_tools(K1, [
+    %% 构建带工具的 ChatClient
+    ChatClient0 = beamai_chat_client:new(),
+    K1 = beamai_chat_client:add_service(ChatClient0, LLM),
+    K2 = beamai_chat_client:add_tools(K1, [
         #{name => <<"calculate">>,
           description => <<"Perform arithmetic. Supports: add, subtract, multiply, divide.">>,
           parameters => #{
@@ -237,7 +237,7 @@ test_agent_with_tools() ->
 
     ToolCallCount = counters:new(1, []),
     {ok, Agent} = beamai_agent:new(#{
-        kernel => K2,
+        chat_client => K2,
         system_prompt => <<"You are a helpful assistant with tools. Use the calculate tool for math questions. Be concise.">>,
         max_tool_iterations => 5,
         callbacks => #{

@@ -5,7 +5,7 @@
 %%% - ask_human: 向用户提问，获取更多信息或澄清
 %%% - confirm_action: 请求用户确认重要操作
 %%%
-%%% == 本模块不提供 kernel 工具 ==
+%%% == 本模块不提供 chat_client 工具 ==
 %%%
 %%% 它**不是** beamai_tool_behaviour 模块，没有 tools/0，别往 plugins 里挂。
 %%% 这里只导出 interrupt_tools/0，供 beamai_agent:new/1 的 `interrupt_tools' 用。
@@ -26,7 +26,7 @@
 %%% == 正道：interrupt/resume ==
 %%%
 %%% interrupt tool 不是 tool，而是一个「名字 + schema」：告诉模型可以调，
-%%% 但它永远不注册进 kernel、永远不执行。模型一调用，agent 就在**执行之前**
+%%% 但它永远不注册进 chat_client、永远不执行。模型一调用，agent 就在**执行之前**
 %%% 拦下并暂停，把控制权交回调用方；人答完 resume，答复即工具结果回灌模型。
 %%% 等待发生在 agent 之外，不占任何超时预算，也天然是串行的（整个 agent 停着）。
 %%%
@@ -48,8 +48,8 @@
 %%% '''
 %%%
 %%% resume 的 Decision 只能用 `<<"reply">>'（答复即结果）或 `<<"rejected">>'（拒绝）。
-%%% **绝不能用 `<<"approved">>'**：那条路径语义是"执行被中断的工具"，会去 kernel
-%%% 里找 ask_human——而 interrupt tool 压根没注册进 kernel，只会得到一个
+%%% **绝不能用 `<<"approved">>'**：那条路径语义是"执行被中断的工具"，会去 chat_client
+%%% 里找 ask_human——而 interrupt tool 压根没注册进 chat_client，只会得到一个
 %%% tool_not_found 喂给模型。
 %%%
 %%% 跨请求/跨重启接人（答复在后续请求才到）：配 `pause_store' +

@@ -54,7 +54,7 @@ selective_mode_rejects_listed_tool_test() ->
 %%====================================================================
 
 %% 回归测试：以前把裸元组 {error,{approval_rejected,_}} 塞进 result，
-%% kernel 当成功值透出，最后被 io_lib:format("~p") 兜底——模型收到的是
+%% chat_client 当成功值透出，最后被 io_lib:format("~p") 兜底——模型收到的是
 %% Erlang 项式（<<"..">>、#{k => v}）而不是 JSON。现在必须是已编码的 JSON。
 rejection_is_encoded_json_test() ->
     {Result, _} = run(#{mode => all, approval_handler => fun(_, _) -> reject end}),
@@ -144,15 +144,15 @@ handler_timeout_action_confirm_test() ->
 %% 辅助
 %%====================================================================
 
-%% 跑一次真实 kernel 工具调用，返回 {结果, 工具是否真的被执行}
+%% 跑一次真实 chat_client 工具调用，返回 {结果, 工具是否真的被执行}
 run(Opts) ->
     Counter = counters:new(1, []),
     Handler = fun(_) -> counters:add(Counter, 1, 1), {ok, <<"done">>} end,
     Tool = beamai_tool:new(<<"danger">>, Handler, #{description => <<"d">>}),
     Chain = beamai_middleware_runner:init([{middleware_human_approval, Opts}]),
-    Kernel = beamai_kernel:add_tool(
-               beamai_kernel:new(#{}, beamai_middleware_runner:to_filters(Chain)), Tool),
-    Result = beamai_kernel:invoke_tool(Kernel, <<"danger">>, #{}, beamai_context:new()),
+    ChatClient = beamai_chat_client:add_tool(
+               beamai_chat_client:new(#{}, beamai_middleware_runner:to_filters(Chain)), Tool),
+    Result = beamai_tool_executor:invoke(ChatClient, <<"danger">>, #{}, beamai_context:new()),
     {Result, counters:get(Counter, 1) > 0}.
 
 %% @private 是否为一个"已拒绝"的编码结果

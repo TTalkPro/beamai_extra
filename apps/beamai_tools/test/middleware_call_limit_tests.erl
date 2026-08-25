@@ -2,7 +2,7 @@
 %%% @doc middleware_call_limit 单元测试
 %%%
 %%% 历史缺陷：halt 不 halt。短路时返回 `#{response => {limit_exceeded,_}}' /
-%%% `#{result => {limit_exceeded,_}}'，而 kernel 的成功路径正是
+%%% `#{result => {limit_exceeded,_}}'，而 chat_client 的成功路径正是
 %%% `{ok, #{response := R}} -> {ok, R, Ctx}'——于是错误值被当成**成功**透出，
 %%% agent 拿它当 LLM 响应用，content 解出 null、tool_calls 解出 []，
 %%% 整轮静默返回空答案，限额信息谁也看不到。
@@ -25,37 +25,37 @@
 
 %% 回归测试：以前这里是 {ok, {limit_exceeded,_}, _}
 model_limit_halt_returns_error_test() ->
-    K = chat_kernel(#{max_model_calls => 0, on_limit_exceeded => halt}),
+    K = chat_chat_client(#{max_model_calls => 0, on_limit_exceeded => halt}),
     ?assertMatch({error, {limit_exceeded, #{type := model_calls}}},
-                 beamai_kernel:invoke_chat(K, msgs(), #{})).
+                 beamai_chat_client:invoke_chat(K, msgs(), #{})).
 
 %% 错误里要带足信息，否则运维看不出是撞了哪条线
 model_limit_error_carries_details_test() ->
-    K = chat_kernel(#{max_model_calls => 3, on_limit_exceeded => halt}),
+    K = chat_chat_client(#{max_model_calls => 3, on_limit_exceeded => halt}),
     %% 这里直连 invoke_chat、不回穿 context，故计数不累加；直接把上限设成 0 来触发。
     %% （真实 agent 循环会把 invoke_chat 返回的 context 穿回下一轮，计数正常累加）
-    K0 = chat_kernel(#{max_model_calls => 0, on_limit_exceeded => halt}),
-    {error, {limit_exceeded, D}} = beamai_kernel:invoke_chat(K0, msgs(), #{}),
+    K0 = chat_chat_client(#{max_model_calls => 0, on_limit_exceeded => halt}),
+    {error, {limit_exceeded, D}} = beamai_chat_client:invoke_chat(K0, msgs(), #{}),
     ?assertEqual(model_calls, maps:get(type, D)),
     ?assertEqual(0, maps:get(max, D)),
     ?assert(is_binary(maps:get(message, D))),
     %% 未超限时照常放行
-    ?assertMatch({ok, _, _}, beamai_kernel:invoke_chat(K, msgs(), #{})).
+    ?assertMatch({ok, _, _}, beamai_chat_client:invoke_chat(K, msgs(), #{})).
 
 %% iterations 与 model_calls 是同一个计数，谁小谁先触发
 iteration_limit_halt_returns_error_test() ->
-    K = chat_kernel(#{max_model_calls => 99, max_iterations => 0, on_limit_exceeded => halt}),
+    K = chat_chat_client(#{max_model_calls => 99, max_iterations => 0, on_limit_exceeded => halt}),
     ?assertMatch({error, {limit_exceeded, #{type := iterations}}},
-                 beamai_kernel:invoke_chat(K, msgs(), #{})).
+                 beamai_chat_client:invoke_chat(K, msgs(), #{})).
 
 %% warn_and_continue 不该短路
 warn_and_continue_passes_through_test() ->
-    K = chat_kernel(#{max_model_calls => 0, on_limit_exceeded => warn_and_continue}),
-    ?assertMatch({ok, _, _}, beamai_kernel:invoke_chat(K, msgs(), #{})).
+    K = chat_chat_client(#{max_model_calls => 0, on_limit_exceeded => warn_and_continue}),
+    ?assertMatch({ok, _, _}, beamai_chat_client:invoke_chat(K, msgs(), #{})).
 
 under_limit_passes_through_test() ->
-    K = chat_kernel(#{max_model_calls => 10, on_limit_exceeded => halt}),
-    ?assertMatch({ok, _, _}, beamai_kernel:invoke_chat(K, msgs(), #{})).
+    K = chat_chat_client(#{max_model_calls => 10, on_limit_exceeded => halt}),
+    ?assertMatch({ok, _, _}, beamai_chat_client:invoke_chat(K, msgs(), #{})).
 
 %%====================================================================
 %% 工具侧限额已移除
@@ -94,8 +94,8 @@ filters(Opts) ->
     beamai_middleware_runner:to_filters(
       beamai_middleware_runner:init([{middleware_call_limit, Opts}])).
 
-chat_kernel(Opts) ->
-    beamai_kernel:add_service(
-      beamai_kernel:new(#{}, filters(Opts)),
+chat_chat_client(Opts) ->
+    beamai_chat_client:add_service(
+      beamai_chat_client:new(#{}, filters(Opts)),
       #{module => cl_fake_llm, provider => openai, model => <<"m">>, api_key => <<"k">>}).
 

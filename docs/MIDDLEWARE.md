@@ -2,7 +2,7 @@
 
 [English](MIDDLEWARE_EN.md) | 中文
 
-beamai_tools 的 Middleware 系统提供了一种灵活的方式来拦截、修改和控制 Kernel 函数调用的各个阶段。
+beamai_tools 的 Middleware 系统提供了一种灵活的方式来拦截、修改和控制 ChatClient 函数调用的各个阶段。
 
 ## 目录
 
@@ -18,7 +18,7 @@ beamai_tools 的 Middleware 系统提供了一种灵活的方式来拦截、修�
 
 ## 概述
 
-Middleware 是 Kernel 函数调用过程中的拦截器，可以：
+Middleware 是 ChatClient 函数调用过程中的拦截器，可以：
 
 - **修改输入/输出**: 在 LLM 调用或工具调用前后修改上下文
 - **控制流程**: 跳过、重试或中止执行
@@ -29,7 +29,7 @@ Middleware 是 Kernel 函数调用过程中的拦截器，可以：
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Kernel 函数调用                            │
+│                    ChatClient 函数调用                            │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  ┌──────────────┐                                           │
@@ -421,13 +421,13 @@ log(debug, Fmt, Args) -> logger:debug(Fmt, Args).
 
 ## 配置和使用
 
-### 与 Kernel 集成
+### 与 ChatClient 集成
 
 ```erlang
 %% 方式 1：使用 beamai_tools 的 with_middleware
-Kernel = beamai_kernel:new(),
-Kernel1 = beamai_tools:load_all(Kernel, [beamai_tool_file, beamai_tool_shell]),
-Kernel2 = beamai_tools:with_middleware(Kernel1,
+ChatClient = beamai_chat_client:new(),
+ChatClient1 = beamai_tools:load_all(ChatClient, [beamai_tool_file, beamai_tool_shell]),
+ChatClient2 = beamai_tools:with_middleware(ChatClient1,
     beamai_middleware_presets:production()),
 
 %% 方式 2：手动初始化 Middleware 链
@@ -437,9 +437,9 @@ Chain = beamai_middleware_runner:init([
     {my_custom_middleware, #{option => value}}
 ]).
 
-%% 方式 3：转换为 Kernel Filter
+%% 方式 3：转换为 ChatClient Filter
 Filters = beamai_middleware_runner:to_filters(Chain),
-Kernel3 = beamai_kernel:add_filter(Kernel, Filters).
+ChatClient3 = beamai_chat_client:add_filter(ChatClient, Filters).
 ```
 
 ### Middleware 配置格式
@@ -551,7 +551,7 @@ pre_invocation(FilterCtx, #{cache := Cache} = _MwState) ->
 %% 初始化 Middleware 链
 -spec init([middleware_spec()]) -> middleware_chain().
 
-%% 转换为 Kernel Filters
+%% 转换为 ChatClient Filters
 -spec to_filters(middleware_chain()) -> [beamai_filter:filter_def()].
 
 %% 执行钩子
@@ -596,5 +596,5 @@ pre_invocation(FilterCtx, #{cache := Cache} = _MwState) ->
 ## 更多资源
 
 - [beamai_tools README](../apps/beamai_tools/README.md) - Tools 模块文档
-- [beamai_core README](../apps/beamai_core/README.md) - Kernel 架构文档
+- [beamai_core README](../apps/beamai_core/README.md) - ChatClient 架构文档
 - [API 参考](API_REFERENCE.md) - API 参考文档

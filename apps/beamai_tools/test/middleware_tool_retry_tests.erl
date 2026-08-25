@@ -1,11 +1,11 @@
 %%%-------------------------------------------------------------------
 %%% @doc middleware_tool_retry 单元测试
 %%%
-%%% 历史缺陷：工具失败走的是 **throw**（beamai_kernel tool_terminal 里
+%%% 历史缺陷：工具失败走的是 **throw**（beamai_chat_client tool_terminal 里
 %%% `{error,Reason} -> throw(Reason)`），而 do_retry 只看 Next(Req) 的**返回值**，
 %%% 异常直接穿透中间件——max_retries 配多少都只调用一次，重试从未发生。
 %%%
-%%% 这里大量用真实 kernel 跑：throw 路径只有真 kernel 才复现得出来，
+%%% 这里大量用真实 chat_client 跑：throw 路径只有真 chat_client 才复现得出来，
 %%% 用假 Next 会把 bug 测没了。
 %%%
 %%% @end
@@ -15,7 +15,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%====================================================================
-%% 真实 kernel 下的重试行为（回归测试）
+%% 真实 chat_client 下的重试行为（回归测试）
 %%====================================================================
 
 %% 以前恒为 1：throw 穿透，从不重试
@@ -24,7 +24,7 @@ retries_transient_error_test() ->
     ?assertEqual({error, timeout}, Result),
     ?assertEqual(4, Calls).
 
-%% 放弃重试时必须 re-throw，保持 kernel 的 {error, Reason} 语义
+%% 放弃重试时必须 re-throw，保持 chat_client 的 {error, Reason} 语义
 preserves_error_semantics_after_exhaustion_test() ->
     {Result, _} = run_tool({request_failed, econnrefused}, #{max_retries => 1}),
     ?assertEqual({error, {request_failed, econnrefused}}, Result).
@@ -135,11 +135,11 @@ run_tool(Error, Opts) ->
     Result = invoke(Handler, Opts),
     {Result, counters:get(Counter, 1)}.
 
-%% 用真实 kernel + tool_retry filter 调用工具
+%% 用真实 chat_client + tool_retry filter 调用工具
 invoke(Handler, Opts0) ->
     Opts = maps:merge(#{enable_delay => false}, Opts0),
     Tool = beamai_tool:new(<<"flaky">>, Handler, #{description => <<"test tool">>}),
     Chain = beamai_middleware_runner:init([{middleware_tool_retry, Opts}]),
-    Kernel = beamai_kernel:add_tool(
-               beamai_kernel:new(#{}, beamai_middleware_runner:to_filters(Chain)), Tool),
-    beamai_kernel:invoke_tool(Kernel, <<"flaky">>, #{}, beamai_context:new()).
+    ChatClient = beamai_chat_client:add_tool(
+               beamai_chat_client:new(#{}, beamai_middleware_runner:to_filters(Chain)), Tool),
+    beamai_tool_executor:invoke(ChatClient, <<"flaky">>, #{}, beamai_context:new()).

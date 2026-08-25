@@ -4,12 +4,12 @@
 
 ## 背景
 
-当前架构中 `plugin` 层是冗余的，增加了不必要的复杂性。本次重构目标是去掉 plugin 层，让 tools 直接注册到 kernel 中。
+当前架构中 `plugin` 层是冗余的，增加了不必要的复杂性。本次重构目标是去掉 plugin 层，让 tools 直接注册到 ChatClient 中。
 
 ## 当前架构
 
 ```
-Kernel
+ChatClient
   └── plugins: #{Name => Plugin}
         └── Plugin
               └── functions: [function_def()]
@@ -25,7 +25,7 @@ Kernel
 ## 目标架构
 
 ```
-Kernel
+ChatClient
   └── tools: #{Name => tool_spec()}
         └── tool_spec (handler, parameters, tag, ...)
 ```
@@ -34,8 +34,8 @@ Kernel
 
 | 模块 | 当前 | 目标 | 变更 |
 |------|------|------|------|
-| `beamai_kernel.erl` | `plugins: #{Name => plugin()}` | `tools: #{Name => tool_spec()}` | 重构存储和查找逻辑 |
-| `beamai_plugin.erl` | 插件容器 | **删除** | 功能合并到 kernel |
+| `beamai_chat_client.erl` | `plugins: #{Name => plugin()}` | `tools: #{Name => tool_spec()}` | 重构存储和查找逻辑 |
+| `beamai_plugin.erl` | 插件容器 | **删除** | 功能合并到 ChatClient |
 | `beamai_function.erl` | `function_def()` | **删除** | 合并到 `beamai_tool.erl` |
 | `beamai_plugin_behaviour.erl` | `plugin_info/0, functions/0` | **重命名** | → `beamai_tool_behaviour` |
 | `beamai.erl` | `add_plugin/2,3, function/2,3` | `add_tool/2, tool/2,3` | API 变更 |
@@ -61,8 +61,8 @@ Kernel
 - 创建 `beamai_tool_behaviour.erl`（在 beamai_core 中）
 - 统一 `tool_spec()` 类型定义
 
-### 阶段 2：重构 beamai_kernel ✅ 完成
-- 修改 kernel 类型定义，使用 `tools` 替代 `plugins`
+### 阶段 2：重构 beamai_chat_client ✅ 完成
+- 修改 ChatClient 类型定义，使用 `tools` 替代 `plugins`
 - 新增 `add_tool/2`, `add_tools/2`, `add_tool_module/2` API
 - 简化工具查找逻辑
 
@@ -84,14 +84,14 @@ Kernel
 - 删除 `beamai_plugin_behaviour.erl`
 - 删除旧的 plugin 模块文件
 - 删除旧的 `beamai_tool.erl`（beamai_plugin 中的冗余版本）
-- 更新 kernel 测试文件
+- 更新 ChatClient 测试文件
 - 删除旧的测试文件
 
 ## 新 API 使用示例
 
 ```erlang
-%% 创建 Kernel
-K0 = beamai:kernel(),
+%% 创建 ChatClient
+K0 = beamai:chat_client(),
 
 %% 方式 1：直接添加工具
 K1 = beamai:add_tool(K0, #{

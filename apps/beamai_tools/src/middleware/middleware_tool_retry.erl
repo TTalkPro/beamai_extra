@@ -4,11 +4,11 @@
 %%% 在工具调用失败时自动重试，支持指数/线性/固定退避策略。
 %%% around_tool 包裹工具执行：调 Next → 检测错误 → 可重试则等待后重调 Next。
 %%%
-%%% **工具失败走的是 throw，不是返回值**：beamai_kernel 的 tool_terminal 里
+%%% **工具失败走的是 throw，不是返回值**：beamai_chat_client 的 tool_terminal 里
 %%% `{error, Reason} -> throw(Reason)`，由 beamai_filter_chain:run/4 在**最外层**
 %%% 统一 catch 成 `{error, Reason}`。也就是说 Next(Req) 失败时直接抛异常穿透本
 %%% 中间件，绝不会返回 `#{result => {error, _}}`。因此这里必须 catch throw 才
-%%% 拿得到错误；不重试时要原样 re-throw，保持 kernel 的错误语义。
+%%% 拿得到错误；不重试时要原样 re-throw，保持 chat_client 的错误语义。
 %%%
 %%% 错误分类以 beamai_tool_error:classify/1 为准，默认只重试 transient
 %%% （与上游 beamai_tool:invoke 的 retry 语义一致）——semantic 错误（如参数非法）
@@ -86,7 +86,7 @@ calculate_delay(RetryCount, #{type := Type, initial_delay := InitialDelay, max_d
 %% @private 递归重试
 %%
 %% 两条失败路径都要管：
-%%   1. throw —— kernel tool_terminal 抛出的真实工具错误（主路径）
+%%   1. throw —— chat_client tool_terminal 抛出的真实工具错误（主路径）
 %%   2. 返回值里带 error —— 内层 filter 短路时可能这么返回（兜底）
 do_retry(Req, State, Next, Attempt) ->
     try Next(Req) of

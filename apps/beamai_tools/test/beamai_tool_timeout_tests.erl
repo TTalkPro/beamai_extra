@@ -22,9 +22,9 @@
 %% 每个工具的 timeout 声明
 %%====================================================================
 
-%% 人机交互工具已改为 interrupt tool，不再注册进 kernel，也就不存在"每工具超时"
-%% 这回事——拦截发生在执行之前。这里守住它不会悄悄变回 kernel 工具。
-human_tools_are_not_kernel_tools_test() ->
+%% 人机交互工具已改为 interrupt tool，不再注册进 chat_client，也就不存在"每工具超时"
+%% 这回事——拦截发生在执行之前。这里守住它不会悄悄变回 chat_client 工具。
+human_tools_are_not_chat_client_tools_test() ->
     code:ensure_loaded(beamai_tool_human),
     ?assertNot(lists:member(beamai_tool_human, beamai_tools:available())),
     ?assertNot(erlang:function_exported(beamai_tool_human, tools, 0)),
@@ -50,7 +50,7 @@ scan_tools_get_longer_budget_test() ->
     ?assert(Glob > Read).
 
 %%====================================================================
-%% 声明真的生效（跑真 kernel）
+%% 声明真的生效（跑真 chat_client）
 %%====================================================================
 
 %% infinity 不被任何东西管辖（现在也是缺省；这里验证显式声明形式同样生效）
@@ -99,9 +99,9 @@ timeout_is_retried_by_middleware_test() ->
     Chain = beamai_middleware_runner:init([
         {middleware_tool_retry, #{max_retries => 2, enable_delay => false}}
     ]),
-    K = beamai_kernel:add_tool(
-          beamai_kernel:new(#{}, beamai_middleware_runner:to_filters(Chain)), Tool),
-    ?assertMatch({error, _}, beamai_kernel:invoke_tool(K, <<"slow">>, #{}, beamai_context:new())),
+    K = beamai_chat_client:add_tool(
+          beamai_chat_client:new(#{}, beamai_middleware_runner:to_filters(Chain)), Tool),
+    ?assertMatch({error, _}, beamai_tool_executor:invoke(K, <<"slow">>, #{}, beamai_context:new())),
     ?assertEqual(3, counters:get(Counter, 1)).
 
 %%====================================================================

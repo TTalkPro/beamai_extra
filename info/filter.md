@@ -35,13 +35,13 @@ Filter 是一个带有类型、优先级和处理函数的 map：
     | {error, term()}.             %% 中止，返回错误
 ```
 
-## 注册到 Kernel
+## 注册到 ChatClient
 
-过滤器追加到 Kernel 的 `filters` 列表中：
+过滤器追加到 ChatClient 的 `filters` 列表中：
 
 ```erlang
-add_filter(#{filters := Filters} = Kernel, Filter) ->
-    Kernel#{filters => Filters ++ [Filter]}.
+add_filter(#{filters := Filters} = ChatClient, Filter) ->
+    ChatClient#{filters => Filters ++ [Filter]}.
 ```
 
 创建方式：
@@ -53,7 +53,7 @@ Filter = beamai_filter:new(<<"log">>, pre_invocation, fun(Ctx) ->
     {continue, Ctx}
 end).
 
-K1 = beamai_kernel:add_filter(K0, Filter).
+K1 = beamai_chat_client:add_filter(K0, Filter).
 
 %% 带优先级
 Filter2 = beamai_filter:new(<<"auth">>, pre_invocation, fun check_auth/1, 10).
@@ -64,7 +64,7 @@ Filter2 = beamai_filter:new(<<"auth">>, pre_invocation, fun check_auth/1, 10).
 ### 工具调用时
 
 ```
-invoke(Kernel, ToolName, Args, Context)
+invoke(ChatClient, ToolName, Args, Context)
     |
     +-- 1. find_tool -> 找到 ToolSpec
     |
@@ -84,7 +84,7 @@ invoke(Kernel, ToolName, Args, Context)
 ### Chat 调用时
 
 ```
-invoke_chat(Kernel, Messages, Opts)
+invoke_chat(ChatClient, Messages, Opts)
     |
     +-- apply_pre_chat_filters(Filters, Messages, Context)
     |       -> FilterCtx = #{messages, context, metadata}
@@ -222,7 +222,7 @@ Agent 的 `on_llm_call` 和 `on_tool_call` 回调内部通过 Filter 实现：
 
 ```erlang
 %% beamai_agent_state.erl 中注入的 filter
-inject_callback_filters(Kernel, Callbacks) ->
+inject_callback_filters(ChatClient, Callbacks) ->
     case maps:is_key(on_tool_call, Callbacks) of
         true ->
             Filter = beamai_filter:new(
@@ -237,9 +237,9 @@ inject_callback_filters(Kernel, Callbacks) ->
                 end,
                 9999  %% 最低优先级
             ),
-            beamai_kernel:add_filter(Kernel, Filter);
+            beamai_chat_client:add_filter(ChatClient, Filter);
         false ->
-            Kernel
+            ChatClient
     end.
 ```
 
@@ -247,6 +247,6 @@ inject_callback_filters(Kernel, Callbacks) ->
 
 | 文件 | 职责 |
 |------|------|
-| `apps/beamai_core/src/kernel/beamai_filter.erl` | 过滤器定义、链式执行、排序 |
-| `apps/beamai_core/src/kernel/beamai_kernel.erl` | 注册过滤器、在 invoke/chat 中调用 |
+| `apps/beamai_core/src/ChatClient/beamai_filter.erl` | 过滤器定义、链式执行、排序 |
+| `apps/beamai_core/src/ChatClient/beamai_chat_client.erl` | 注册过滤器、在 invoke/chat 中调用 |
 | `apps/beamai_agent/src/beamai_agent_state.erl` | Agent 回调到 Filter 的转换 |

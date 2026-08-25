@@ -2,7 +2,7 @@
 
 English | [中文](MIDDLEWARE.md)
 
-The Middleware system in beamai_tools provides a flexible way to intercept, modify, and control various stages of Kernel function invocations.
+The Middleware system in beamai_tools provides a flexible way to intercept, modify, and control various stages of ChatClient function invocations.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ The Middleware system in beamai_tools provides a flexible way to intercept, modi
 
 ## Overview
 
-Middleware are interceptors in the Kernel function invocation process that can:
+Middleware are interceptors in the ChatClient function invocation process that can:
 
 - **Modify Input/Output**: Modify context before and after LLM calls or tool invocations
 - **Control Flow**: Skip, retry, or abort execution
@@ -29,7 +29,7 @@ Middleware are interceptors in the Kernel function invocation process that can:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Kernel Function Invocation                  │
+│                    ChatClient Function Invocation                  │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  ┌──────────────┐                                           │
@@ -421,13 +421,13 @@ log(debug, Fmt, Args) -> logger:debug(Fmt, Args).
 
 ## Configuration and Usage
 
-### Integration with Kernel
+### Integration with ChatClient
 
 ```erlang
 %% Method 1: Using beamai_tools with_middleware
-Kernel = beamai_kernel:new(),
-Kernel1 = beamai_tools:load_all(Kernel, [beamai_tool_file, beamai_tool_shell]),
-Kernel2 = beamai_tools:with_middleware(Kernel1,
+ChatClient = beamai_chat_client:new(),
+ChatClient1 = beamai_tools:load_all(ChatClient, [beamai_tool_file, beamai_tool_shell]),
+ChatClient2 = beamai_tools:with_middleware(ChatClient1,
     beamai_middleware_presets:production()),
 
 %% Method 2: Manually initialize Middleware chain
@@ -437,9 +437,9 @@ Chain = beamai_middleware_runner:init([
     {my_custom_middleware, #{option => value}}
 ]).
 
-%% Method 3: Convert to Kernel Filters
+%% Method 3: Convert to ChatClient Filters
 Filters = beamai_middleware_runner:to_filters(Chain),
-Kernel3 = beamai_kernel:add_filter(Kernel, Filters).
+ChatClient3 = beamai_chat_client:add_filter(ChatClient, Filters).
 ```
 
 ### Middleware Configuration Format
@@ -551,7 +551,7 @@ pre_invocation(FilterCtx, #{cache := Cache} = _MwState) ->
 %% Initialize Middleware chain
 -spec init([middleware_spec()]) -> middleware_chain().
 
-%% Convert to Kernel Filters
+%% Convert to ChatClient Filters
 -spec to_filters(middleware_chain()) -> [beamai_filter:filter_def()].
 
 %% Execute hook
@@ -596,5 +596,5 @@ pre_invocation(FilterCtx, #{cache := Cache} = _MwState) ->
 ## More Resources
 
 - [beamai_tools README](../apps/beamai_tools/README.md) - Tools module documentation
-- [beamai_core README](../apps/beamai_core/README.md) - Kernel architecture documentation
+- [beamai_core README](../apps/beamai_core/README.md) - ChatClient architecture documentation
 - [API Reference](API_REFERENCE.md) - API reference documentation

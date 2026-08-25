@@ -105,9 +105,9 @@ beamai_agent:last_response(Agent).
 -spec turn_count(agent_state()) -> non_neg_integer().
 beamai_agent:turn_count(Agent).
 
-%% Get internal Kernel instance
--spec kernel(agent_state()) -> beamai_kernel:kernel().
-beamai_agent:kernel(Agent).
+%% Get internal ChatClient instance
+-spec ChatClient(agent_state()) -> beamai_chat_client:chat_client().
+beamai_agent:ChatClient(Agent).
 ```
 
 ### State Modification
@@ -146,10 +146,10 @@ beamai_agent:restore(Config, Memory).
 
 ```erlang
 Config = #{
-    %% Kernel construction (Method 1: pre-built Kernel, mutually exclusive with llm/plugins)
-    kernel => beamai_kernel:kernel(),
+    %% ChatClient construction (Method 1: pre-built ChatClient, mutually exclusive with llm/plugins)
+    chat_client => beamai_chat_client:chat_client(),
 
-    %% Kernel construction (Method 2: auto-build from components)
+    %% ChatClient construction (Method 2: auto-build from components)
     llm => beamai_chat_completion:config(),  %% LLM configuration
     plugins => [module()],                   %% Plugin module list (e.g., beamai_tool_file)
     middlewares => [{module(), map()}],       %% Middleware configuration
@@ -163,7 +163,7 @@ Config = #{
     id => binary(),                          %% Agent ID (default auto-generated)
     name => binary(),                        %% Agent name (default <<"agent">>)
     metadata => map(),                       %% User-defined metadata
-    kernel_settings => map(),                %% Kernel settings
+    chat_client_settings => map(),                %% ChatClient settings
     interrupt_tools => [map()]               %% Interrupt-related tool definitions
 }.
 ```

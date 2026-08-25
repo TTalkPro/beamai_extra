@@ -105,9 +105,9 @@ beamai_agent:last_response(Agent).
 -spec turn_count(agent_state()) -> non_neg_integer().
 beamai_agent:turn_count(Agent).
 
-%% 获取内部 Kernel 实例
--spec kernel(agent_state()) -> beamai_kernel:kernel().
-beamai_agent:kernel(Agent).
+%% 获取内部 ChatClient 实例
+-spec ChatClient(agent_state()) -> beamai_chat_client:chat_client().
+beamai_agent:ChatClient(Agent).
 ```
 
 ### 状态修改
@@ -146,10 +146,10 @@ beamai_agent:restore(Config, Memory).
 
 ```erlang
 Config = #{
-    %% Kernel 构建（方式一：预构建 Kernel，与 llm/plugins 互斥）
-    kernel => beamai_kernel:kernel(),
+    %% ChatClient 构建（方式一：预构建 ChatClient，与 llm/plugins 互斥）
+    chat_client => beamai_chat_client:chat_client(),
 
-    %% Kernel 构建（方式二：从组件自动构建）
+    %% ChatClient 构建（方式二：从组件自动构建）
     llm => beamai_chat_completion:config(),  %% LLM 配置
     plugins => [module()],                   %% Plugin 模块列表（如 beamai_tool_file）
     middlewares => [{module(), map()}],       %% Middleware 配置
@@ -163,7 +163,7 @@ Config = #{
     id => binary(),                          %% Agent ID（默认自动生成）
     name => binary(),                        %% Agent 名称（默认 <<"agent">>）
     metadata => map(),                       %% 用户自定义元数据
-    kernel_settings => map(),                %% Kernel 设置项
+    chat_client_settings => map(),                %% ChatClient 设置项
     interrupt_tools => [map()]               %% 中断相关 Tool 定义
 }.
 ```
@@ -827,65 +827,65 @@ Tools = beamai_tool_registry:from_config(#{
 
 ## beamai_core - 核心模块
 
-### Kernel 和 Tool 系统
+### ChatClient 和 Tool 系统
 
-Kernel 是 BeamAI 的核心抽象，管理 Tool 注册、LLM 服务配置和 Filter 管道。
+ChatClient 是 BeamAI 的核心抽象，管理 Tool 注册、LLM 服务配置和 Filter 管道。
 
 ```erlang
-%% 创建 Kernel
--spec new() -> kernel().
--spec new(kernel_settings()) -> kernel().
-beamai_kernel:new().
-beamai_kernel:new(Settings).
+%% 创建 ChatClient
+-spec new() -> chat_client().
+-spec new(chat_client_settings()) -> chat_client().
+beamai_chat_client:new().
+beamai_chat_client:new(Settings).
 
 %% 添加 LLM 服务
--spec add_service(kernel(), beamai_chat_completion:config()) -> kernel().
-beamai_kernel:add_service(Kernel, LlmConfig).
+-spec add_service(chat_client(), beamai_chat_completion:config()) -> chat_client().
+beamai_chat_client:add_service(ChatClient, LlmConfig).
 
 %% 添加工具
--spec add_tool(kernel(), tool_spec()) -> kernel().
--spec add_tools(kernel(), [tool_spec()]) -> kernel().
--spec add_tool_module(kernel(), module()) -> kernel().
-beamai_kernel:add_tool(Kernel, ToolSpec).
-beamai_kernel:add_tools(Kernel, ToolSpecs).
-beamai_kernel:add_tool_module(Kernel, Module).
+-spec add_tool(chat_client(), tool_spec()) -> chat_client().
+-spec add_tools(chat_client(), [tool_spec()]) -> chat_client().
+-spec add_tool_module(chat_client(), module()) -> chat_client().
+beamai_chat_client:add_tool(ChatClient, ToolSpec).
+beamai_chat_client:add_tools(ChatClient, ToolSpecs).
+beamai_chat_client:add_tool_module(ChatClient, Module).
 
 %% 添加过滤器
--spec add_filter(kernel(), filter_def()) -> kernel().
-beamai_kernel:add_filter(Kernel, Filter).
+-spec add_filter(chat_client(), filter_def()) -> chat_client().
+beamai_chat_client:add_filter(ChatClient, Filter).
 
 %% 聊天（不含工具循环）
--spec invoke_chat(kernel(), [map()], chat_opts()) ->
+-spec invoke_chat(chat_client(), [map()], chat_opts()) ->
     {ok, map(), beamai_context:t()} | {error, term()}.
-beamai_kernel:invoke_chat(Kernel, Messages, Opts).
+beamai_chat_client:invoke_chat(ChatClient, Messages, Opts).
 
 %% 聊天（含工具调用循环，自动执行工具直到获得文本回复）
--spec invoke(kernel(), [map()], chat_opts()) ->
+-spec invoke(chat_client(), [map()], chat_opts()) ->
     {ok, map(), beamai_context:t()} | {error, term()}.
-beamai_kernel:invoke(Kernel, Messages, Opts).
+beamai_chat_client:invoke(ChatClient, Messages, Opts).
 
 %% 调用单个工具
--spec invoke_tool(kernel(), binary(), map(), beamai_context:t()) ->
+-spec invoke_tool(chat_client(), binary(), map(), beamai_context:t()) ->
     {ok, term(), beamai_context:t()} | {error, term()}.
-beamai_kernel:invoke_tool(Kernel, ToolName, Args, Context).
+beamai_tool_executor:invoke(ChatClient, ToolName, Args, Context).
 
 %% 查询工具
--spec get_tool(kernel(), binary()) -> {ok, tool_spec()} | error.
--spec list_tools(kernel()) -> [tool_spec()].
--spec get_tools_by_tag(kernel(), binary()) -> [tool_spec()].
--spec get_tool_specs(kernel()) -> [map()].
--spec get_tool_schemas(kernel()) -> [map()].
--spec get_tool_schemas(kernel(), atom()) -> [map()].
-beamai_kernel:get_tool(Kernel, Name).
-beamai_kernel:list_tools(Kernel).
-beamai_kernel:get_tools_by_tag(Kernel, Tag).
-beamai_kernel:get_tool_specs(Kernel).
-beamai_kernel:get_tool_schemas(Kernel).          %% 默认 OpenAI 格式
-beamai_kernel:get_tool_schemas(Kernel, Provider). %% 指定 Provider 格式
+-spec get_tool(chat_client(), binary()) -> {ok, tool_spec()} | error.
+-spec list_tools(chat_client()) -> [tool_spec()].
+-spec get_tools_by_tag(chat_client(), binary()) -> [tool_spec()].
+-spec get_tool_specs(chat_client()) -> [map()].
+-spec get_tool_schemas(chat_client()) -> [map()].
+-spec get_tool_schemas(chat_client(), atom()) -> [map()].
+beamai_tool_registry:resolve(beamai_chat_client:tools(ChatClient), Name).
+beamai_tool_registry:list(beamai_chat_client:tools(ChatClient)).
+beamai_tool_registry:by_tag(beamai_chat_client:tools(ChatClient), Tag).
+beamai_tool_registry:specs(beamai_chat_client:tools(ChatClient)).
+beamai_tool_registry:schemas(beamai_chat_client:tools(ChatClient)).          %% 默认 OpenAI 格式
+beamai_tool_registry:schemas(beamai_chat_client:tools(ChatClient), Provider). %% 指定 Provider 格式
 
 %% 获取 LLM 服务配置
--spec get_service(kernel()) -> beamai_chat_completion:config() | undefined.
-beamai_kernel:get_service(Kernel).
+-spec get_service(chat_client()) -> beamai_chat_completion:config() | undefined.
+beamai_chat_client:get_service(ChatClient).
 ```
 
 **Tool 定义示例：**
@@ -910,8 +910,8 @@ Tool = beamai_tool:new(<<"my_tool">>, fun handle/2, #{
     parameters => #{...}
 }).
 
-%% 注册到 Kernel
-Kernel1 = beamai_kernel:add_tool(Kernel, Tool).
+%% 注册到 ChatClient
+ChatClient1 = beamai_chat_client:add_tool(ChatClient, Tool).
 ```
 
 **Tool Module（behaviour 模式）：**
@@ -930,8 +930,8 @@ tools() ->
         #{name => <<"tool_b">>, handler => fun ?MODULE:handle_b/2, ...}
     ].
 
-%% 加载到 Kernel
-Kernel1 = beamai_kernel:add_tool_module(Kernel, my_tools).
+%% 加载到 ChatClient
+ChatClient1 = beamai_chat_client:add_tool_module(ChatClient, my_tools).
 ```
 
 **内置 Tool 模块：**

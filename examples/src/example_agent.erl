@@ -190,7 +190,7 @@ run_multi_turn_live() ->
 %%
 %% 展示 Agent + Plugin 的集成方式：
 %%   - 创建自定义 Plugin（天气查询）
-%%   - Agent 通过 kernel 自动获取 tool specs
+%%   - Agent 通过 chat_client 自动获取 tool specs
 %%   - LLM 返回 tool_calls 时 Agent 自动执行并循环
 %%   - on_tool_call 回调监控工具调用过程
 %%
@@ -200,11 +200,11 @@ run_multi_turn_live() ->
 run_with_plugin() ->
     io:format("=== BeamAI Agent: Plugin Usage (Mock) ===~n~n"),
 
-    %% 1. 构建带自定义 Tool 的 Kernel
-    Kernel0 = beamai_kernel:new(),
+    %% 1. 构建带自定义 Tool 的 ChatClient
+    ChatClient0 = beamai_chat_client:new(),
     LlmConfig = beamai_chat_completion:create(mock, #{}),
-    K1 = beamai_kernel:add_service(Kernel0, LlmConfig),
-    K2 = beamai_kernel:add_tool(K1,
+    K1 = beamai_chat_client:add_service(ChatClient0, LlmConfig),
+    K2 = beamai_chat_client:add_tool(K1,
         #{name => <<"get_weather">>,
           description => <<"Get current weather for a city">>,
           tag => <<"weather">>,
@@ -219,9 +219,9 @@ run_with_plugin() ->
               {ok, #{city => City, temp => 25, condition => <<"Sunny">>}}
           end}),
 
-    %% 2. 使用预构建 Kernel 创建 Agent
+    %% 2. 使用预构建 ChatClient 创建 Agent
     {ok, Agent0} = beamai_agent:new(#{
-        kernel => K2,
+        chat_client => K2,
         system_prompt => <<"You are a helpful weather assistant.">>,
         callbacks => #{
             on_tool_call => fun(Name, Args) ->
@@ -234,7 +234,7 @@ run_with_plugin() ->
     }),
 
     %% 3. 查看注册的工具
-    RegisteredTools = beamai_kernel:get_tool_specs(beamai_agent:kernel(Agent0)),
+    RegisteredTools = beamai_chat_client:get_tool_specs(beamai_agent:chat_client(Agent0)),
     io:format("Registered tools: ~p~n~n", [[maps:get(name, T) || T <- RegisteredTools]]),
 
     %% 4. 发送对话（mock LLM 会返回固定文本，不会触发 tool call）
@@ -252,11 +252,11 @@ run_with_plugin() ->
 run_with_plugin_live() ->
     io:format("=== BeamAI Agent: Plugin Usage (Live) ===~n~n"),
 
-    %% 1. 构建 Kernel：LLM + 自定义天气 Tool
+    %% 1. 构建 ChatClient：LLM + 自定义天气 Tool
     LLMConfig = example_llm_config:anthropic(),
-    Kernel0 = beamai_kernel:new(),
-    K1 = beamai_kernel:add_service(Kernel0, LLMConfig),
-    K2 = beamai_kernel:add_tool(K1,
+    ChatClient0 = beamai_chat_client:new(),
+    K1 = beamai_chat_client:add_service(ChatClient0, LLMConfig),
+    K2 = beamai_chat_client:add_tool(K1,
         #{name => <<"get_current_weather">>,
           description => <<"Get the current weather for a given city. Returns temperature, condition, and humidity.">>,
           tag => <<"weather">>,
@@ -274,7 +274,7 @@ run_with_plugin_live() ->
 
     %% 2. 创建 Agent
     {ok, Agent0} = beamai_agent:new(#{
-        kernel => K2,
+        chat_client => K2,
         system_prompt => <<"You are a helpful weather assistant. "
                           "You MUST use the get_current_weather tool to answer weather questions. "
                           "Never guess the weather.">>,
@@ -340,7 +340,7 @@ run_with_file_plugin() ->
     }),
 
     %% 列出注册的工具
-    Tools = beamai_kernel:get_tool_specs(beamai_agent:kernel(Agent0)),
+    Tools = beamai_chat_client:get_tool_specs(beamai_agent:chat_client(Agent0)),
     io:format("Available tools: ~p~n~n", [[maps:get(name, T) || T <- Tools]]),
 
     %% 让 Agent 查看当前目录

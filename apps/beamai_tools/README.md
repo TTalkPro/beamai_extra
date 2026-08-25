@@ -35,21 +35,21 @@
 - **beamai_tool_file** - 文件操作（读取、写入、列表、glob）
 - **beamai_tool_shell** - Shell 命令执行
 - **beamai_tool_todo** - 任务管理
-- **beamai_tool_human** - 人机交互（interrupt tool 描述符，经 agent 的 `interrupt_tools` 使用，不注册进 kernel）
+- **beamai_tool_human** - 人机交互（interrupt tool 描述符，经 agent 的 `interrupt_tools` 使用，不注册进 ChatClient）
 
 ## API 文档
 
 ### beamai_tools
 
 ```erlang
-%% 加载单个工具模块到 Kernel
-beamai_tools:load(Kernel, beamai_tool_file) -> Kernel1.
+%% 加载单个工具模块到 ChatClient
+beamai_tools:load(ChatClient, beamai_tool_file) -> ChatClient1.
 
 %% 批量加载工具模块
-beamai_tools:load_all(Kernel, [beamai_tool_file, beamai_tool_shell]) -> Kernel1.
+beamai_tools:load_all(ChatClient, [beamai_tool_file, beamai_tool_shell]) -> ChatClient1.
 
 %% 添加 Middleware
-beamai_tools:with_middleware(Kernel, Middlewares) -> Kernel1.
+beamai_tools:with_middleware(ChatClient, Middlewares) -> ChatClient1.
 
 %% 获取预设 Middleware 配置
 beamai_tools:presets(default) -> [MiddlewareSpec].
@@ -70,25 +70,25 @@ beamai_tools:define_tool(Name, Description, Handler, Parameters, Opts) -> ToolSp
 ### 基本使用
 
 ```erlang
-%% 创建 Kernel 并加载工具
-Kernel = beamai_kernel:new(),
-Kernel1 = beamai_tools:load_all(Kernel, [beamai_tool_file, beamai_tool_shell]),
+%% 创建 ChatClient 并加载工具
+ChatClient = beamai_chat_client:new(),
+ChatClient1 = beamai_tools:load_all(ChatClient, [beamai_tool_file, beamai_tool_shell]),
 
 %% 获取工具规格供 Agent 使用
-Tools = beamai_kernel:get_tool_specs(Kernel1).
+Tools = beamai_tool_registry:specs(beamai_chat_client:tools(ChatClient1)).
 ```
 
 ### 使用 Middleware
 
 ```erlang
 %% 使用预设 Middleware
-Kernel = beamai_kernel:new(),
-Kernel1 = beamai_tools:load_all(Kernel, [beamai_tool_file]),
-Kernel2 = beamai_tools:with_middleware(Kernel1,
+ChatClient = beamai_chat_client:new(),
+ChatClient1 = beamai_tools:load_all(ChatClient, [beamai_tool_file]),
+ChatClient2 = beamai_tools:with_middleware(ChatClient1,
     beamai_middleware_presets:production()),
 
 %% 或使用自定义 Middleware 配置
-Kernel3 = beamai_tools:with_middleware(Kernel1, [
+ChatClient3 = beamai_tools:with_middleware(ChatClient1, [
     {middleware_call_limit, #{max_model_calls => 20}},
     {middleware_tool_retry, #{max_retries => 3}}
 ]).
@@ -113,8 +113,8 @@ Tool = beamai_tools:define_tool(
     }
 ),
 
-Kernel = beamai_kernel:new(),
-Kernel1 = beamai_kernel:add_tools(Kernel, [Tool]).
+ChatClient = beamai_chat_client:new(),
+ChatClient1 = beamai_chat_client:add_tools(ChatClient, [Tool]).
 ```
 
 ## Middleware 预设
@@ -129,7 +129,7 @@ Kernel1 = beamai_kernel:add_tools(Kernel, [Tool]).
 
 ## 依赖
 
-- beamai_core（Kernel、工具行为定义）
+- beamai_core（ChatClient、工具行为定义）
 - jsx（JSON 编解码）
 
 ## 许可证

@@ -9,7 +9,7 @@
 %%% == 使用示例 ==
 %%%
 %%% ```erlang
-%%% K0 = beamai:kernel(),
+%%% K0 = beamai:chat_client(),
 %%% %% 加载工具模块
 %%% K1 = beamai_tools:load(K0, beamai_tool_file),
 %%% %% 添加中间件
@@ -36,38 +36,38 @@
 %% 工具加载
 %%====================================================================
 
-%% @doc 加载工具模块到 kernel。
+%% @doc 加载工具模块到 chat_client。
 %%
 %% 指定的模块必须实现 beamai_tool_behaviour 的回调函数
 %% （tool_info/0 和 tools/0）。
 %%
-%% 整体委托 beamai_kernel:add_tool_module/2：模块若定义 filters/0，
-%% 由 kernel 原语自行加载，本模块不重复处理。
+%% 整体委托 beamai_chat_client:add_tool_module/2：模块若定义 filters/0，
+%% 由 chat_client 原语自行加载，本模块不重复处理。
 %%
-%% @param Kernel  当前的 Kernel 实例
+%% @param ChatClient  当前的 ChatClient 实例
 %% @param Module  实现了 beamai_tool_behaviour 的工具模块名
-%% @returns 注册了工具后的更新 Kernel 实例
--spec load(beamai_kernel:kernel(), module()) -> beamai_kernel:kernel().
-load(Kernel, Module) ->
-    beamai_kernel:add_tool_module(Kernel, Module).
+%% @returns 注册了工具后的更新 ChatClient 实例
+-spec load(beamai_chat_client:chat_client(), module()) -> beamai_chat_client:chat_client().
+load(ChatClient, Module) ->
+    beamai_chat_client:add_tool_module(ChatClient, Module).
 
-%% @doc 批量加载多个工具模块到 kernel。
+%% @doc 批量加载多个工具模块到 chat_client。
 %%
 %% 按顺序依次加载所有指定的工具模块。
 %%
-%% @param Kernel   当前的 Kernel 实例
+%% @param ChatClient   当前的 ChatClient 实例
 %% @param Modules  工具模块名列表
-%% @returns 加载所有工具后的更新 Kernel 实例
--spec load_all(beamai_kernel:kernel(), [module()]) -> beamai_kernel:kernel().
-load_all(Kernel, Modules) ->
-    lists:foldl(fun(M, K) -> load(K, M) end, Kernel, Modules).
+%% @returns 加载所有工具后的更新 ChatClient 实例
+-spec load_all(beamai_chat_client:chat_client(), [module()]) -> beamai_chat_client:chat_client().
+load_all(ChatClient, Modules) ->
+    lists:foldl(fun(M, K) -> load(K, M) end, ChatClient, Modules).
 
-%% @doc 列出所有内置工具模块（可 load 进 kernel 的）。
+%% @doc 列出所有内置工具模块（可 load 进 chat_client 的）。
 %%
 %% 返回系统内置可用的工具模块列表：文件操作、Shell 命令、TODO 列表。
 %%
 %% 人机交互（ask_human/confirm_action）**不在此列**：它们是 interrupt tool，
-%% 不注册进 kernel，经 beamai_agent:new/1 的 `interrupt_tools' 配置，
+%% 不注册进 chat_client，经 beamai_agent:new/1 的 `interrupt_tools' 配置，
 %% 见 beamai_tool_human:interrupt_tools/0。
 %%
 %% @returns 内置工具模块名列表
@@ -83,20 +83,20 @@ available() ->
 %% 中间件集成
 %%====================================================================
 
-%% @doc 初始化中间件链并将 filters 注入 kernel。
+%% @doc 初始化中间件链并将 filters 注入 chat_client。
 %%
-%% 将中间件规格列表转换为 beamai_filter:filter() 并追加到 kernel
+%% 将中间件规格列表转换为 beamai_filter:filter() 并追加到 chat_client
 %% 的 filters 字段。filter 注册顺序即洋葱层序（靠前 = 外层）。
 %%
-%% @param Kernel          当前的 Kernel 实例
+%% @param ChatClient          当前的 ChatClient 实例
 %% @param MiddlewareSpecs 中间件规格列表，格式为 [{Module, Opts, Priority}, ...]
-%% @returns 追加了中间件过滤器后的更新 Kernel 实例
--spec with_middleware(beamai_kernel:kernel(), [term()]) -> beamai_kernel:kernel().
-with_middleware(Kernel, MiddlewareSpecs) ->
+%% @returns 追加了中间件过滤器后的更新 ChatClient 实例
+-spec with_middleware(beamai_chat_client:chat_client(), [term()]) -> beamai_chat_client:chat_client().
+with_middleware(ChatClient, MiddlewareSpecs) ->
     Chain = beamai_middleware_runner:init(MiddlewareSpecs),
     NewFilters = beamai_middleware_runner:to_filters(Chain),
-    Existing = maps:get(filters, Kernel, []),
-    Kernel#{filters => Existing ++ NewFilters}.
+    Existing = maps:get(filters, ChatClient, []),
+    ChatClient#{filters => Existing ++ NewFilters}.
 
 %% @doc 获取预设中间件配置。
 %%

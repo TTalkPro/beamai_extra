@@ -12,8 +12,8 @@ This project depends on the main branch of the [BeamAI core library](https://git
 
 ## Features
 
-- **Kernel/Tool Architecture**: Semantic function registration and invocation system
-  - Kernel core based on Semantic Kernel concepts
+- **ChatClient/Tool Architecture**: Semantic function registration and invocation system
+  - ChatClient core based on Semantic Kernel concepts
   - Tool management and Middleware pipeline
   - Security validation and permission control
 
@@ -90,18 +90,18 @@ beamai_agent:messages(Agent1).      %% => message history list
 beamai_agent:last_response(Agent1). %% => last assistant reply
 ```
 
-### 4. Simple Agent (Using Kernel + Tools)
+### 4. Simple Agent (Using ChatClient + Tools)
 
 ```erlang
-%% Method 1: Define tools via Kernel (pre-built Kernel)
-Kernel0 = beamai_kernel:new(),
+%% Method 1: Define tools via ChatClient (pre-built ChatClient)
+ChatClient0 = beamai_chat_client:new(),
 LlmConfig = beamai_chat_completion:create(anthropic, #{
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
     model => <<"glm-4.7">>
 }),
-K1 = beamai_kernel:add_service(Kernel0, LlmConfig),
-K2 = beamai_kernel:add_tool(K1, #{
+K1 = beamai_chat_client:add_service(ChatClient0, LlmConfig),
+K2 = beamai_chat_client:add_tool(K1, #{
     name => <<"get_weather">>,
     description => <<"Get weather for a city">>,
     parameters => #{
@@ -112,9 +112,9 @@ K2 = beamai_kernel:add_tool(K1, #{
     end
 }),
 
-%% Create Agent with pre-built Kernel
+%% Create Agent with pre-built ChatClient
 {ok, Agent0} = beamai_agent:new(#{
-    kernel => K2,
+    chat_client => K2,
     system_prompt => <<"You are a weather assistant.">>
 }),
 {ok, Result, _} = beamai_agent:run(Agent0, <<"What's the weather in Beijing?">>).
@@ -190,7 +190,7 @@ Trace = beamai_deepagent:get_trace(Result).
 ```
 beamai (external dependency)
 ├── beamai_core/        # Core framework
-│   ├── Kernel         # beamai_kernel, beamai_tool, beamai_context,
+│   ├── ChatClient         # beamai_chat_client, beamai_tool, beamai_context,
 │   │                  # beamai_filter, beamai_prompt, beamai_result
 │   ├── LLM            # beamai_llm_response (unified LLM response accessors)
 │   ├── Process        # beamai_process, beamai_process_builder,
@@ -278,23 +278,23 @@ apps/
 
 **Dependency Notes:**
 - This project depends on the main branch of [BeamAI](https://github.com/TTalkPro/beamai) via `rebar.config`
-- Core functionality (Kernel, Process Framework, Graph, LLM, Memory) is provided by BeamAI
+- Core functionality (ChatClient, Process Framework, Graph, LLM, Memory) is provided by BeamAI
 - This project focuses on Agent implementation, protocol support (A2A, MCP), tool system, and RAG features
 
 See [DEPENDENCIES_EN.md](doc/DEPENDENCIES_EN.md) for details
 
 ## Core Concepts
 
-### 1. Kernel Architecture
+### 1. ChatClient Architecture
 
-Kernel is BeamAI's core abstraction, managing Tool registration and invocation:
+ChatClient is BeamAI's core abstraction, managing Tool registration and invocation:
 
 ```erlang
-%% Create Kernel instance
-Kernel = beamai_kernel:new(),
+%% Create ChatClient instance
+ChatClient = beamai_chat_client:new(),
 
 %% Load tool from module
-Kernel1 = beamai_kernel:add_tool_module(Kernel, beamai_tool_file),
+ChatClient1 = beamai_chat_client:add_tool_module(ChatClient, beamai_tool_file),
 
 %% Or add a single tool
 Tool = #{
@@ -307,10 +307,10 @@ Tool = #{
         file:read_file(Path)
     end
 },
-Kernel2 = beamai_kernel:add_tool(Kernel1, Tool),
+ChatClient2 = beamai_chat_client:add_tool(ChatClient1, Tool),
 
 %% Invoke registered tool
-{ok, Result, _Ctx} = beamai_kernel:invoke_tool(Kernel2, <<"read_file">>, #{
+{ok, Result, _Ctx} = beamai_tool_executor:invoke(ChatClient2, <<"read_file">>, #{
     <<"path">> => <<"/tmp/test.txt">>
 }, beamai_context:new()).
 ```
@@ -464,7 +464,7 @@ BeamAI supports both Gun and Hackney HTTP backends, with Gun as the default (sup
 
 | Module | Description | Source | Documentation |
 |--------|-------------|--------|---------------|
-| **beamai_core** | Core framework: Kernel, Process Framework, Graph Engine, HTTP, Behaviours | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
+| **beamai_core** | Core framework: ChatClient, Process Framework, Graph Engine, HTTP, Behaviours | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
 | **beamai_llm** | LLM client: supports OpenAI, Anthropic, DeepSeek, Zhipu, DashScope, Ollama | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
 | **beamai_memory** | Memory management: Checkpoint, Store, time travel, branching | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
 | **beamai_tools** | Tool system: tool management, Middleware, security validation | Project | [README](apps/beamai_tools/README.md) |

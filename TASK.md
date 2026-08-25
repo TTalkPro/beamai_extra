@@ -128,12 +128,12 @@
   原来按硬编码原子列表 + 文本子串匹配，对真实错误形状（`{http_error,429,_}` 等）全部漏判，
   重试/降级从不触发；并采纳服务端 `Retry-After`。
 - [x] `middleware_tool_retry`：工具失败走 throw（非返回值），原实现 `extract_error` 永不命中，
-  重试从未发生；改为 catch throw + 放弃时 re-throw 保持 kernel 语义；默认 `retryable_errors => auto`
+  重试从未发生；改为 catch throw + 放弃时 re-throw 保持 ChatClient 语义；默认 `retryable_errors => auto`
   经 `beamai_tool_error:classify/1` 只重试 transient（原默认 `all` 会连语义错误一起重试）。
 - [x] `middleware_human_approval`：selective 模式取的是 tool_spec map 而非工具名，审批从不触发；
   默认 `mode` 由 none 改 all（fail-closed）；`call_with_timeout` 用 spawn_monitor（原 spawn 崩溃干等 60s）；
   拒绝结果自行 encode 成 JSON（原样漏 Erlang 项式给模型）。
-- [x] `middleware_call_limit`：halt 不 halt——短路返回错误值被 kernel 当成功透出，agent 收到空答案；
+- [x] `middleware_call_limit`：halt 不 halt——短路返回错误值被 ChatClient 当成功透出，agent 收到空答案；
   改为 throw 收敛成 `{error, {limit_exceeded, _}}`。工具侧 `max_tool_calls` / `max_tool_calls_per_turn`
   **删除**（filter 拿批内只读快照，计数累加不起来，见下方上游 `max_tool_calls`）。
 - [x] `beamai_middleware_runner`：`around_turn` 钩子丢弃状态——turn 响应是 tuple，
@@ -334,7 +334,7 @@
 The project now focuses on extensions to the core BeamAI library:
 
 **Core Dependencies (from BeamAI):**
-- beamai_core - Kernel, Process Framework, Graph Engine, HTTP, Behaviours
+- beamai_core - ChatClient, Process Framework, Graph Engine, HTTP, Behaviours
 - beamai_llm - LLM Chat Completion, Output Parser, Providers
 - beamai_memory - Memory Store, Snapshot, Checkpoint
 
@@ -382,7 +382,7 @@ The project now focuses on extensions to the core BeamAI library:
 ### Working with External BeamAI Dependency
 
 When developing beamai_extra:
-1. Core functionality (Kernel, Process, Graph, LLM, Memory) comes from external beamai
+1. Core functionality (ChatClient, Process, Graph, LLM, Memory) comes from external beamai
 2. Focus on agent implementations, protocols, tools, and RAG
 3. Coordinate with beamai repository for any core changes needed
 4. Keep beamai_extra compatible with latest beamai main branch

@@ -116,10 +116,10 @@ no_memory_no_plugin_live() ->
 no_memory_with_plugin() ->
     io:format("~n=== 场景 2: 有 Plugin (Mock) ===~n~n"),
 
-    %% 方式一：通过 kernel 注册工具
-    Kernel0 = beamai_kernel:new(),
+    %% 方式一：通过 chat_client 注册工具
+    ChatClient0 = beamai_chat_client:new(),
     LlmConfig = beamai_chat_completion:create(mock, #{}),
-    K1 = beamai_kernel:add_service(Kernel0, LlmConfig),
+    K1 = beamai_chat_client:add_service(ChatClient0, LlmConfig),
 
     %% 注册计算器工具
     AddTool = beamai_tool:new(<<"add">>,
@@ -146,11 +146,11 @@ no_memory_with_plugin() ->
               <<"a">> => #{type => number, description => <<"First number">>, required => true},
               <<"b">> => #{type => number, description => <<"Second number">>, required => true}
           }}),
-    K2 = beamai_kernel:add_tools(K1, [AddTool, MultiplyTool]),
+    K2 = beamai_chat_client:add_tools(K1, [AddTool, MultiplyTool]),
 
-    %% 创建 agent（传入预构建的 kernel）
+    %% 创建 agent（传入预构建的 chat_client）
     {ok, Agent} = beamai_agent:new(#{
-        kernel => K2,
+        chat_client => K2,
         system_prompt => <<"You are a calculator assistant. Use tools to compute.">>,
         callbacks => #{
             on_tool_call => fun(Name, Args) ->
@@ -161,7 +161,7 @@ no_memory_with_plugin() ->
     }),
 
     %% 查看可用工具
-    Tools = beamai_kernel:get_tool_specs(beamai_agent:kernel(Agent)),
+    Tools = beamai_chat_client:get_tool_specs(beamai_agent:chat_client(Agent)),
     io:format("Available tools: ~p~n~n", [[maps:get(name, T) || T <- Tools]]),
 
     %% 执行对话（mock LLM 不会触发 tool call，仅展示配置方式）
@@ -178,9 +178,9 @@ no_memory_with_plugin() ->
 no_memory_with_plugin_live() ->
     io:format("~n=== 场景 2: 有 Plugin (Live) ===~n~n"),
 
-    %% 构建带天气和计算工具的 kernel
-    Kernel0 = beamai_kernel:new(),
-    K1 = beamai_kernel:add_service(Kernel0, example_llm_config:anthropic()),
+    %% 构建带天气和计算工具的 chat_client
+    ChatClient0 = beamai_chat_client:new(),
+    K1 = beamai_chat_client:add_service(ChatClient0, example_llm_config:anthropic()),
     WeatherTool = beamai_tool:new(<<"get_weather">>,
         fun(Args) ->
             City = maps:get(<<"city">>, Args, <<"unknown">>),
@@ -201,10 +201,10 @@ no_memory_with_plugin_live() ->
           parameters => #{
               <<"expression">> => #{type => string, description => <<"Math expression">>, required => true}
           }}),
-    K2 = beamai_kernel:add_tools(K1, [WeatherTool, CalcTool]),
+    K2 = beamai_chat_client:add_tools(K1, [WeatherTool, CalcTool]),
 
     {ok, Agent} = beamai_agent:new(#{
-        kernel => K2,
+        chat_client => K2,
         system_prompt => <<"You are a helpful assistant with weather and math tools. "
                           "Always use tools when appropriate. Be concise.">>
     }),

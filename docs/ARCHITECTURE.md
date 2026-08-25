@@ -53,7 +53,7 @@ BeamAI Extra 是一个基于 Erlang/OTP 的高性能 AI Agent 扩展框架，采
 │  ┌─────────────────────────────┴─────────────────────────────────────┐  │
 │  │                        beamai_core                                 │  │
 │  │  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────────┐   │  │
-│  │  │   Graph   │  │  Pregel   │  │   Kernel  │  │   HTTP/SSE    │   │  │
+│  │  │   Graph   │  │  Pregel   │  │   ChatClient  │  │   HTTP/SSE    │   │  │
 │  │  │   引擎    │  │   计算    │  │   核心    │  │   客户端      │   │  │
 │  │  └───────────┘  └───────────┘  └───────────┘  └───────────────┘   │  │
 │  │  ┌───────────┐  ┌───────────┐  ┌───────────┐                       │  │
@@ -74,7 +74,7 @@ BeamAI Extra 是一个基于 Erlang/OTP 的高性能 AI Agent 扩展框架，采
 
 **依赖说明**:
 - **本项目管理**: Agent 实现、协议支持（A2A、MCP）、工具系统、RAG 功能
-- **BeamAI 提供**: Kernel 核心、Process 框架、Graph 引擎、LLM 客户端、Memory 存储
+- **BeamAI 提供**: ChatClient 核心、Process 框架、Graph 引擎、LLM 客户端、Memory 存储
 
 ---
 
@@ -114,7 +114,7 @@ BeamAI Extra 是一个基于 Erlang/OTP 的高性能 AI Agent 扩展框架，采
 
 | 模块 | 来源 | 职责 |
 |------|------|------|
-| `beamai_core` | BeamAI | Graph 执行引擎、Pregel 计算、Kernel 核心、Process 框架 |
+| `beamai_core` | BeamAI | Graph 执行引擎、Pregel 计算、ChatClient 核心、Process 框架 |
 | `beamai_llm` | BeamAI | 多 Provider LLM 客户端、Output Parser |
 | `beamai_memory` | BeamAI | 记忆和检查点管理、存储后端 |
 
@@ -155,8 +155,8 @@ beamai_core (外部依赖)
 │   ├── beamai_http_behaviour.erl
 │   ├── beamai_step_behaviour.erl
 │   └── beamai_process_store_behaviour.erl
-├── kernel/                        # Kernel 核心
-│   ├── beamai_kernel.erl         # Kernel 主模块
+├── ChatClient/                        # ChatClient 核心
+│   ├── beamai_chat_client.erl         # ChatClient 主模块
 │   ├── beamai_tool.erl           # 工具定义
 │   ├── beamai_context.erl        # 上下文管理
 │   ├── beamai_filter.erl         # 过滤器
@@ -765,6 +765,6 @@ put(State, Namespace, Key, Value) ->
 
 ### 外部依赖文档
 - [BeamAI 核心库](https://github.com/TTalkPro/beamai) - 核心框架文档
-  - beamai_core - Kernel、Process、Graph、HTTP
+  - beamai_core - ChatClient、Process、Graph、HTTP
   - beamai_llm - LLM 客户端、Provider、Parser
   - beamai_memory - 存储、Checkpoint、Snapshot
