@@ -176,7 +176,7 @@ Agent 中断和恢复事件：
 ### 在 Agent 创建时设置回调
 
 ```erlang
-LLM = beamai_chat_completion:create(anthropic, #{
+LLM = beamai_chat_model:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>

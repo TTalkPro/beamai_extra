@@ -22,9 +22,9 @@ llm_error_test_() ->
       fun failure_never_echoes_the_question_back/0]}.
 
 setup() ->
-    catch meck:unload(beamai_chat_completion),
+    catch meck:unload(beamai_chat_model),
     catch meck:unload(beamai_embeddings),
-    meck:new(beamai_chat_completion, [passthrough, unstick]),
+    meck:new(beamai_chat_model, [passthrough, unstick]),
     %% 检索链路要有 embedding 才能跑到 LLM 那一步
     meck:new(beamai_embeddings, [passthrough, unstick]),
     meck:expect(beamai_embeddings, embed_text, fun(_, _) -> {ok, [1.0, 0.0, 0.0]} end),
@@ -32,30 +32,30 @@ setup() ->
     ok.
 
 cleanup(_) ->
-    catch meck:unload(beamai_chat_completion),
+    catch meck:unload(beamai_chat_model),
     catch meck:unload(beamai_embeddings),
     ok.
 
 %% 回归测试：异常必须变成 {error,_}，不能变成 {ok, 假答案}
 llm_crash_is_reported_as_error() ->
-    meck:expect(beamai_chat_completion, create, fun(_, _) -> error(no_api_key) end),
+    meck:expect(beamai_chat_model, create, fun(_, _) -> error(no_api_key) end),
     ?assertMatch({error, {llm_call_failed, _, _}}, query(<<"问题是什么"/utf8>>)).
 
 %% {error,_} 返回值照常上抛，不被吞
 llm_error_return_is_propagated() ->
-    meck:expect(beamai_chat_completion, create, fun(_, C) -> C#{'__llm_config__' => true} end),
-    meck:expect(beamai_chat_completion, chat, fun(_, _) -> {error, rate_limited} end),
+    meck:expect(beamai_chat_model, create, fun(_, C) -> C#{'__llm_config__' => true} end),
+    meck:expect(beamai_chat_model, chat, fun(_, _) -> {error, rate_limited} end),
     ?assertEqual({error, {llm_error, rate_limited}}, query(<<"问题是什么"/utf8>>)).
 
 llm_success_still_works() ->
-    meck:expect(beamai_chat_completion, create, fun(_, C) -> C#{'__llm_config__' => true} end),
-    meck:expect(beamai_chat_completion, chat,
+    meck:expect(beamai_chat_model, create, fun(_, C) -> C#{'__llm_config__' => true} end),
+    meck:expect(beamai_chat_model, chat,
                 fun(_, _) -> {ok, #{content => <<"真答案"/utf8>>}} end),
     ?assertEqual({ok, <<"真答案"/utf8>>}, query(<<"问题是什么"/utf8>>)).
 
 %% 失败时绝不能把问题/提示词当答案回显
 failure_never_echoes_the_question_back() ->
-    meck:expect(beamai_chat_completion, create, fun(_, _) -> error(boom) end),
+    meck:expect(beamai_chat_model, create, fun(_, _) -> error(boom) end),
     Question = <<"这个问题不该被当成答案"/utf8>>,
     case query(Question) of
         {ok, Answer} ->

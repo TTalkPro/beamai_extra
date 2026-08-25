@@ -150,7 +150,7 @@ Config = #{
     chat_client => beamai_chat_client:chat_client(),
 
     %% ChatClient 构建（方式二：从组件自动构建）
-    llm => beamai_chat_completion:config(),  %% LLM 配置
+    llm => beamai_chat_model:config(),  %% LLM 配置
     plugins => [module()],                   %% Plugin 模块列表（如 beamai_tool_file）
     middlewares => [{module(), map()}],       %% Middleware 配置
 
@@ -292,7 +292,7 @@ beamai_coordinator:delegate_parallel(CoordinatorPid, WorkerNames, Task).
 
 ```erlang
 %% Pipeline 示例：翻译流水线
-LLM = beamai_chat_completion:create(dashscope, #{model => <<"qwen-plus">>, api_key => ApiKey}),
+LLM = beamai_chat_model:create(dashscope, #{model => <<"qwen-plus">>, api_key => ApiKey}),
 
 {ok, Pipeline} = beamai_coordinator:start_pipeline(<<"translator">>, #{
     agents => [
@@ -543,11 +543,11 @@ beamai_deepagent_tool_provider:find_tool(Name, Opts). %% 查找工具
 
 ### LLM 配置管理
 
-LLM 配置使用 `beamai_chat_completion:create/2` 创建：
+LLM 配置使用 `beamai_chat_model:create/2` 创建：
 
 ```erlang
 %% 直接创建 LLM 配置
-LLM = beamai_chat_completion:create(anthropic, #{
+LLM = beamai_chat_model:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
@@ -591,22 +591,22 @@ LLM = test_zhipu_anthropic:create_llm().
 ```erlang
 %% 创建配置
 -spec create(provider(), map()) -> config().
-beamai_chat_completion:create(Provider, Opts).
+beamai_chat_model:create(Provider, Opts).
 
 %% 聊天补全
 -spec chat(config(), [map()]) -> {ok, map()} | {error, term()}.
-beamai_chat_completion:chat(Config, Messages).
+beamai_chat_model:chat(Config, Messages).
 
 %% 带选项的聊天补全（支持 tools, tool_choice, max_retries 等）
 -spec chat(config(), [map()], map()) -> {ok, map()} | {error, term()}.
-beamai_chat_completion:chat(Config, Messages, Opts).
+beamai_chat_model:chat(Config, Messages, Opts).
 
 %% 流式聊天
 -spec stream_chat(config(), [map()], fun()) -> {ok, map()} | {error, term()}.
-beamai_chat_completion:stream_chat(Config, Messages, Callback).
+beamai_chat_model:stream_chat(Config, Messages, Callback).
 
 -spec stream_chat(config(), [map()], fun(), map()) -> {ok, map()} | {error, term()}.
-beamai_chat_completion:stream_chat(Config, Messages, Callback, Opts).
+beamai_chat_model:stream_chat(Config, Messages, Callback, Opts).
 ```
 
 ### Chat 选项
@@ -671,7 +671,7 @@ DeepSeek Provider 使用 OpenAI 兼容 API，支持 `deepseek-chat` 和 `deepsee
 
 **配置示例：**
 ```erlang
-LLM = beamai_chat_completion:create(deepseek, #{
+LLM = beamai_chat_model:create(deepseek, #{
     model => <<"deepseek-chat">>,
     api_key => list_to_binary(os:getenv("DEEPSEEK_API_KEY")),
     max_tokens => 4096
@@ -694,10 +694,10 @@ LLM = beamai_chat_completion:create(deepseek, #{
 
 ### LLM 配置参数
 
-`beamai_chat_completion:create/2` 支持以下参数：
+`beamai_chat_model:create/2` 支持以下参数：
 
 ```erlang
-LLM = beamai_chat_completion:create(Provider, #{
+LLM = beamai_chat_model:create(Provider, #{
     model => binary(),                   %% 模型名称（必需）
     api_key => binary(),                 %% API Key（必需，ollama/mock 除外）
     base_url => binary(),                %% 可选：自定义 URL
@@ -839,8 +839,8 @@ beamai_chat_client:new().
 beamai_chat_client:new(Settings).
 
 %% 添加 LLM 服务
--spec add_service(chat_client(), beamai_chat_completion:config()) -> chat_client().
-beamai_chat_client:add_service(ChatClient, LlmConfig).
+-spec add_chat_model(chat_client(), beamai_chat_model:config()) -> chat_client().
+beamai_chat_client:add_chat_model(ChatClient, LlmConfig).
 
 %% 添加工具
 -spec add_tool(chat_client(), tool_spec()) -> chat_client().
@@ -884,8 +884,8 @@ beamai_tool_registry:schemas(beamai_chat_client:tools(ChatClient)).          %% 
 beamai_tool_registry:schemas(beamai_chat_client:tools(ChatClient), Provider). %% 指定 Provider 格式
 
 %% 获取 LLM 服务配置
--spec get_service(chat_client()) -> beamai_chat_completion:config() | undefined.
-beamai_chat_client:get_service(ChatClient).
+-spec model(chat_client()) -> beamai_chat_model:config() | undefined.
+beamai_chat_client:chat_model(ChatClient).
 ```
 
 **Tool 定义示例：**

@@ -338,12 +338,12 @@ Rag = beamai_rag:new(#{vector_store => beamai_vector_store:new()}).
 ### LLM（生成阶段）
 
 ```erlang
-%% 简写：由 beamai_chat_completion:create/2 组装
+%% 简写：由 beamai_chat_model:create/2 组装
 Rag = beamai_rag:new(#{llm => #{provider => openai, model => <<"gpt-4o">>,
                                 api_key => ApiKey}}),
 
-%% 或直接传已建好的 beamai_chat_completion 配置
-LLM = beamai_chat_completion:create(deepseek, #{api_key => Key}),
+%% 或直接传已建好的 beamai_chat_model 配置
+LLM = beamai_chat_model:create(deepseek, #{api_key => Key}),
 Rag2 = beamai_rag:new(#{llm => LLM}).
 ```
 
@@ -367,7 +367,7 @@ Rag2 = beamai_rag:new(#{llm => LLM}).
 | 依赖 | 必需性 | 用途 |
 |------|--------|------|
 | `beamai_core` | 必需 | `beamai_http`（内置 OpenAI 嵌入实现）、`beamai_id`、`beamai_utils` |
-| `beamai_llm` | 可选（`optional_applications`） | `beamai_embedding`（provider 嵌入）、`beamai_rerank`（重排序）、`beamai_chat_completion`（生成） |
+| `beamai_llm` | 可选（`optional_applications`） | `beamai_embedding`（provider 嵌入）、`beamai_rerank`（重排序）、`beamai_chat_model`（生成） |
 
 不带 `beamai_llm` 运行时，`new_local` 嵌入与内存检索照常工作；
 调用 provider 嵌入或重排会返回 `{error, {embedding_unavailable, _}}` /

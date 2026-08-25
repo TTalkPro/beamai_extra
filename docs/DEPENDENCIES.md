@@ -212,7 +212,7 @@ application:set_env(beamai_core, http_backend, beamai_http_hackney).
   - `beamai_embedding` — provider 形态的文本向量化（openai / dashscope /
     zhipu / siliconflow / ollama / mock，自动分批与重试）
   - `beamai_rerank` — Cross-Encoder 重排序（两阶段检索的第二阶段）
-  - `beamai_chat_completion` — 检索后的答案生成
+  - `beamai_chat_model` — 检索后的答案生成
 
 > 不带 beamai_llm 运行时，本地伪向量嵌入与内存检索照常工作；provider 嵌入与
 > 重排返回 `{error, {embedding_unavailable, _}}` / `{error, {rerank_unavailable, _}}`，

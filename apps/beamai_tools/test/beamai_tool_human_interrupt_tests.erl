@@ -84,12 +84,12 @@ interrupt_resume_test_() ->
 
 setup() ->
     application:ensure_all_started(beamai_core),
-    catch meck:unload(beamai_chat_completion),
-    meck:new(beamai_chat_completion, [passthrough, unstick]),
+    catch meck:unload(beamai_chat_model),
+    meck:new(beamai_chat_model, [passthrough, unstick]),
     ok.
 
 cleanup(_) ->
-    catch meck:unload(beamai_chat_completion),
+    catch meck:unload(beamai_chat_model),
     erase(last_messages),
     ok.
 
@@ -150,7 +150,7 @@ arg(_, _) -> undefined.
 %% 第一次调用返回指定的 tool_call，之后返回终答。
 %% 同时把每次收到的 messages 存起来，供 last_tool_result/0 取证。
 mock_llm(Ctr, ToolName, Args) ->
-    meck:expect(beamai_chat_completion, chat,
+    meck:expect(beamai_chat_model, chat,
         fun(_Cfg, Messages, _Opts) ->
             put(last_messages, Messages),
             case counters:get(Ctr, 1) of

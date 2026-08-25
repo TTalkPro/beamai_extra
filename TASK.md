@@ -300,7 +300,7 @@
 > （SSE 流）/ `http_pool_longpoll`（长轮询）。
 
 - [x] **升级零破坏，无需为兼容改动**。三下游 API 面（`beamai_http:*` /
-  `beamai_chat_completion:*` / `beamai_llm_http_client:*`）全向后兼容，`pool` 选项本就存在
+  `beamai_chat_model:*` / `beamai_llm_http_client:*`）全向后兼容，`pool` 选项本就存在
   且可选；三池由 `beamai_core_sup` 自动启动，`http_pools` 不配也有可用缺省。
   破坏性变更只在 beamai_core 内部（`beamai_http_pool` API 加池名首参、
   `beamai_http_gun:request_async/5` 返回值变 4 元组），beamai_extra 只经门面调用、不碰这些。

@@ -52,8 +52,8 @@ rebar3 shell
 ### 2. Simple Agent（基本用法）
 
 ```erlang
-%% 创建 LLM 配置（使用 beamai_chat_completion:create/2）
-LLM = beamai_chat_completion:create(anthropic, #{
+%% 创建 LLM 配置（使用 beamai_chat_model:create/2）
+LLM = beamai_chat_model:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>
@@ -95,12 +95,12 @@ beamai_agent:last_response(Agent1). %% => 上一次助手回复
 ```erlang
 %% 方式一：直接在 Agent 中定义工具（通过 ChatClient 自动构建）
 ChatClient0 = beamai_chat_client:new(),
-LlmConfig = beamai_chat_completion:create(anthropic, #{
+LlmConfig = beamai_chat_model:create(anthropic, #{
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
     model => <<"glm-4.7">>
 }),
-K1 = beamai_chat_client:add_service(ChatClient0, LlmConfig),
+K1 = beamai_chat_client:add_chat_model(ChatClient0, LlmConfig),
 K2 = beamai_chat_client:add_tool(K1, #{
     name => <<"get_weather">>,
     description => <<"获取城市天气"/utf8>>,
@@ -207,7 +207,7 @@ beamai (外部依赖)
 │   └── Utils          # beamai_id, beamai_jsonrpc, beamai_sse, beamai_utils
 │
 ├── beamai_llm/         # LLM 客户端
-│   ├── Chat           # beamai_chat_completion
+│   ├── Chat           # beamai_chat_model
 │   ├── Parser         # beamai_output_parser, beamai_parser_json
 │   ├── Adapters       # llm_message_adapter, llm_response_adapter, llm_tool_adapter
 │   └── Providers      # OpenAI, Anthropic, DeepSeek, Zhipu, DashScope, Ollama
@@ -380,11 +380,11 @@ ok = beamai_agent:save(Agent1),
 
 ### LLM 配置
 
-LLM 配置使用 `beamai_chat_completion:create/2` 创建：
+LLM 配置使用 `beamai_chat_model:create/2` 创建：
 
 ```erlang
 %% 方式一：直接创建 LLM 配置
-LLM = beamai_chat_completion:create(anthropic, #{
+LLM = beamai_chat_model:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,

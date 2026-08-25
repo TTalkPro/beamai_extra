@@ -193,7 +193,7 @@ beamai_core (外部依赖)
 
 ```
 beamai_llm (外部依赖)
-├── beamai_chat_completion.erl    # LLM 聊天完成
+├── beamai_chat_model.erl    # LLM 聊天完成
 ├── parser/                        # 输出解析器
 │   ├── beamai_output_parser.erl
 │   ├── beamai_parser_json.erl

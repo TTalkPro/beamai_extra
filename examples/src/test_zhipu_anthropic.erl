@@ -43,7 +43,7 @@
 %% @doc 从环境变量构建 Anthropic LLM provider
 %%
 %% 使用 ZHIPU_ANTHROPIC_BASE_URL 和 ZHIPU_API_KEY 环境变量。
--spec create_llm() -> beamai_chat_completion:config().
+-spec create_llm() -> beamai_chat_model:config().
 create_llm() ->
     ApiKey = case os:getenv("ZHIPU_API_KEY") of
         false -> error({missing_env, "ZHIPU_API_KEY"});
@@ -58,7 +58,7 @@ create_llm() ->
     io:format("[config] Provider: anthropic~n"),
     io:format("[config] Base URL: ~s~n", [BaseUrl]),
     io:format("[config] Model: ~s~n", [?DEFAULT_MODEL]),
-    beamai_chat_completion:create(anthropic, #{
+    beamai_chat_model:create(anthropic, #{
         api_key => ApiKey,
         base_url => BaseUrl,
         model => ?DEFAULT_MODEL,
@@ -198,7 +198,7 @@ test_agent_with_tools() ->
 
     %% 构建带工具的 ChatClient
     ChatClient0 = beamai_chat_client:new(),
-    K1 = beamai_chat_client:add_service(ChatClient0, LLM),
+    K1 = beamai_chat_client:add_chat_model(ChatClient0, LLM),
     K2 = beamai_chat_client:add_tools(K1, [
         #{name => <<"calculate">>,
           description => <<"Perform arithmetic. Supports: add, subtract, multiply, divide.">>,

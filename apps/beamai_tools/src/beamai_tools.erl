@@ -15,7 +15,7 @@
 %%% %% 添加中间件
 %%% K2 = beamai_tools:with_middleware(K1, beamai_middleware_presets:default()),
 %%% %% 添加 LLM 配置并使用
-%%% K3 = beamai:add_llm(K2, LlmConfig),
+%%% K3 = beamai:add_chat_model(K2, LlmConfig),
 %%% {ok, Response, _Ctx} = beamai:chat_with_tools(K3, Messages).
 %%% ```
 %%%

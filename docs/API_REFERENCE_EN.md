@@ -150,7 +150,7 @@ Config = #{
     chat_client => beamai_chat_client:chat_client(),
 
     %% ChatClient construction (Method 2: auto-build from components)
-    llm => beamai_chat_completion:config(),  %% LLM configuration
+    llm => beamai_chat_model:config(),  %% LLM configuration
     plugins => [module()],                   %% Plugin module list (e.g., beamai_tool_file)
     middlewares => [{module(), map()}],       %% Middleware configuration
 
@@ -292,7 +292,7 @@ beamai_coordinator:delegate_parallel(CoordinatorPid, WorkerNames, Task).
 
 ```erlang
 %% Pipeline example: Translation pipeline
-LLM = beamai_chat_completion:create(dashscope, #{model => <<"qwen-plus">>, api_key => ApiKey}),
+LLM = beamai_chat_model:create(dashscope, #{model => <<"qwen-plus">>, api_key => ApiKey}),
 
 {ok, Pipeline} = beamai_coordinator:start_pipeline(<<"translator">>, #{
     agents => [
@@ -543,11 +543,11 @@ LLM client with multi-provider support and unified chat completion interface.
 
 ### LLM Configuration Management
 
-LLM configuration is created using `beamai_chat_completion:create/2`:
+LLM configuration is created using `beamai_chat_model:create/2`:
 
 ```erlang
 %% Create LLM configuration directly
-LLM = beamai_chat_completion:create(anthropic, #{
+LLM = beamai_chat_model:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
@@ -591,22 +591,22 @@ LLM = test_zhipu_anthropic:create_llm().
 ```erlang
 %% Create configuration
 -spec create(provider(), map()) -> config().
-beamai_chat_completion:create(Provider, Opts).
+beamai_chat_model:create(Provider, Opts).
 
 %% Chat completion
 -spec chat(config(), [map()]) -> {ok, map()} | {error, term()}.
-beamai_chat_completion:chat(Config, Messages).
+beamai_chat_model:chat(Config, Messages).
 
 %% Chat completion with options (supports tools, tool_choice, max_retries, etc.)
 -spec chat(config(), [map()], map()) -> {ok, map()} | {error, term()}.
-beamai_chat_completion:chat(Config, Messages, Opts).
+beamai_chat_model:chat(Config, Messages, Opts).
 
 %% Streaming chat
 -spec stream_chat(config(), [map()], fun()) -> {ok, map()} | {error, term()}.
-beamai_chat_completion:stream_chat(Config, Messages, Callback).
+beamai_chat_model:stream_chat(Config, Messages, Callback).
 
 -spec stream_chat(config(), [map()], fun(), map()) -> {ok, map()} | {error, term()}.
-beamai_chat_completion:stream_chat(Config, Messages, Callback, Opts).
+beamai_chat_model:stream_chat(Config, Messages, Callback, Opts).
 ```
 
 ### Chat Options
@@ -644,7 +644,7 @@ DeepSeek Provider uses OpenAI compatible API, supporting `deepseek-chat` and `de
 
 **Configuration Example:**
 ```erlang
-LLM = beamai_chat_completion:create(deepseek, #{
+LLM = beamai_chat_model:create(deepseek, #{
     model => <<"deepseek-chat">>,
     api_key => list_to_binary(os:getenv("DEEPSEEK_API_KEY")),
     max_tokens => 4096
@@ -667,10 +667,10 @@ DashScope Provider uses DashScope native API, automatically selecting endpoints 
 
 ### LLM Configuration Parameters
 
-`beamai_chat_completion:create/2` supports the following parameters:
+`beamai_chat_model:create/2` supports the following parameters:
 
 ```erlang
-LLM = beamai_chat_completion:create(Provider, #{
+LLM = beamai_chat_model:create(Provider, #{
     model => binary(),                   %% Model name (required)
     api_key => binary(),                 %% API Key (required, except ollama/mock)
     base_url => binary(),                %% Optional: custom URL

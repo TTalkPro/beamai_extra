@@ -69,7 +69,7 @@
 
 All completed - now part of external beamai dependency:
 - beamai_chat_client, beamai_function, beamai_plugin, beamai_context, beamai_result
-- beamai_filter, beamai_service, beamai_chat_completion, beamai_prompt
+- beamai_filter, beamai_service, beamai_chat_model, beamai_prompt
 - Connectors for OpenAI, Anthropic, Zhipu, Ollama
 - Tool calling loop and facade API
 - Unit tests for all modules

@@ -7,7 +7,7 @@
         stdlib,
         beamai_core,
         %% 可选依赖：provider 嵌入（beamai_embedding）、重排序（beamai_rerank）、
-        %% 生成阶段（beamai_chat_completion）都来自 beamai_llm；
+        %% 生成阶段（beamai_chat_model）都来自 beamai_llm；
         %% 只用本地嵌入 + 内存检索时可不启动。
         %% 注：optional_applications 的条目必须同时出现在 applications 中。
         beamai_llm

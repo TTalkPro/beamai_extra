@@ -118,8 +118,8 @@ no_memory_with_plugin() ->
 
     %% 方式一：通过 chat_client 注册工具
     ChatClient0 = beamai_chat_client:new(),
-    LlmConfig = beamai_chat_completion:create(mock, #{}),
-    K1 = beamai_chat_client:add_service(ChatClient0, LlmConfig),
+    LlmConfig = beamai_chat_model:create(mock, #{}),
+    K1 = beamai_chat_client:add_chat_model(ChatClient0, LlmConfig),
 
     %% 注册计算器工具
     AddTool = beamai_tool:new(<<"add">>,
@@ -180,7 +180,7 @@ no_memory_with_plugin_live() ->
 
     %% 构建带天气和计算工具的 chat_client
     ChatClient0 = beamai_chat_client:new(),
-    K1 = beamai_chat_client:add_service(ChatClient0, example_llm_config:anthropic()),
+    K1 = beamai_chat_client:add_chat_model(ChatClient0, example_llm_config:anthropic()),
     WeatherTool = beamai_tool:new(<<"get_weather">>,
         fun(Args) ->
             City = maps:get(<<"city">>, Args, <<"unknown">>),

@@ -52,7 +52,7 @@
 %% @doc 创建 Anthropic 兼容 LLM 配置（从环境变量获取 API Key）
 %%
 %% 使用 Zhipu 的 Anthropic 兼容 API，模型为 GLM-4.7。
--spec anthropic() -> beamai_chat_completion:config().
+-spec anthropic() -> beamai_chat_model:config().
 anthropic() ->
     ApiKey = require_env("ZHIPU_API_KEY"),
     anthropic(#{api_key => ApiKey}).
@@ -65,13 +65,13 @@ anthropic() ->
 %%   - api_key: API Key (必填)
 %%   - model: 模型名 (默认 glm-4.7)
 %%   - max_tokens: 最大 token 数 (默认 2048)
--spec anthropic(map()) -> beamai_chat_completion:config().
+-spec anthropic(map()) -> beamai_chat_model:config().
 anthropic(Opts) ->
     BaseUrl = case maps:find(base_url, Opts) of
         {ok, Url} -> Url;
         error -> zhipu_anthropic_base_url()
     end,
-    beamai_chat_completion:create(anthropic, #{
+    beamai_chat_model:create(anthropic, #{
         api_key => maps:get(api_key, Opts),
         base_url => BaseUrl,
         model => maps:get(model, Opts, ?ANTHROPIC_DEFAULT_MODEL),
@@ -81,7 +81,7 @@ anthropic(Opts) ->
 %% @doc 创建 MiniMax LLM 配置（从环境变量获取 API Key）
 %%
 %% 使用 MiniMax 的 Anthropic 兼容 API，模型为 MiniMax-M2。
--spec minimax() -> beamai_chat_completion:config().
+-spec minimax() -> beamai_chat_model:config().
 minimax() ->
     ApiKey = require_env("MINIMAX_API_KEY"),
     minimax(#{api_key => ApiKey}).
@@ -96,13 +96,13 @@ minimax() ->
 %%   - model: 模型名 (默认 MiniMax-M2)
 %%   - max_tokens: 最大 token 数 (默认 2048)
 %%   - base_url: 自定义 API 地址（可选，默认取环境变量 MINIMAX_ANTHROPIC_BASE_URL）
--spec minimax(map()) -> beamai_chat_completion:config().
+-spec minimax(map()) -> beamai_chat_model:config().
 minimax(Opts) ->
     BaseUrl = case maps:find(base_url, Opts) of
         {ok, Url} -> Url;
         error -> minimax_anthropic_base_url()
     end,
-    beamai_chat_completion:create(anthropic, #{
+    beamai_chat_model:create(anthropic, #{
         api_key => maps:get(api_key, Opts),
         base_url => BaseUrl,
         model => maps:get(model, Opts, ?MINIMAX_DEFAULT_MODEL),
@@ -112,7 +112,7 @@ minimax(Opts) ->
 %% @doc 创建 Claude 原生 LLM 配置（从环境变量获取 API Key）
 %%
 %% 使用 Anthropic 原生 API，模型为 claude-sonnet-4-20250514。
--spec claude() -> beamai_chat_completion:config().
+-spec claude() -> beamai_chat_model:config().
 claude() ->
     ApiKey = require_env("ANTHROPIC_API_KEY"),
     claude(#{api_key => ApiKey}).
@@ -123,9 +123,9 @@ claude() ->
 %%   - api_key: API Key (必填)
 %%   - model: 模型名 (默认 claude-sonnet-4-20250514)
 %%   - max_tokens: 最大 token 数 (默认 2048)
--spec claude(map()) -> beamai_chat_completion:config().
+-spec claude(map()) -> beamai_chat_model:config().
 claude(Opts) ->
-    beamai_chat_completion:create(anthropic, #{
+    beamai_chat_model:create(anthropic, #{
         api_key => maps:get(api_key, Opts),
         model => maps:get(model, Opts, ?CLAUDE_DEFAULT_MODEL),
         max_tokens => maps:get(max_tokens, Opts, ?DEFAULT_MAX_TOKENS)
@@ -134,7 +134,7 @@ claude(Opts) ->
 %% @doc 创建 Zhipu 原生 LLM 配置（从环境变量获取 API Key）
 %%
 %% 使用 Zhipu 原生 API，模型为 GLM-4.6。
--spec zhipu() -> beamai_chat_completion:config().
+-spec zhipu() -> beamai_chat_model:config().
 zhipu() ->
     ApiKey = require_env("ZHIPU_API_KEY"),
     zhipu(#{api_key => ApiKey}).
@@ -147,9 +147,9 @@ zhipu() ->
 %%   - api_key: API Key (必填)
 %%   - model: 模型名 (默认 glm-4.6)
 %%   - max_tokens: 最大 token 数 (默认 2048)
--spec zhipu(map()) -> beamai_chat_completion:config().
+-spec zhipu(map()) -> beamai_chat_model:config().
 zhipu(Opts) ->
-    beamai_chat_completion:create(zhipu, #{
+    beamai_chat_model:create(zhipu, #{
         api_key => maps:get(api_key, Opts),
         model => maps:get(model, Opts, ?ZHIPU_DEFAULT_MODEL),
         max_tokens => maps:get(max_tokens, Opts, ?DEFAULT_MAX_TOKENS)
@@ -158,7 +158,7 @@ zhipu(Opts) ->
 %% @doc 创建 OpenAI 兼容 LLM 配置（使用 Zhipu 的 OpenAI 兼容 API）
 %%
 %% 使用 Zhipu 的 OpenAI 兼容 API，模型为 GLM-4.7。
--spec openai_glm() -> beamai_chat_completion:config().
+-spec openai_glm() -> beamai_chat_model:config().
 openai_glm() ->
     ApiKey = require_env("ZHIPU_API_KEY"),
     openai_glm(#{api_key => ApiKey}).
@@ -171,9 +171,9 @@ openai_glm() ->
 %%   - api_key: API Key (必填)
 %%   - model: 模型名 (默认 glm-4.7)
 %%   - max_tokens: 最大 token 数 (默认 2048)
--spec openai_glm(map()) -> beamai_chat_completion:config().
+-spec openai_glm(map()) -> beamai_chat_model:config().
 openai_glm(Opts) ->
-    beamai_chat_completion:create(openai, #{
+    beamai_chat_model:create(openai, #{
         api_key => maps:get(api_key, Opts),
         base_url => ?ZHIPU_OPENAI_BASE_URL,
         endpoint => <<"/v4/chat/completions">>,
@@ -182,7 +182,7 @@ openai_glm(Opts) ->
     }).
 
 %% @doc 创建 DeepSeek LLM 配置（从环境变量获取 API Key）
--spec deepseek() -> beamai_chat_completion:config().
+-spec deepseek() -> beamai_chat_model:config().
 deepseek() ->
     ApiKey = require_env("DEEPSEEK_API_KEY"),
     deepseek(#{api_key => ApiKey}).
@@ -193,16 +193,16 @@ deepseek() ->
 %%   - api_key: API Key (必填)
 %%   - model: 模型名 (默认 deepseek-chat)
 %%   - max_tokens: 最大 token 数 (默认 2048)
--spec deepseek(map()) -> beamai_chat_completion:config().
+-spec deepseek(map()) -> beamai_chat_model:config().
 deepseek(Opts) ->
-    beamai_chat_completion:create(deepseek, #{
+    beamai_chat_model:create(deepseek, #{
         api_key => maps:get(api_key, Opts),
         model => maps:get(model, Opts, ?DEEPSEEK_DEFAULT_MODEL),
         max_tokens => maps:get(max_tokens, Opts, ?DEFAULT_MAX_TOKENS)
     }).
 
 %% @doc 创建 OpenAI LLM 配置（从环境变量获取 API Key）
--spec openai() -> beamai_chat_completion:config().
+-spec openai() -> beamai_chat_model:config().
 openai() ->
     ApiKey = require_env("OPENAI_API_KEY"),
     openai(#{api_key => ApiKey}).
@@ -214,7 +214,7 @@ openai() ->
 %%   - model: 模型名 (默认 gpt-4)
 %%   - max_tokens: 最大 token 数 (默认 2048)
 %%   - base_url: 自定义 API 地址（可选，用于兼容 API）
--spec openai(map()) -> beamai_chat_completion:config().
+-spec openai(map()) -> beamai_chat_model:config().
 openai(Opts) ->
     BaseOpts = #{
         api_key => maps:get(api_key, Opts),
@@ -225,7 +225,7 @@ openai(Opts) ->
         {ok, Url} -> BaseOpts#{base_url => Url};
         error -> BaseOpts
     end,
-    beamai_chat_completion:create(openai, FinalOpts).
+    beamai_chat_model:create(openai, FinalOpts).
 
 %%====================================================================
 %% 内部函数

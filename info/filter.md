@@ -90,7 +90,7 @@ invoke_chat(ChatClient, Messages, Opts)
     |       -> FilterCtx = #{messages, context, metadata}
     |       -> 执行 pre_chat handler 链
     |
-    +-- beamai_chat_completion:chat(LlmConfig, FilteredMsgs, Opts)
+    +-- beamai_chat_model:chat(LlmConfig, FilteredMsgs, Opts)
     |
     +-- apply_post_chat_filters(Filters, Response, Context)
             -> FilterCtx = #{result, context, metadata}

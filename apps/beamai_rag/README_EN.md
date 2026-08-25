@@ -345,12 +345,12 @@ Rag = beamai_rag:new(#{vector_store => beamai_vector_store:new()}).
 ### LLM (Generation Stage)
 
 ```erlang
-%% Shorthand: assembled via beamai_chat_completion:create/2
+%% Shorthand: assembled via beamai_chat_model:create/2
 Rag = beamai_rag:new(#{llm => #{provider => openai, model => <<"gpt-4o">>,
                                 api_key => ApiKey}}),
 
-%% Or pass a ready beamai_chat_completion config
-LLM = beamai_chat_completion:create(deepseek, #{api_key => Key}),
+%% Or pass a ready beamai_chat_model config
+LLM = beamai_chat_model:create(deepseek, #{api_key => Key}),
 Rag2 = beamai_rag:new(#{llm => LLM}).
 ```
 
@@ -375,7 +375,7 @@ it never passes placeholder text off as an answer. For retrieval only, use
 | Dependency | Required | Used for |
 |------------|----------|----------|
 | `beamai_core` | Yes | `beamai_http` (built-in OpenAI embedding client), `beamai_id`, `beamai_utils` |
-| `beamai_llm` | Optional (`optional_applications`) | `beamai_embedding` (provider embeddings), `beamai_rerank` (reranking), `beamai_chat_completion` (generation) |
+| `beamai_llm` | Optional (`optional_applications`) | `beamai_embedding` (provider embeddings), `beamai_rerank` (reranking), `beamai_chat_model` (generation) |
 
 Without `beamai_llm`, local embeddings and in-memory retrieval keep working;
 provider embeddings and reranking return `{error, {embedding_unavailable, _}}` /

@@ -52,8 +52,8 @@ rebar3 shell
 ### 2. Simple Agent (Basic Usage)
 
 ```erlang
-%% Create LLM configuration (use beamai_chat_completion:create/2)
-LLM = beamai_chat_completion:create(anthropic, #{
+%% Create LLM configuration (use beamai_chat_model:create/2)
+LLM = beamai_chat_model:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>
@@ -95,12 +95,12 @@ beamai_agent:last_response(Agent1). %% => last assistant reply
 ```erlang
 %% Method 1: Define tools via ChatClient (pre-built ChatClient)
 ChatClient0 = beamai_chat_client:new(),
-LlmConfig = beamai_chat_completion:create(anthropic, #{
+LlmConfig = beamai_chat_model:create(anthropic, #{
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,
     model => <<"glm-4.7">>
 }),
-K1 = beamai_chat_client:add_service(ChatClient0, LlmConfig),
+K1 = beamai_chat_client:add_chat_model(ChatClient0, LlmConfig),
 K2 = beamai_chat_client:add_tool(K1, #{
     name => <<"get_weather">>,
     description => <<"Get weather for a city">>,
@@ -206,7 +206,7 @@ beamai (external dependency)
 │   └── Utils          # beamai_id, beamai_jsonrpc, beamai_sse, beamai_utils
 │
 ├── beamai_llm/         # LLM client
-│   ├── Chat           # beamai_chat_completion
+│   ├── Chat           # beamai_chat_model
 │   ├── Parser         # beamai_output_parser, beamai_parser_json
 │   ├── Adapters       # llm_message_adapter, llm_response_adapter, llm_tool_adapter
 │   └── Providers      # OpenAI, Anthropic, DeepSeek, Zhipu, DashScope, Ollama
@@ -379,11 +379,11 @@ Listen to 8 events during Agent execution:
 
 ### LLM Configuration
 
-LLM configuration is created using `beamai_chat_completion:create/2`:
+LLM configuration is created using `beamai_chat_model:create/2`:
 
 ```erlang
 %% Method 1: Create LLM configuration directly
-LLM = beamai_chat_completion:create(anthropic, #{
+LLM = beamai_chat_model:create(anthropic, #{
     model => <<"glm-4.7">>,
     api_key => list_to_binary(os:getenv("ZHIPU_API_KEY")),
     base_url => <<"https://open.bigmodel.cn/api/anthropic">>,

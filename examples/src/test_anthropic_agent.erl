@@ -65,8 +65,8 @@ run_simple() ->
     io:format("  Base URL: ~s~n", [maps:get(base_url, LLMConfig)]),
     io:format("  Model: ~s~n~n", [maps:get(model, LLMConfig)]),
 
-    %% 创建 LLM（使用 beamai_chat_completion）
-    LLM = beamai_chat_completion:create(
+    %% 创建 LLM（使用 beamai_chat_model）
+    LLM = beamai_chat_model:create(
         maps:get(provider, LLMConfig),
         maps:without([provider], LLMConfig)
     ),
@@ -115,7 +115,7 @@ run_simple() ->
 run_with_tools() ->
     io:format("=== Testing Agent with Tools ===~n~n"),
 
-    LLM = beamai_chat_completion:create(
+    LLM = beamai_chat_model:create(
         anthropic,
         maps:without([provider], get_llm_config())
     ),
@@ -212,7 +212,7 @@ run_with_tools() ->
 run_multi_turn() ->
     io:format("=== Testing Multi-Turn Conversation ===~n~n"),
 
-    LLM = beamai_chat_completion:create(
+    LLM = beamai_chat_model:create(
         anthropic,
         maps:without([provider], get_llm_config())
     ),

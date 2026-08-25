@@ -202,8 +202,8 @@ run_with_plugin() ->
 
     %% 1. 构建带自定义 Tool 的 ChatClient
     ChatClient0 = beamai_chat_client:new(),
-    LlmConfig = beamai_chat_completion:create(mock, #{}),
-    K1 = beamai_chat_client:add_service(ChatClient0, LlmConfig),
+    LlmConfig = beamai_chat_model:create(mock, #{}),
+    K1 = beamai_chat_client:add_chat_model(ChatClient0, LlmConfig),
     K2 = beamai_chat_client:add_tool(K1,
         #{name => <<"get_weather">>,
           description => <<"Get current weather for a city">>,
@@ -255,7 +255,7 @@ run_with_plugin_live() ->
     %% 1. 构建 ChatClient：LLM + 自定义天气 Tool
     LLMConfig = example_llm_config:anthropic(),
     ChatClient0 = beamai_chat_client:new(),
-    K1 = beamai_chat_client:add_service(ChatClient0, LLMConfig),
+    K1 = beamai_chat_client:add_chat_model(ChatClient0, LLMConfig),
     K2 = beamai_chat_client:add_tool(K1,
         #{name => <<"get_current_weather">>,
           description => <<"Get the current weather for a given city. Returns temperature, condition, and humidity.">>,

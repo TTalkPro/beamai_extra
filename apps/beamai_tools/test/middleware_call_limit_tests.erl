@@ -95,7 +95,7 @@ filters(Opts) ->
       beamai_middleware_runner:init([{middleware_call_limit, Opts}])).
 
 chat_chat_client(Opts) ->
-    beamai_chat_client:add_service(
+    beamai_chat_client:add_chat_model(
       beamai_chat_client:new(#{}, filters(Opts)),
       #{module => cl_fake_llm, provider => openai, model => <<"m">>, api_key => <<"k">>}).
 

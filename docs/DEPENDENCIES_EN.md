@@ -214,7 +214,7 @@ application:set_env(beamai_core, http_backend, beamai_http_hackney).
   - `beamai_embedding` — provider-backed text embeddings (openai / dashscope /
     zhipu / siliconflow / ollama / mock, with auto batching and retries)
   - `beamai_rerank` — cross-encoder reranking (stage two of two-stage retrieval)
-  - `beamai_chat_completion` — answer generation after retrieval
+  - `beamai_chat_model` — answer generation after retrieval
 
 > Without beamai_llm, local hash embeddings and in-memory retrieval keep working;
 > provider embeddings and reranking return `{error, {embedding_unavailable, _}}` /
