@@ -152,7 +152,7 @@ run(Opts) ->
     Chain = beamai_middleware_runner:init([{middleware_human_approval, Opts}]),
     ChatClient = beamai_chat_client:add_tool(
                beamai_chat_client:new(#{}, beamai_middleware_runner:to_filters(Chain)), Tool),
-    Result = beamai_chat_client:invoke_tool(ChatClient, <<"danger">>, #{}, beamai_context:new()),
+    Result = beamai_tool_executor:invoke(ChatClient, <<"danger">>, #{}, beamai_context:new()),
     {Result, counters:get(Counter, 1) > 0}.
 
 %% @private 是否为一个"已拒绝"的编码结果

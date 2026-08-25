@@ -75,7 +75,7 @@ ChatClient = beamai_chat_client:new(),
 ChatClient1 = beamai_tools:load_all(ChatClient, [beamai_tool_file, beamai_tool_shell]),
 
 %% 获取工具规格供 Agent 使用
-Tools = beamai_chat_client:get_tool_specs(ChatClient1).
+Tools = beamai_tool_registry:specs(beamai_chat_client:tools(ChatClient1)).
 ```
 
 ### 使用 Middleware

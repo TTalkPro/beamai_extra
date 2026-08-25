@@ -192,7 +192,7 @@ beamai (外部依赖)
 ├── beamai_core/        # 核心框架
 │   ├── ChatClient         # beamai_chat_client, beamai_tool, beamai_context,
 │   │                  # beamai_filter, beamai_prompt, beamai_result
-│   ├── LLM            # beamai_llm_response (统一 LLM 响应访问器)
+│   ├── LLM            # beamai_chat_response (统一 LLM 响应访问器)
 │   ├── Process        # beamai_process, beamai_process_builder,
 │   │                  # beamai_process_runtime, beamai_process_step,
 │   │                  # beamai_process_executor, beamai_process_event
@@ -311,7 +311,7 @@ Tool = #{
 ChatClient2 = beamai_chat_client:add_tool(ChatClient1, Tool),
 
 %% 调用注册的工具
-{ok, Result, _NewCtx} = beamai_chat_client:invoke_tool(ChatClient2, <<"read_file">>, #{
+{ok, Result, _NewCtx} = beamai_tool_executor:invoke(ChatClient2, <<"read_file">>, #{
     <<"path">> => <<"/tmp/test.txt">>
 }, beamai_context:new()).
 ```

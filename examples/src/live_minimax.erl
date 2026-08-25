@@ -36,7 +36,7 @@ t_chat(Cfg) ->
     Messages = [#{role => user, content => <<"用一句话回答：1+1 等于几？"/utf8>>}],
     try beamai_chat_model:chat(Cfg, Messages) of
         {ok, Resp} ->
-            Content = beamai_llm_response:content(Resp),
+            Content = beamai_chat_response:content(Resp),
             io:format("  [chat] -> ~ts~n", [Content]),
             case is_binary(Content) andalso byte_size(Content) > 0 of
                 true -> ok; false -> {error, empty_content}

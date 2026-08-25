@@ -192,7 +192,7 @@ beamai (external dependency)
 ├── beamai_core/        # Core framework
 │   ├── ChatClient         # beamai_chat_client, beamai_tool, beamai_context,
 │   │                  # beamai_filter, beamai_prompt, beamai_result
-│   ├── LLM            # beamai_llm_response (unified LLM response accessors)
+│   ├── LLM            # beamai_chat_response (unified LLM response accessors)
 │   ├── Process        # beamai_process, beamai_process_builder,
 │   │                  # beamai_process_runtime, beamai_process_step,
 │   │                  # beamai_process_executor, beamai_process_event
@@ -310,7 +310,7 @@ Tool = #{
 ChatClient2 = beamai_chat_client:add_tool(ChatClient1, Tool),
 
 %% Invoke registered tool
-{ok, Result, _Ctx} = beamai_chat_client:invoke_tool(ChatClient2, <<"read_file">>, #{
+{ok, Result, _Ctx} = beamai_tool_executor:invoke(ChatClient2, <<"read_file">>, #{
     <<"path">> => <<"/tmp/test.txt">>
 }, beamai_context:new()).
 ```
