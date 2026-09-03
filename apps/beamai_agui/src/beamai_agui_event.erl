@@ -20,6 +20,8 @@
 -export([step_started/1, step_finished/1]).
 -export([text_message_start/1, text_message_content/2, text_message_end/1]).
 -export([tool_call_start/3, tool_call_args/2, tool_call_end/1, tool_call_result/3]).
+-export([reasoning_start/1, reasoning_message_start/1,
+         reasoning_message_content/2, reasoning_message_end/1, reasoning_end/1]).
 -export([state_snapshot/1, state_delta/1, messages_snapshot/1]).
 -export([custom/2, raw/1]).
 
@@ -116,6 +118,33 @@ tool_call_result(MessageId, ToolCallId, Content) ->
                                   <<"toolCallId">> => ToolCallId,
                                   <<"content">> => Content,
                                   <<"role">> => <<"tool">>}).
+
+%% @doc 一段推理开始
+-spec reasoning_start(binary()) -> event().
+reasoning_start(MessageId) ->
+    new(<<"REASONING_START">>, #{<<"messageId">> => MessageId}).
+
+%% @doc 推理消息开始
+-spec reasoning_message_start(binary()) -> event().
+reasoning_message_start(MessageId) ->
+    new(<<"REASONING_MESSAGE_START">>, #{<<"messageId">> => MessageId,
+                                         <<"role">> => <<"reasoning">>}).
+
+%% @doc 推理增量
+-spec reasoning_message_content(binary(), binary()) -> event().
+reasoning_message_content(MessageId, Delta) ->
+    new(<<"REASONING_MESSAGE_CONTENT">>, #{<<"messageId">> => MessageId,
+                                           <<"delta">> => Delta}).
+
+%% @doc 推理消息结束
+-spec reasoning_message_end(binary()) -> event().
+reasoning_message_end(MessageId) ->
+    new(<<"REASONING_MESSAGE_END">>, #{<<"messageId">> => MessageId}).
+
+%% @doc 一段推理结束
+-spec reasoning_end(binary()) -> event().
+reasoning_end(MessageId) ->
+    new(<<"REASONING_END">>, #{<<"messageId">> => MessageId}).
 
 %% @doc 完整状态快照
 -spec state_snapshot(term()) -> event().
