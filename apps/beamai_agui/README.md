@@ -125,13 +125,11 @@ AG-UI threadId  ==  beamai conversation_id  ==  pause_store 的键
    与工具 `writes`，从中 diff 即可，不需要改上游。
 5. **认证与限流**。`beamai_a2a_auth` / `beamai_a2a_rate_limit` 是现成的样板。
 
-### 两处需要上游 beamai 补的
+### 续跑的两条 TOOL_CALL_RESULT 来路
 
-- **`resume` 没有流式入口**。`beamai_agent:resume/2,3` 不接
-  `stream_token_handler`，续跑那一轮走非流式 `invoke_chat`，一个 token 都不产生。
-  后果：HITL 之后的答案是整块出现的，没有打字机效果（事件流仍合法 —— emitter
-  的非流式回落会在 `on_message_end` 时补齐三件套）。
-- **`approved` 路径拿不到工具结果**。`resume` 里执行被批准的工具时，
-  `execute_tool_calls` 没传 `on_result`，`on_tool_result` 不触发，
-  于是那次调用的 `TOOL_CALL_RESULT` 发不出来。`reply` / 拒绝 / 自由文本三种
-  决策的结果由人给出，runtime 自己就能补上，不受影响。
+| 决策 | 结果从哪来 |
+|---|---|
+| `reply` / 拒绝 / 自由文本 | 人给的，runtime 在 `emit_resume_result` 里补上 |
+| `approved` | 服务端真执行那个工具，走 `on_tool_result` → emitter |
+
+两条互斥，同一次调用只会有一条结果。
