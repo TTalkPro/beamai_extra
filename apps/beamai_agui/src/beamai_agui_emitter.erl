@@ -32,19 +32,34 @@
 %%% 触发回调），故用一张 private ETS 存状态，无并发、无需加锁。表的属主是
 %%% 调用 new/1 的进程，进程退出表自动消失；显式结束用 close/1。
 %%%
-%%% == 尚未接上的：raw 事件的增量 ==
+%%% == 共享状态 ==
 %%%
-%%% `on_llm_event` 透出的是 provider 原样的 SSE chunk（binary 键、各家形状
-%%% 不同），`TOOL_CALL_ARGS` 的逐字增量与 `REASONING_*` 都在里面。要接就得
-%%% 按 provider 分支解读，故这里留成可选的 `raw_translator` 配置：给了就用，
-%%% 不给则退化成"参数在 on_message_end 时一次性发完整 JSON"——语义正确，只是
-%%% 前端看不到工具参数的打字机效果。
+%%% AG-UI 的 state 是**前端与 agent 共有**的一份数据：请求带 `state` 上来，
+%%% runtime 把它种进 agent（`initial_state`），工具经 writes 修改，改动以
+%%% `STATE_DELTA`（JSON Patch）推回前端。
+%%%
+%%% 每次 run 开头先发一条 `STATE_SNAPSHOT` 立基线 —— 补丁是相对某一份具体的
+%%% state 算的，没有共同基线就对不上。
+%%%
+%%% == raw 事件的增量 ==
+%%%
+%%% `on_llm_event` 透出的是 provider 原样的 SSE chunk，`TOOL_CALL_ARGS` 的逐字
+%%% 增量与 `REASONING_*` 都在里面，需按 provider 分支解读 —— 那些分支在
+%%% beamai_agui_raw，经 `raw_translator` 配置项接进来（runner 缺省接上）。
+%%%
+%%% 接上之后两条路会**争同一个 TOOL_CALL_START**：增量路在第一个 args 片段到达时
+%%% 就开了调用，而 `on_message_end` 手里那条 assistant 消息也带着完整的 tool_calls。
+%%% 故 emitter 记着「哪些 id 已经流过」，`on_message_end` 对它们只补一个
+%%% `TOOL_CALL_END`。没有 translator（或非流式）时退化成一次性发完整 JSON——
+%%% 语义一样，只是没有打字机效果。
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(beamai_agui_emitter).
 
 -export([new/1, close/1, callbacks/1]).
+-export([tool_open/4, tool_args/3, reasoning_delta/2]).
+-export([state_snapshot/1]).
 -export([run_started/1, run_finished/1, run_finished/2, run_error/2]).
 -export([emit/2]).
 
@@ -57,7 +72,8 @@
     thread_id := binary(),
     run_id := binary(),
     sink := fun((beamai_agui_event:event()) -> ok),
-    raw_translator => fun((map(), emitter()) -> ok)
+    raw_translator => fun((map(), emitter()) -> ok),
+    state => map()
 }.
 
 %%====================================================================
@@ -75,6 +91,13 @@ new(#{thread_id := ThreadId, run_id := RunId, sink := Sink} = Opts) ->
                                           maps:get(raw_translator, Opts, undefined)}}),
     true = ets:insert(Tab, {text_open, undefined}),
     true = ets:insert(Tab, {step, 0}),
+    %% 增量路的状态：index → {Id, Name}（provider 后续 delta 只给 index）、
+    %% 已经流过的调用 id、以及推理段是否开着
+    true = ets:insert(Tab, {tool_index, #{}}),
+    true = ets:insert(Tab, {streamed, #{}}),
+    true = ets:insert(Tab, {reasoning, undefined}),
+    %% 上一份 state：STATE_DELTA 是相对它算的
+    true = ets:insert(Tab, {state, maps:get(state, Opts, #{})}),
     #{table => Tab}.
 
 %% @doc 释放 emitter
@@ -100,6 +123,14 @@ run_started(#{table := Tab} = E) ->
     #{thread_id := T, run_id := R} = config(Tab),
     emit(E, beamai_agui_event:run_started(T, R)).
 
+%% @doc STATE_SNAPSHOT：把当前这份 state 作为基线告诉前端
+%%
+%% 每次 run 开头发一次。**必须有基线**，后面的 STATE_DELTA 才有意义 —— JSON Patch
+%% 是相对某一份具体的 state 算的，前端手里那份要是和服务端不一致，增量打上去就是错的。
+-spec state_snapshot(emitter()) -> ok.
+state_snapshot(#{table := Tab} = E) ->
+    emit(E, beamai_agui_event:state_snapshot(ets:lookup_element(Tab, state, 2))).
+
 %% @doc RUN_FINISHED
 -spec run_finished(emitter()) -> ok.
 run_finished(#{table := Tab} = E) ->
@@ -115,6 +146,7 @@ run_finished(#{table := Tab} = E, Result) ->
 %% @doc RUN_ERROR（先闭合还开着的文本消息，避免留下不成对的 START）
 -spec run_error(emitter(), term()) -> ok.
 run_error(E, Reason) ->
+    ok = close_reasoning(E),
     ok = close_open_text(E),
     emit(E, beamai_agui_event:run_error(format_reason(Reason), <<"agent_error">>)).
 
@@ -132,8 +164,55 @@ callbacks(E) ->
         on_message_start => fun(MsgId, _Meta) -> message_start(E, MsgId) end,
         on_message_end   => fun(Msg, Meta) -> message_end(E, Msg, Meta) end,
         on_token         => fun(Token, Meta) -> token(E, Token, Meta) end,
-        on_tool_result   => fun(_Name, Result, Info) -> tool_result(E, Result, Info) end
+        on_tool_result   => fun(_Name, Result, Info) -> tool_result(E, Result, Info) end,
+        on_state_change  => fun(State, _Meta) -> state_changed(E, State) end
     }.
+
+%%====================================================================
+%% 增量入口（供 beamai_agui_raw 调用）
+%%====================================================================
+
+%% @doc 一次工具调用在流里露头：记下 index→id 并发 TOOL_CALL_START
+%%
+%% 幂等：同一个 index 重复开只算一次（provider 偶尔会重发首片）。
+-spec tool_open(emitter(), term(), binary(), binary()) -> ok.
+tool_open(#{table := Tab} = E, Index, Id, Name) ->
+    Streams = ets:lookup_element(Tab, tool_index, 2),
+    case maps:is_key(Index, Streams) of
+        true ->
+            ok;
+        false ->
+            true = ets:insert(Tab, {tool_index, Streams#{Index => Id}}),
+            true = ets:insert(Tab, {streamed,
+                                    (ets:lookup_element(Tab, streamed, 2))#{Id => true}}),
+            ok = close_reasoning(E),
+            emit(E, beamai_agui_event:tool_call_start(Id, Name, pending_id(Tab)))
+    end.
+
+%% @doc 工具参数的一个片段（AG-UI 的 delta 本就是 JSON **文本**片段，原样透传）
+-spec tool_args(emitter(), term(), binary()) -> ok.
+tool_args(#{table := Tab} = E, Index, Delta) ->
+    case maps:get(Index, ets:lookup_element(Tab, tool_index, 2), undefined) of
+        undefined -> ok;  %% 没见过开头的片段无法归属，丢掉
+        Id -> emit(E, beamai_agui_event:tool_call_args(Id, Delta))
+    end.
+
+%% @doc 推理增量：第一片顺带把 REASONING_START + MESSAGE_START 补上
+-spec reasoning_delta(emitter(), binary()) -> ok.
+reasoning_delta(_E, <<>>) ->
+    ok;
+reasoning_delta(#{table := Tab} = E, Delta) ->
+    MsgId = case ets:lookup_element(Tab, reasoning, 2) of
+        undefined ->
+            NewId = beamai_id:gen_id(<<"reasoning">>),
+            true = ets:insert(Tab, {reasoning, NewId}),
+            ok = emit(E, beamai_agui_event:reasoning_start(NewId)),
+            ok = emit(E, beamai_agui_event:reasoning_message_start(NewId)),
+            NewId;
+        Existing ->
+            Existing
+    end,
+    emit(E, beamai_agui_event:reasoning_message_content(MsgId, Delta)).
 
 %%====================================================================
 %% 内部 - 各回调的翻译
@@ -148,6 +227,8 @@ message_start(#{table := Tab}, MsgId) ->
 token(_E, <<>>, _Meta) ->
     ok;
 token(#{table := Tab} = E, Token, Meta) ->
+    %% 正文一开口，推理段就结束了
+    ok = close_reasoning(E),
     MsgId = maps:get(message_id, Meta, undefined),
     case {MsgId, ets:lookup_element(Tab, text_open, 2)} of
         {undefined, _} ->
@@ -169,6 +250,7 @@ token(#{table := Tab} = E, Token, Meta) ->
 %%   3. Msg=undefined（LLM 出错 / 无可存内容）→ 什么都不发（run_error 收尾）
 %% 之后若消息里有 tool_calls，逐个发 START + ARGS + END。
 message_end(#{table := Tab} = E, Msg, Meta) ->
+    ok = close_reasoning(E),
     MsgId = maps:get(message_id, Meta, undefined),
     Open = ets:lookup_element(Tab, text_open, 2),
     ok = case {Msg, Open =:= MsgId andalso MsgId =/= undefined} of
@@ -180,7 +262,10 @@ message_end(#{table := Tab} = E, Msg, Meta) ->
         {_, false} ->
             emit_whole_text(E, MsgId, maps:get(content, Msg, null))
     end,
-    emit_tool_calls(E, MsgId, tool_calls_of(Msg)).
+    ok = emit_tool_calls(E, MsgId, tool_calls_of(Msg)),
+    %% index 是**每次 LLM 调用**内的序号，下一条消息要从头记
+    true = ets:insert(Tab, {tool_index, #{}}),
+    ok.
 
 %% @private 非流式路径：整条文本一次性发完
 emit_whole_text(_E, _MsgId, null) -> ok;
@@ -200,13 +285,20 @@ emit_whole_text(_E, _MsgId, _Content) ->
 %% 参数一次性发完整 JSON。要逐字增量得接 raw_translator（见模块头）。
 emit_tool_calls(_E, _MsgId, []) ->
     ok;
-emit_tool_calls(E, MsgId, ToolCalls) ->
+emit_tool_calls(#{table := Tab} = E, MsgId, ToolCalls) ->
+    Streamed = ets:lookup_element(Tab, streamed, 2),
     lists:foreach(fun(TC) ->
         {Id, Name, Args} = beamai_tool:parse_tool_call(TC),
-        ok = emit(E, beamai_agui_event:tool_call_start(Id, Name, MsgId)),
-        ok = emit(E, beamai_agui_event:tool_call_args(
-                       Id, beamai_utils:encode_json(Args))),
-        ok = emit(E, beamai_agui_event:tool_call_end(Id))
+        case maps:is_key(Id, Streamed) of
+            true ->
+                %% 增量路已经发过 START + 若干 ARGS，这里只补一个收尾
+                ok = emit(E, beamai_agui_event:tool_call_end(Id));
+            false ->
+                ok = emit(E, beamai_agui_event:tool_call_start(Id, Name, MsgId)),
+                ok = emit(E, beamai_agui_event:tool_call_args(
+                               Id, beamai_utils:encode_json(Args))),
+                ok = emit(E, beamai_agui_event:tool_call_end(Id))
+        end
     end, ToolCalls).
 
 %% @private 工具结果：靠 Info 里的 tool_call_id 配回调用
@@ -221,6 +313,20 @@ tool_result(E, Result, Info) ->
             MsgId = beamai_id:gen_id(<<"msg">>),
             emit(E, beamai_agui_event:tool_call_result(
                       MsgId, ToolCallId, to_binary(Result)))
+    end.
+
+%% @private state 槽变了：与上一份算 JSON Patch 发出去
+%%
+%% 上游只在 state **确实变了**时才触发这个回调，但补丁仍可能为空 —— 比如它变回了
+%% 上一次快照的样子。空补丁不发：一条什么都不改的 STATE_DELTA 对前端没有意义。
+state_changed(#{table := Tab} = E, State) ->
+    Last = ets:lookup_element(Tab, state, 2),
+    case beamai_agui_state:diff(Last, State) of
+        [] ->
+            ok;
+        Ops ->
+            true = ets:insert(Tab, {state, State}),
+            emit(E, beamai_agui_event:state_delta(Ops))
     end.
 
 %% @private provider 原始流事件：交给可选的 raw_translator，没配就丢
@@ -255,6 +361,24 @@ close_open_text(#{table := Tab} = E) ->
         MsgId ->
             true = ets:insert(Tab, {text_open, undefined}),
             emit(E, beamai_agui_event:text_message_end(MsgId))
+    end.
+
+%% @private 收掉还开着的推理段（MESSAGE_END 必须排在 END 前面）
+close_reasoning(#{table := Tab} = E) ->
+    case ets:lookup_element(Tab, reasoning, 2) of
+        undefined ->
+            ok;
+        MsgId ->
+            true = ets:insert(Tab, {reasoning, undefined}),
+            ok = emit(E, beamai_agui_event:reasoning_message_end(MsgId)),
+            emit(E, beamai_agui_event:reasoning_end(MsgId))
+    end.
+
+%% @private 当前这条 assistant 消息的 id（工具调用挂在它下面）
+pending_id(Tab) ->
+    case ets:lookup(Tab, pending) of
+        [{pending, Id}] -> Id;
+        [] -> undefined
     end.
 
 tool_calls_of(Msg) when is_map(Msg) -> maps:get(tool_calls, Msg, []);

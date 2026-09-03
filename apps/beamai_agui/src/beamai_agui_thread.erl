@@ -27,19 +27,23 @@
 %%%
 %%% == 配置 ==
 %%%
-%%% - `{beamai_agui, pause_store, {Module, Ref}}` —— 直接给一个自定义 store 句柄
-%%%   （持久化到磁盘/数据库时用），给了就不再起内置的 ETS store；
-%%% - `{beamai_agui, pause_store_name, Atom}` —— 内置 ETS store 的注册名。
+%%% - `{beamai_agui, pause_store, {Module, Ref}}` —— 宿主自带的 store 句柄
+%%%   （自己启、自己管），给了就不再起任何内置 store；
+%%% - `{beamai_agui, pause_store_file, Path}` —— 内置 **DETS**，节点重启后未决的
+%%%   暂停还在；
+%%% - 都不配 —— 内置 **ETS**，进程活着就在，节点重启即丢；
+%%% - `{beamai_agui, pause_store_name, Atom}` —— 内置 store 的注册名。
 %%%
-%%% 内置的是 **ETS**：进程活着就在，节点重启即丢。要跨重启续跑得换成持久实现
-%%% （实现 beamai_pause_store behaviour 的三个回调即可），并把 chat memory 也
-%%% 换成持久 store——两者缺一，恢复出来的会话都是残的。
+%%% 缺省是 ETS：开发期够用，也不会在磁盘上留下文件。生产要跨重启续跑就配
+%%% `pause_store_file`，**并且把 chat memory 也换成持久 store**
+%%% （`beamai_chat_memory_dets`）—— pause_store 只存"停在哪儿"，不存对话历史，
+%%% 两者缺一，恢复出来的会话都是残的。
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(beamai_agui_thread).
 
--export([store/0, available_store/0, store_name/0, own_store/0]).
+-export([store/0, available_store/0, store_name/0, backend/0]).
 -export([pending/1, pending_tool_call/1, pending_tool_call_id/1, clear/1]).
 
 -define(DEFAULT_STORE_NAME, beamai_agui_pause_store).
@@ -48,12 +52,36 @@
 %% 存储句柄
 %%====================================================================
 
-%% @doc 本运行时使用的 pause_store 句柄
+%% @doc 本运行时使用的 pause_store 后端
+%%
+%% 三选一，按优先级：
+%%
+%% - `{beamai_agui, pause_store, {Module, Ref}}` —— 宿主自带的 store（自己启、
+%%   自己管），runtime 不再起任何东西；
+%% - `{beamai_agui, pause_store_file, Path}` —— 内置 DETS，**节点重启后未决的
+%%   暂停还在**；
+%% - 都不配 —— 内置 ETS，进程一死表就回收。
+-spec backend() -> {external, beamai_pause_store:handle()}
+                 | {dets, atom(), file:name_all()}
+                 | {ets, atom()}.
+backend() ->
+    case application:get_env(beamai_agui, pause_store) of
+        {ok, {Module, _Ref} = Handle} when is_atom(Module) ->
+            {external, Handle};
+        _ ->
+            case application:get_env(beamai_agui, pause_store_file) of
+                {ok, File} when File =/= undefined -> {dets, store_name(), File};
+                _ -> {ets, store_name()}
+            end
+    end.
+
+%% @doc 本运行时使用的 pause_store 句柄（不检查它活着没有，见 available_store/0）
 -spec store() -> beamai_pause_store:handle().
 store() ->
-    case application:get_env(beamai_agui, pause_store) of
-        {ok, {Module, _Ref} = Handle} when is_atom(Module) -> Handle;
-        _ -> beamai_pause_store_ets:handle(store_name())
+    case backend() of
+        {external, Handle} -> Handle;
+        {dets, Name, _File} -> beamai_pause_store_dets:handle(Name);
+        {ets, Name} -> beamai_pause_store_ets:handle(Name)
     end.
 
 %% @doc 可用的 store 句柄；内置 ETS store 没起来时返回 none
@@ -63,26 +91,26 @@ store() ->
 %% 没有 HITL 持久化」——其余功能照常。
 -spec available_store() -> {ok, beamai_pause_store:handle()} | none.
 available_store() ->
-    case application:get_env(beamai_agui, pause_store) of
-        {ok, {Module, _Ref} = Handle} when is_atom(Module) ->
+    case backend() of
+        {external, Handle} ->
+            %% 宿主自己管的 store，活没活着由它负责
             {ok, Handle};
-        _ ->
-            Name = store_name(),
-            case whereis(Name) of
-                undefined -> none;
-                _Pid -> {ok, beamai_pause_store_ets:handle(Name)}
-            end
+        {dets, Name, _File} ->
+            alive(Name, beamai_pause_store_dets);
+        {ets, Name} ->
+            alive(Name, beamai_pause_store_ets)
     end.
 
-%% @doc 内置 ETS store 的注册名
+alive(Name, Module) ->
+    case whereis(Name) of
+        undefined -> none;
+        _Pid -> {ok, Module:handle(Name)}
+    end.
+
+%% @doc 内置 store 的注册名
 -spec store_name() -> atom().
 store_name() ->
     application:get_env(beamai_agui, pause_store_name, ?DEFAULT_STORE_NAME).
-
-%% @doc 是否该由本应用的监督树启动内置 store（配了外部句柄就不启）
--spec own_store() -> boolean().
-own_store() ->
-    application:get_env(beamai_agui, pause_store) =:= undefined.
 
 %%====================================================================
 %% 未决暂停

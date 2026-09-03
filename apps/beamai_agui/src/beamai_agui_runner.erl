@@ -18,6 +18,12 @@
 %%% 中断态，`resume/3` 发现这点就回落去 store 里取。所以工厂必须可重放——
 %%% 详见 beamai_agui_thread 模块头。
 %%%
+%%% == 前端工具 ==
+%%%
+%%% `RunAgentInput.tools` 由 runtime 挂成 agent 的 `interrupt_tools`（见
+%%% with_frontend_tools/2），因此前端定义的工具复用整条 HITL 管道：模型调到它
+%%% 就暂停，前端执行完把结果当 `tool` 消息送回来续跑。
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(beamai_agui_runner).
@@ -39,10 +45,15 @@ run(Input, Factory, Sink) ->
     Emitter = beamai_agui_emitter:new(#{
         thread_id => ThreadId,
         run_id => beamai_agui_types:run_id(Input),
-        sink => Sink
+        sink => Sink,
+        %% 缺省接上增量翻译：工具参数逐字、思维链逐字（认不出的 chunk 安静丢弃）
+        raw_translator => beamai_agui_raw:translator(),
+        state => initial_state(Input)
     }),
     try
         ok = beamai_agui_emitter:run_started(Emitter),
+        %% 先立基线，后面的 STATE_DELTA 才有得可依
+        ok = beamai_agui_emitter:state_snapshot(Emitter),
         dispatch(Input, Factory, Emitter, beamai_agui_thread:pending(ThreadId))
     catch
         Class:Reason:Stack ->
@@ -140,19 +151,76 @@ reject_text(_) ->
 %% @private 造 agent 并把结果分派成事件
 with_agent(Input, Factory, Emitter, Go) ->
     case Factory(Input, runtime_config(Input, Emitter)) of
-        {ok, Agent} -> finish(Emitter, Go(Agent));
+        {ok, Agent} -> finish(Emitter, Go(with_frontend_tools(Agent, Input)));
         {error, Reason} -> beamai_agui_emitter:run_error(Emitter, Reason)
+    end.
+
+%% @private 把前端声明的工具挂成 interrupt_tools
+%%
+%% `RunAgentInput.tools` 是**前端定义、前端执行**的工具：模型该看得见它们
+%% （看不见就永远不会调），但服务端没有实现可跑。`interrupt_tools` 正好是这个
+%% 语义——命中即暂停、把球交出去。于是前端工具走的是与 HITL **完全相同**的管道：
+%% 暂停 → `CUSTOM(interrupt)` + 一个没有结果的 `TOOL_CALL_*` → 前端执行 →
+%% 带 `role=tool` 消息回来续跑。
+%%
+%% 由 runtime 挂而不是让工厂挂：工具是**每个请求**带上来的，工厂却应当是可重放
+%% 的常量配置（跨请求要造出一致的 agent，见 beamai_agui_thread）。
+%%
+%% **追加不覆盖**：工厂自己可能声明了服务端侧的中断工具（`ask_human` 之类），
+%% 两者共存；重名时服务端的那个赢——它有真实现，前端那个只是个声明。
+%%
+%% 上游的 `interrupt_tool_to_spec` / `is_interrupt_tool` 同时认 atom 键与 binary 键，
+%% 所以 AG-UI 传上来的定义原样挂上去即可，不用转换。
+with_frontend_tools(Agent, Input) ->
+    Existing = maps:get(interrupt_tools, Agent, []),
+    case frontend_tools(Input, Existing) of
+        [] -> Agent;
+        New -> Agent#{interrupt_tools => Existing ++ New}
+    end.
+
+%% @private 合法（有名字）且不与既有中断工具重名的前端工具
+%%
+%% 没名字的条目直接丢：它会变成一个 name 为空的 tool spec，把整个 LLM 请求带坏。
+frontend_tools(Input, Existing) ->
+    Taken = [N || T <- Existing, (N = tool_name(T)) =/= undefined],
+    lists:filter(fun(T) ->
+        case tool_name(T) of
+            undefined -> false;
+            Name -> not lists:member(Name, Taken)
+        end
+    end, beamai_agui_types:tools(Input)).
+
+tool_name(Tool) when is_map(Tool) ->
+    case maps:get(<<"name">>, Tool, maps:get(name, Tool, undefined)) of
+        Name when is_binary(Name), Name =/= <<>> -> Name;
+        _ -> undefined
+    end;
+tool_name(_) ->
+    undefined.
+
+%% @private 请求带上来的 state（不是 map 就当没有——外部输入不可信）
+%%
+%% 注意**续跑不走这条路**：暂停快照里带着服务端累积的 state，`resume` 从那里恢复。
+%% 前端在暂停期间对 state 的本地改动不会被采纳 —— 一个停在半路的 turn，
+%% 其状态的权威在服务端。
+initial_state(Input) ->
+    case beamai_agui_types:state(Input) of
+        State when is_map(State) -> State;
+        _ -> #{}
     end.
 
 %% @private 交给工厂的运行时配置——**必须整个 merge 进 beamai_agent:new/1**
 %%
 %% - callbacks：事件流的来源，不传就是个哑巴 agent；
 %% - conversation_id：对齐 threadId，跨请求的历史与暂停都靠它索引；
+%% - initial_state：前端持有的那份共享状态，工具在它之上改；
 %% - pause_store：中断态落库的去处，不配就没有跨请求 HITL。
 runtime_config(Input, Emitter) ->
     Base = #{
         callbacks => beamai_agui_emitter:callbacks(Emitter),
-        conversation_id => beamai_agui_types:thread_id(Input)
+        conversation_id => beamai_agui_types:thread_id(Input),
+        %% 前端持有的那份 state 种进 agent：工具在它之上增量改
+        initial_state => initial_state(Input)
     },
     case beamai_agui_thread:available_store() of
         {ok, Store} -> Base#{pause_store => Store};

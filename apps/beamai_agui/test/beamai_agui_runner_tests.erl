@@ -75,7 +75,7 @@ full_run_event_sequence_test() ->
         Events = run_and_collect(factory()),
         Types = [maps:get(<<"type">>, E) || E <- Events],
         ?assertEqual([
-            <<"RUN_STARTED">>,
+            <<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>,
             %% 第一轮：模型要调工具
             <<"STEP_STARTED">>, <<"STEP_FINISHED">>,
             <<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
@@ -134,7 +134,7 @@ no_user_message_yields_run_error_test() ->
     Never = fun(_I, _Cfg) -> Self ! factory_called, {error, should_not_happen} end,
     ok = beamai_agui_runner:run(Empty, Never, fun(Ev) -> Self ! {ev, Ev}, ok end),
     Types = [maps:get(<<"type">>, E) || E <- collect()],
-    ?assertEqual([<<"RUN_STARTED">>, <<"RUN_ERROR">>], Types),
+    ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>, <<"RUN_ERROR">>], Types),
     receive factory_called -> ?assert(false) after 0 -> ok end.
 
 %% 工厂返回 error → RUN_ERROR
@@ -143,7 +143,7 @@ factory_error_yields_run_error_test() ->
     Bad = fun(_I, _Cfg) -> {error, no_model} end,
     ok = beamai_agui_runner:run(input(), Bad, fun(Ev) -> Self ! {ev, Ev}, ok end),
     Types = [maps:get(<<"type">>, E) || E <- collect()],
-    ?assertEqual([<<"RUN_STARTED">>, <<"RUN_ERROR">>], Types).
+    ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>, <<"RUN_ERROR">>], Types).
 
 %% 工厂抛异常也不会把 run 进程带走，照样收到 RUN_ERROR
 factory_crash_is_contained_test() ->
@@ -151,4 +151,4 @@ factory_crash_is_contained_test() ->
     Crash = fun(_I, _Cfg) -> error(boom) end,
     ok = beamai_agui_runner:run(input(), Crash, fun(Ev) -> Self ! {ev, Ev}, ok end),
     Types = [maps:get(<<"type">>, E) || E <- collect()],
-    ?assertEqual([<<"RUN_STARTED">>, <<"RUN_ERROR">>], Types).
+    ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>, <<"RUN_ERROR">>], Types).

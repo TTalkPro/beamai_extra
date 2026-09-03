@@ -4,7 +4,7 @@
 %%% ```
 %%% beamai_agui_sup
 %%% ├── beamai_agui_registry (worker)          %% agent 工厂注册表
-%%% └── beamai_pause_store_ets (worker)        %% thread 的未决暂停快照
+%%% └── beamai_pause_store_ets|_dets (worker)  %% thread 的未决暂停快照
 %%% ```
 %%%
 %%% run 本身**不进监督树**：一次 run 的生命周期绑在它的 HTTP 连接上
@@ -12,8 +12,8 @@
 %%% beamai_agui_cowboy_handler。
 %%%
 %%% 跨请求活下来的不是 run 进程而是**中断态快照**：暂停时落进 pause store，
-%%% 下个请求由新进程读回来接着跑（见 beamai_agui_thread）。配了外部
-%%% `pause_store` 句柄时这里就不再起内置的 ETS store。
+%%% 下个请求由新进程读回来接着跑。起哪一个（ETS / DETS / 完全不起）由
+%%% beamai_agui_thread:backend/0 按应用配置决定，见那个模块的模块头。
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -42,17 +42,21 @@ init([]) ->
     },
     {ok, {SupFlags, [Registry | pause_store_child()]}}.
 
-%% @private 内置 ETS pause store（宿主给了自己的句柄就不起）
+%% @private 内置 pause store（宿主给了自己的句柄就不起）
 pause_store_child() ->
-    case beamai_agui_thread:own_store() of
-        false ->
+    case beamai_agui_thread:backend() of
+        {external, _Handle} ->
             [];
-        true ->
-            Name = beamai_agui_thread:store_name(),
-            [#{id => Name,
-               start => {beamai_pause_store_ets, start_link, [Name]},
-               restart => permanent,
-               shutdown => 5000,
-               type => worker,
-               modules => [beamai_pause_store_ets]}]
+        {dets, Name, File} ->
+            [store_child(Name, beamai_pause_store_dets, [Name, #{file => File}])];
+        {ets, Name} ->
+            [store_child(Name, beamai_pause_store_ets, [Name])]
     end.
+
+store_child(Name, Module, Args) ->
+    #{id => Name,
+      start => {Module, start_link, Args},
+      restart => permanent,
+      shutdown => 5000,
+      type => worker,
+      modules => [Module]}.

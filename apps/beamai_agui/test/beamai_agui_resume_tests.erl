@@ -133,7 +133,7 @@ hitl_round_trip() ->
     try
         %% ---- 请求一：模型要求人类介入 ----
         Ev1 = run(input(Thread, [user_msg(<<"go">>)])),
-        ?assertEqual([<<"RUN_STARTED">>,
+        ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>,
                       <<"STEP_STARTED">>, <<"STEP_FINISHED">>,
                       <<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
                       <<"CUSTOM">>, <<"RUN_FINISHED">>], types(Ev1)),
@@ -154,7 +154,7 @@ hitl_round_trip() ->
         %% 文本三件套夹在 STEP_STARTED / STEP_FINISHED 之间 —— 续跑走的是
         %% beamai_agent:stream_resume/3，token 是实时流出来的（不是 on_message_end
         %% 时整块补的）。这正是给上游加流式 resume 入口要拿到的东西。
-        ?assertEqual([<<"RUN_STARTED">>, <<"TOOL_CALL_RESULT">>,
+        ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>, <<"TOOL_CALL_RESULT">>,
                       <<"STEP_STARTED">>,
                       <<"TEXT_MESSAGE_START">>, <<"TEXT_MESSAGE_CONTENT">>,
                       <<"STEP_FINISHED">>, <<"TEXT_MESSAGE_END">>,
@@ -179,7 +179,7 @@ resume_without_input_errors() ->
         ?assertMatch({ok, _}, beamai_agui_thread:pending(Thread)),
         %% 空 messages：既没有 tool 结果也没有 user 文本
         Ev = run(input(Thread, [])),
-        ?assertEqual([<<"RUN_STARTED">>, <<"RUN_ERROR">>], types(Ev)),
+        ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>, <<"RUN_ERROR">>], types(Ev)),
         %% 暂停仍在，没被这次失败的请求弄丢
         ?assertMatch({ok, _}, beamai_agui_thread:pending(Thread))
     after
@@ -258,7 +258,7 @@ store_down_degrades_to_no_hitl() ->
         ?assertEqual(none, beamai_agui_thread:available_store()),
         Ev = run(input(<<"t-nostore">>, [user_msg(<<"go">>)])),
         %% 照常跑到中断（只是这次中断没地方存，下个请求接不上）
-        ?assertEqual([<<"RUN_STARTED">>,
+        ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>,
                       <<"STEP_STARTED">>, <<"STEP_FINISHED">>,
                       <<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
                       <<"CUSTOM">>, <<"RUN_FINISHED">>], types(Ev)),

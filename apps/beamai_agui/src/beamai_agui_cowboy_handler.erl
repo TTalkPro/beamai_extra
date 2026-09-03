@@ -20,8 +20,17 @@
 %%% 同一个进程既跑 agent 又写帧，就只能等 agent 跑完再一次性写——那就不是流式了。
 %%% 所以：run 进程跑 agent、把事件发消息给请求进程，请求进程专心写帧。
 %%%
-%%% run 进程是 spawn_link 的：客户端断开时 cowboy 杀掉请求进程，agent 跟着停，
-%%% 不会留下一个没人看的 LLM 调用在烧钱。
+%%% == link 是双向的 ==
+%%%
+%%% run 进程 link 在请求进程上，为的是**客户端断开时 agent 跟着停**——cowboy 杀掉
+%%% 请求进程，退出信号顺着 link 传过去，不会留一个没人看的 LLM 调用在烧钱。
+%%%
+%%% 但 link 是双向的：run 进程要是异常退出，会**先把请求进程带走**，前端只剩一条
+%%% 被截断的流，连 RUN_ERROR 都发不出去。请求进程又不能 trap_exit —— 它本身就是
+%%% cowboy spawn_link 出来的，trap 了会破坏 cowboy「请求进程随连接消亡」的假设。
+%%%
+%%% 解法是让 run 进程**永不异常退出**：自己把异常兜住，把结局随 done 消息交回来，
+%%% 由请求进程决定发什么。于是 link 只剩下我们想要的那个方向。
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -90,36 +99,58 @@ stream_run(Input, Factory, Req) ->
     Parent = self(),
     Ref = make_ref(),
     Sink = fun(Event) -> Parent ! {?EVENT, Ref, Event}, ok end,
-    {Pid, MRef} = spawn_monitor(fun() ->
-        %% link 让客户端断开（请求进程死）时这次 run 一起停
-        true = link(Parent),
-        ok = beamai_agui_runner:run(Input, Factory, Sink),
-        Parent ! {?DONE, Ref}
-    end),
+    {Pid, MRef} = spawn_monitor(fun() -> run_process(Parent, Ref, Input, Factory, Sink) end),
     forward(Ref, Pid, MRef, Req).
 
-%% @private 转发循环：收一条写一帧，直到 run 结束或进程死掉
+%% @private run 进程主体：**永不异常退出**（见模块头「link 是双向的」）
+run_process(Parent, Ref, Input, Factory, Sink) ->
+    true = link(Parent),
+    Outcome =
+        try
+            ok = beamai_agui_runner:run(Input, Factory, Sink),
+            ok
+        catch
+            Class:Reason:Stack ->
+                logger:error("beamai_agui run process crashed: ~p:~p", [Class, Reason],
+                             #{stacktrace => Stack}),
+                {error, Reason}
+        end,
+    Parent ! {?DONE, Ref, Outcome},
+    ok.
+
+%% @private 转发循环：收一条写一帧，直到 run 交待结局
 forward(Ref, Pid, MRef, Req) ->
     receive
         {?EVENT, Ref, Event} ->
             ok = cowboy_req:stream_body(beamai_agui_event:to_sse(Event), nofin, Req),
             forward(Ref, Pid, MRef, Req);
-        {?DONE, Ref} ->
+        {?DONE, Ref, ok} ->
             erlang:demonitor(MRef, [flush]),
-            ok = cowboy_req:stream_body(<<>>, fin, Req),
-            Req;
-        {'DOWN', MRef, process, Pid, normal} ->
-            ok = cowboy_req:stream_body(<<>>, fin, Req),
-            Req;
+            close_stream(Req);
+        {?DONE, Ref, {error, Reason}} ->
+            erlang:demonitor(MRef, [flush]),
+            %% runner 自己没能发出 RUN_ERROR（它整个崩了），这里补一条
+            ok = write_event(Req, beamai_agui_event:run_error(
+                                    format_reason(Reason), <<"runner_crashed">>)),
+            close_stream(Req);
         {'DOWN', MRef, process, Pid, Reason} ->
-            %% run 进程异常死掉：补一个 RUN_ERROR，别让前端干等
-            Event = beamai_agui_event:run_error(
-                      iolist_to_binary(io_lib:format("~p", [Reason])),
-                      <<"runner_crashed">>),
-            ok = cowboy_req:stream_body(beamai_agui_event:to_sse(Event), nofin, Req),
-            ok = cowboy_req:stream_body(<<>>, fin, Req),
-            Req
+            %% 兜底：正常到不了这里（run 进程自己兜异常，且 link 双向——它真要是被
+            %% 强杀，本进程会先被信号带走）。留着是为了万一 done 消息丢了，
+            %% receive 不至于永久挂住把连接吊死。
+            ok = write_event(Req, beamai_agui_event:run_error(
+                                    format_reason(Reason), <<"runner_died">>)),
+            close_stream(Req)
     end.
+
+write_event(Req, Event) ->
+    cowboy_req:stream_body(beamai_agui_event:to_sse(Event), nofin, Req).
+
+close_stream(Req) ->
+    ok = cowboy_req:stream_body(<<>>, fin, Req),
+    Req.
+
+format_reason(Reason) ->
+    iolist_to_binary(io_lib:format("~p", [Reason])).
 
 %%====================================================================
 %% info 端点
