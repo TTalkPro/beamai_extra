@@ -1,0 +1,40 @@
+{application, beamai_agui, [
+    {description, "AG-UI Runtime - agent 事件流服务端（对标 CopilotKit runtime）"},
+    {vsn, "1.0.0"},
+    {registered, [beamai_agui_sup, beamai_agui_registry]},
+    {mod, {beamai_agui_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        beamai_core,
+        beamai_agent,
+        %% cowboy 是可选依赖（见下方 optional_applications），
+        %% 仅在使用 beamai_agui_cowboy_handler 时需要。
+        %% 注：optional_applications 的条目必须同时出现在 applications 中，
+        %% 否则该声明无效（OTP application 规范）。
+        cowboy
+    ]},
+    {optional_applications, [cowboy]},
+    {env, []},
+    {modules, [
+        %% 应用与监督者
+        beamai_agui_app,
+        beamai_agui_sup,
+        %% Agent 注册表（对标 CopilotRuntime 的 agents 字典）
+        beamai_agui_registry,
+        %% thread 的未决暂停（跨请求 HITL）
+        beamai_agui_thread,
+        %% 协议
+        beamai_agui_types,
+        beamai_agui_event,
+        %% 翻译层：beamai_agent 回调 → AG-UI 事件序列
+        beamai_agui_emitter,
+        %% 一次 run 的编排
+        beamai_agui_runner,
+        %% HTTP 层（框架无关 + cowboy 适配）
+        beamai_agui_http_handler,
+        beamai_agui_cowboy_handler
+    ]},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+]}.
