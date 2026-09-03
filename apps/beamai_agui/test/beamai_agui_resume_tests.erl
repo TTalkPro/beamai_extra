@@ -30,6 +30,7 @@ resume_test_() ->
      [fun hitl_round_trip/0,
       fun resume_without_input_errors/0,
       fun rejected_decision_emits_result/0,
+      fun approved_decision_emits_real_tool_result/0,
       fun store_down_degrades_to_no_hitl/0]}.
 
 %%====================================================================
@@ -42,6 +43,9 @@ tc(Id, Name, Args) ->
 
 %% mock：首轮请求人类介入，之后给最终答案
 mock_llm() ->
+    mock_llm(<<"ask_human">>, <<"ask1">>).
+
+mock_llm(ToolName, ToolCallId) ->
     CC = counters:new(1, []),
     meck:new(beamai_chat_model, [passthrough]),
     meck:expect(beamai_chat_model, stream_chat,
@@ -52,7 +56,7 @@ mock_llm() ->
                 1 ->
                     {ok, beamai_chat_response:new(
                         #{content => null,
-                          tool_calls => [tc(<<"ask1">>, <<"ask_human">>,
+                          tool_calls => [tc(ToolCallId, ToolName,
                                             <<"{\"q\":\"ok?\"}">>)],
                           finish_reason => <<"tool_calls">>})};
                 _ ->
@@ -62,6 +66,23 @@ mock_llm() ->
             end
         end),
     CC.
+
+%% 工厂：被中断的工具是**真工具**（注册进 chat client），approved 时会真执行
+approval_factory() ->
+    fun(_Input, RuntimeCfg) ->
+        K0 = beamai_chat_client:add_chat_model(beamai_chat_client:new(),
+                                               beamai_chat_model:create(mock, #{})),
+        K = beamai_chat_client:add_tool(
+              K0, #{name => <<"dangerous">>, parameters => #{},
+                    handler => fun(_A, _C) -> {ok, <<"EXECUTED">>} end}),
+        beamai_agent:new(maps:merge(
+            #{chat_client => K,
+              memory => false,
+              interrupt_tools => [#{name => <<"dangerous">>,
+                                    description => <<"needs approval">>,
+                                    parameters => #{}}]},
+            RuntimeCfg))
+    end.
 
 %% 工厂：带一个中断工具的 agent；RuntimeCfg 整个 merge 进去
 factory() ->
@@ -92,8 +113,11 @@ collect() ->
     receive {ev, Ev} -> [Ev | collect()] after 0 -> [] end.
 
 run(Input) ->
+    run(Input, factory()).
+
+run(Input, Factory) ->
     Self = self(),
-    ok = beamai_agui_runner:run(Input, factory(), fun(Ev) -> Self ! {ev, Ev}, ok end),
+    ok = beamai_agui_runner:run(Input, Factory, fun(Ev) -> Self ! {ev, Ev}, ok end),
     collect().
 
 types(Events) -> [maps:get(<<"type">>, E) || E <- Events].
@@ -127,16 +151,13 @@ hitl_round_trip() ->
 
         %% ---- 请求二：前端把工具结果作为 tool 消息回传 ----
         Ev2 = run(input(Thread, [user_msg(<<"go">>), tool_msg(<<"ask1">>, <<"yes">>)])),
-        %% 注意文本三件套在 STEP_FINISHED **之后**才整块出现：上游的
-        %% beamai_agent:resume/3 没有流式版本（不设 stream_token_handler），
-        %% 续跑那一轮走的是非流式 invoke_chat，一个 token 都不产生。
-        %% emitter 的非流式回落把整条文本在 on_message_end 时一次性补齐——
-        %% 事件流仍然合法，只是 HITL 之后的答案没有打字机效果。
-        %% 这条缺口记在 README（需要上游给 resume 加流式入口）。
+        %% 文本三件套夹在 STEP_STARTED / STEP_FINISHED 之间 —— 续跑走的是
+        %% beamai_agent:stream_resume/3，token 是实时流出来的（不是 on_message_end
+        %% 时整块补的）。这正是给上游加流式 resume 入口要拿到的东西。
         ?assertEqual([<<"RUN_STARTED">>, <<"TOOL_CALL_RESULT">>,
-                      <<"STEP_STARTED">>, <<"STEP_FINISHED">>,
+                      <<"STEP_STARTED">>,
                       <<"TEXT_MESSAGE_START">>, <<"TEXT_MESSAGE_CONTENT">>,
-                      <<"TEXT_MESSAGE_END">>,
+                      <<"STEP_FINISHED">>, <<"TEXT_MESSAGE_END">>,
                       <<"RUN_FINISHED">>], types(Ev2)),
         %% 补上的结果对回了那次调用，内容是人给的
         [Result] = [E || E <- Ev2, maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>],
@@ -187,6 +208,37 @@ rejected_decision_emits_result() ->
                          maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>],
         ?assertEqual(<<"ask1">>, maps:get(<<"toolCallId">>, Result)),
         ?assertEqual(<<"已拒绝执行：nope"/utf8>>, maps:get(<<"content">>, Result)),
+        ?assertEqual(none, beamai_agui_thread:pending(Thread))
+    after
+        beamai_agui_thread:clear(Thread),
+        meck:unload(beamai_chat_model)
+    end.
+
+%% approved：服务端真去执行那个工具，TOOL_CALL_RESULT 带的是工具的真实输出
+%%
+%% 这条结果**不是** runtime 补的（`emit_resume_result` 对 approved 什么都不发），
+%% 而是上游 resume 执行工具时触发 on_tool_result 走 emitter 出来的。断言只有
+%% 一条 TOOL_CALL_RESULT，顺带守住"别两边都发"。
+approved_decision_emits_real_tool_result() ->
+    Thread = <<"t-approve">>,
+    _CC = mock_llm(<<"dangerous">>, <<"call_1">>),
+    try
+        Ev1 = run(input(Thread, [user_msg(<<"go">>)]), approval_factory()),
+        ?assert(lists:member(<<"CUSTOM">>, types(Ev1))),
+        %% 暂停时那次调用还没有结果
+        ?assertEqual([], [E || E <- Ev1,
+                              maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>]),
+
+        {ok, Input} = beamai_agui_types:parse_run_input(
+                        #{<<"threadId">> => Thread,
+                          <<"messages">> => [user_msg(<<"go">>)],
+                          <<"forwardedProps">> =>
+                              #{<<"resume">> => #{<<"decision">> => <<"approved">>}}}),
+        Ev2 = run(Input, approval_factory()),
+        [Result] = [E || E <- Ev2,
+                         maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>],
+        ?assertEqual(<<"call_1">>, maps:get(<<"toolCallId">>, Result)),
+        ?assertEqual(<<"EXECUTED">>, maps:get(<<"content">>, Result)),
         ?assertEqual(none, beamai_agui_thread:pending(Thread))
     after
         beamai_agui_thread:clear(Thread),
