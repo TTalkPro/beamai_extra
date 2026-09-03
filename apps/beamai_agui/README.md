@@ -65,6 +65,8 @@ Dispatch = cowboy_router:compile([
 | `TEXT_MESSAGE_END` | `on_message_end` |
 | `TOOL_CALL_START` / `ARGS` / `END` | `on_message_end` 里那条消息的 `tool_calls` |
 | `TOOL_CALL_RESULT` | `on_tool_result`（`Info.tool_call_id` 配对） |
+| `STATE_SNAPSHOT` | 每次 run 开头，把请求带来的 `state` 作为基线发回 |
+| `STATE_DELTA` | `on_state_change`，与上一份算 JSON Patch |
 
 `message_id` 与 `tool_call_id` 都来自上游 `beamai_agent` 的回调 —— 没有它们
 就没法把 token 归到消息、把结果配回调用（并发工具下触发顺序不定）。
@@ -100,30 +102,148 @@ AG-UI threadId  ==  beamai conversation_id  ==  pause_store 的键
 不存 ChatClient / tools / callbacks —— 那些由工厂在下个请求里重建。所以
 **工厂必须可重放**：同一个 thread 的两次请求要造出配置一致的 agent。
 
-内置 store 是 ETS（`beamai_agui_sup` 起的），**节点重启即丢**。跨重启续跑要：
+### 暂停存到哪儿
 
-- `{beamai_agui, pause_store, {Module, Ref}}` 配一个持久实现（实现
-  `beamai_pause_store` 的三个回调即可），并且
-- 把 chat memory 也换成持久 store。
+三选一，按优先级：
 
-两者缺一，恢复出来的会话都是残的。store 不可用时整个机制静默退化成
-「这个节点没有 HITL 持久化」，其余功能照常 —— 不会让普通请求跟着崩。
+| 配置 | 后端 | 跨节点重启 |
+|---|---|---|
+| `{beamai_agui, pause_store, {Module, Ref}}` | 宿主自带（自己启、自己管） | 看实现 |
+| `{beamai_agui, pause_store_file, Path}` | 内置 DETS | ✅ |
+| 都不配 | 内置 ETS（缺省） | ❌ |
 
-## 骨架尚未覆盖的
+前两种由 `beamai_agui_sup` 起（`pause_store_name` 可改注册名），第一种它什么都不起。
+缺省是 ETS：开发期够用，也不在磁盘上留文件。
 
-按重要性排：
+生产要跨重启续跑，光配 `pause_store_file` **还不够** —— pause_store 只存
+"停在哪儿"，**不存对话历史**。工厂里的 chat memory 也得换成持久的：
 
-1. **前端工具（frontend tools）**。`RunAgentInput.tools` 现在被解析出来但没有
-   注册进 agent —— 要支持前端定义、前端执行的工具，得把它们注册成
-   `interrupt_tools`，然后走上面的 HITL 路径。管道已经通了，缺的是注册这一步。
-2. **`TOOL_CALL_ARGS` 的逐字增量**。现在参数是在 `on_message_end` 时一次性
-   发完整 JSON —— 语义正确，但前端看不到工具参数的打字机效果。真增量在
-   `on_llm_event` 的 provider 原始 chunk 里，接法见
-   `beamai_agui_emitter` 的 `raw_translator` 配置项。
-3. **`REASONING_*`**。同上，数据在 `on_llm_event` 里，需按 provider 分支解读。
-4. **`STATE_SNAPSHOT` / `STATE_DELTA`**。`beamai_context` 有 `state_slots`
-   与工具 `writes`，从中 diff 即可，不需要改上游。
-5. **认证与限流**。`beamai_a2a_auth` / `beamai_a2a_rate_limit` 是现成的样板。
+```erlang
+%% sys.config
+{beamai_agui, [{pause_store_file, "/var/lib/agui/pauses.dets"}]}
+
+%% 工厂里
+{ok, _} = beamai_chat_memory_dets:start_link(agui_history,
+                                             #{file => "/var/lib/agui/history.dets"}),
+beamai_agent:new(maps:merge(
+    #{chat_client => K, memory => beamai_chat_memory_dets:handle(agui_history)},
+    RuntimeCfg))
+```
+
+两者缺一，恢复出来的会话都是残的：只有中断态没有历史，模型看不到之前说过什么。
+
+跑一遍看效果（**两个独立的 BEAM 进程**，不是同一个 VM 里 stop 再 start）：
+
+```
+cd examples && make compile
+D=/tmp/agui_durable_demo
+E="../_build/default/lib:../_build/default/checkouts"
+P="_build/default/lib/beamai_examples/ebin"
+ERL_LIBS=$E erl -noshell -pa $P -eval "example_agui_durable:phase1(\"$D\")"
+ERL_LIBS=$E erl -noshell -pa $P -eval "example_agui_durable:phase2(\"$D\")"
+```
+
+phase1 告诉 agent「我叫小李，项目代号 Falcon」然后进程退出；phase2 是全新的
+BEAM，只靠磁盘上那两个文件把会话接回来，再问它刚才说了什么。
+
+DETS 后端另有 `beamai_pause_store_dets:conversations/1` 与 `prune/2`（按
+`paused_at` 清理陈旧暂停）。持久化带来的新问题：被放弃的暂停不会自己消失
+—— 用户开了个话题、agent 停下来问、人再也没回来，那条快照会一直躺在磁盘上。
+
+store 不可用时整个机制静默退化成「这个节点没有 HITL 持久化」，其余功能照常 ——
+不会让普通请求跟着崩。
+
+## 前端工具（frontend tools）
+
+`RunAgentInput.tools` 是**前端定义、前端执行**的工具。runtime 把它们挂成 agent 的
+`interrupt_tools`，于是模型看得见（否则永远不会调），调到就暂停把球交出去 ——
+走的是与人工审批**完全相同**的管道：
+
+```
+模型调用 → 暂停 → CUSTOM(interrupt) + 没有结果的 TOOL_CALL_*
+        → 前端执行 → 带 role=tool 消息回来 → 续跑
+```
+
+由 runtime 挂而不是让工厂挂：工具是**每个请求**带上来的，工厂却应当是可重放的
+常量配置。与工厂自己声明的服务端中断工具**共存**，重名时服务端那个赢
+（它有真实现，前端那个只是个声明）。没有 `name` 的条目直接丢 —— 它会变成一个
+name 为空的 tool spec，把整个 LLM 请求带坏。
+
+## 增量事件（`TOOL_CALL_ARGS` / `REASONING_*`）
+
+`beamai_agui_raw` 把 provider 原始 chunk 翻成增量事件，runner 缺省接上：
+
+| 形状 | 覆盖的 provider | 取到什么 |
+|---|---|---|
+| OpenAI 系 | openai / deepseek / zhipu / moonshot / xai / openrouter / siliconflow … | `delta.tool_calls[].function.arguments` 片段、`reasoning_content` |
+| Anthropic 系 | anthropic，以及走 anthropic 口的 ZHIPU / MiniMax | `input_json_delta.partial_json`、`thinking_delta.thinking` |
+
+认不出的 chunk **安静丢弃** —— 这条通道是旁路增强，多认一种形状是加分，认不出
+不该让主流程有任何感知。
+
+增量路与 `on_message_end` 会争同一个 `TOOL_CALL_START`，故 emitter 记着「哪些 id
+已经流过」，对它们只补一个 `TOOL_CALL_END`；没流过的（非流式、或 provider 形状
+认不出）仍走一次性发完整 JSON 的回落。
+
+## 共享状态
+
+state 是**前端与 agent 共有**的一份数据：
+
+```
+请求带 state ──► runtime 种进 agent（initial_state）
+                        │
+                   工具经 writes 改
+                        │
+              STATE_DELTA（JSON Patch）──► 前端打补丁
+```
+
+每次 run 开头先发一条 `STATE_SNAPSHOT` **立基线** —— 补丁是相对某一份具体的
+state 算的，没有共同基线就对不上。
+
+差分由 `beamai_agui_state` 算，只产 `add` / `remove` / `replace` 三种 op
+（RFC 6902 的 `move` / `copy` 对状态槽没意义，`test` 是断言）。只对 map 递归，
+数组和标量整体替换 —— 数组的元素级 diff 要一套 LCS 才不会算出一堆无意义的移位
+补丁，收益不抵复杂度。路径按 RFC 6901 转义（`~` → `~0`，`/` → `~1`），键里含
+斜杠完全可能，不转义会算出一条指向别处的路径。
+
+**续跑不采纳前端的 state**：暂停快照里带着服务端累积的那份，`resume` 从那里恢复。
+一个停在半路的 turn，其状态的权威在服务端。
+
+> **注意**：state 是给**工具**读的（`beamai_context:state_get/3`），模型看不到它。
+> 要让模型能就当前状态推理（比如"现在共有几项"），得由工厂把 state 渲染进
+> system prompt —— 实机测试里模型正是因为看不见基线里已有的那项而数错了数。
+
+## 尚未覆盖的
+
+1. **认证与限流**。`beamai_a2a_auth` / `beamai_a2a_rate_limit` 是现成的样板。
+2. **未对真实 CopilotKit 前端验证过**。事件形状是照协议文档写的，还没被真客户端
+   消费过（真 LLM 已经跑通，见下）。
+
+## 实机验证
+
+`examples/src/example_agui_live.erl` 把整条链路接通：真起 cowboy → gun 发 POST →
+真模型决定调不调工具 → SSE 帧一帧帧回来，最后把 `STATE_DELTA` 打回客户端那份
+基线上比对。
+
+```
+cd examples && make compile
+ERL_LIBS=../_build/default/lib:../_build/default/checkouts rebar3 shell
+1> example_agui_live:run().          %% MiniMax m2.7
+2> example_agui_live:run(zhipu).     %% ZHIPU glm-5.3-flash
+```
+
+两家都跑通了，观察到的：
+
+- `TOOL_CALL_ARGS` 确实是**逐字**流出来的（`{"` → `text` → `":"` → `买` → `牛奶`
+  → `"` → `}`）—— 增量翻译在真 provider 上成立，不只是合成 chunk 里成立；
+- `REASONING_*` 在 glm-5.3-flash 上整段流出；
+- 两个并发工具调用的 `TOOL_CALL_RESULT` **到达顺序与调用顺序相反** —— 这正是
+  `tool_call_id` 配对不可省的现场证据；
+- 客户端把补丁打到基线上，重建出的 state 与服务端一致。
+
+`example_agui_durable` 则验证了跨 BEAM 进程的会话恢复：phase2 在全新进程里答出
+「你叫小李，项目代号是 Falcon」—— 历史确实是从 `history.dets` 读回来的
+（MiniMax `m2.7` 与 ZHIPU `glm-5.3-flash` 都验过）。
 
 ### 续跑的两条 TOOL_CALL_RESULT 来路
 
