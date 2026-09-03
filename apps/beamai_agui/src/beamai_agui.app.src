@@ -29,6 +29,10 @@
         beamai_agui_event,
         %% 翻译层：beamai_agent 回调 → AG-UI 事件序列
         beamai_agui_emitter,
+        %% provider 原始流事件 → 增量事件（TOOL_CALL_ARGS / REASONING_*）
+        beamai_agui_raw,
+        %% state 槽的 JSON Patch 差分（STATE_DELTA）
+        beamai_agui_state,
         %% 一次 run 的编排
         beamai_agui_runner,
         %% HTTP 层（框架无关 + cowboy 适配）

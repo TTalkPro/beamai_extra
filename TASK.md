@@ -1,5 +1,210 @@
 # BeamAI Extra - Task List
 
+## AG-UI Runtime（`beamai_agui`）（2026-09-03）
+
+> 目标：把 CopilotKit runtime 的能力做进 BeamAI —— agent 一次执行翻译成前端可增量
+> 渲染的 SSE 事件流，含跨请求的 HITL。
+> 设计与取舍见 [docs/design/agui_runtime.md](docs/design/agui_runtime.md)。
+> 所有改动**未提交**（beamai_extra + 上游各有改动，等你确认后统一提交）。
+
+### 已做·上游 beamai（AG-UI 需要但上游缺的五处）
+
+- [x] **A. 工具回调透出 `tool_call_id`**。`on_tool_call` / `on_tool_result` 原来只给
+  `(Name, Args)` / `(Name, Result)`；`parallel_tools` 缺省开启、结果触发顺序不定，
+  只靠工具名无法配对（同名工具可在一批里出现多次），而 id 本就在 CallRecord 里
+  （`beamai_agent_utils.erl:143`）只是被丢掉。改为按注册函数 **arity** 分派：
+  `Fun/2` 是旧签名，`Fun/3` 末位收 `Info`（`Meta` + `tool_call_id`，
+  `on_tool_result` 另有 `args` / `error`）。选 arity 兼容而非改签名，是因为上游测试、
+  下游 examples 与文档里有十几处旧写法。新增 `beamai_agent_callbacks:invoke/4`
+  与 `tool_gate/4`；顺带把 `case catch Fun(...)` 换成 `try...of`（原写法会把**抛出**的
+  `{interrupt, R}` 也当裁决）。回归测试 `tool_callbacks_carry_tool_call_id_test`。
+- [x] **B. 透出 provider 原始流事件**。`beamai_chat_client` 流式 terminal 把原始事件
+  回调写死成 `fun(_Event) -> ok end`，`extract_token_from_event/1` 只认四种文本形状
+  —— `tool_calls` 的 arguments 增量、thinking/reasoning 增量、逐块 usage 在这一层就
+  被丢干净。新增 chat opts `on_raw_event`（ChatClient 层自己消费，剥掉再下发 provider）
+  与 agent 回调 `on_llm_event`。**刻意不归一化**（理由见设计文档）。4 个测试，含
+  「不渗进 provider opts」与「sink 抛异常不打断流」。
+- [x] **C. 消息边界回调**。一轮 turn 里 assistant 文本不止一条消息，`on_token` 是裸
+  token 流分不出边界。新增 `on_message_start(MessageId, Meta)` /
+  `on_message_end(Message, Meta)`，**id 在 LLM 调用之前分配**（这样流式 token 到达时
+  它已在 `on_token` 的 `Meta.message_id` 里）；两者**恒成对**（失败路径 `Message`
+  为 `undefined`）。直返合成的回合也发边界 —— 否则只听边界回调的宿主会整条漏掉
+  return_direct 的答案。3 个测试。
+- [x] **D. `stream_resume`**。`resume/2,3` 不接 `stream_token_handler`，续跑那一轮
+  走非流式 `invoke_chat`，一个 token 都不产生。新增 `resume/4`（底层入口，Opts 同
+  `run/3`）+ `stream_resume/2,3`。顺带修元数据：tool_loop 原来只往 Info 塞
+  `message_id`，而 `stream/3` 的基础 Meta 在进入循环**之前**构造，那时本次 run 的
+  `run_id` 还没生成 —— 改传本轮完整 Meta 后四个回调元数据终于一致。3 个测试。
+- [x] **F. state 可观测、可种子**（详见下面「共享状态」一节）。
+- [x] **E. 续跑里执行的工具触发 `on_tool_result`**。`resume` 有两处在循环外面执行
+  工具（审批通过的调用、环境失败的重跑），`execute_tool_calls` 都漏传 `on_result`，
+  宿主看到一次有始无终的工具调用。新增 `beamai_agent_tool_loop:agent_result_cb/1`，
+  两处补上。**刻意不补** `on_tool_call` 策略门：刚被人批过的调用再过一次门只会又被
+  拦下来，死循环。2 个测试（approved 触发 / rejected 不触发）。
+
+上游验证：`rebar3 eunit` 735 tests 0 failures；编译零警告；dialyzer 无警告；
+xref 仅既有的 unused-export 类。
+
+### 已做·beamai_extra 新应用 `beamai_agui`
+
+- [x] **应用骨架**（10 个源模块 + 6 个测试模块 + README）。分层照 `beamai_a2a`：
+  `cowboy_handler`（写帧、管连接）→ `http_handler`（框架无关）→ `runner`（编排）
+  → `emitter`（翻译层）→ `beamai_agent`。辅以 `registry`（agent 工厂表）、
+  `types`（`RunAgentInput` 解析）、`event`（构造 + SSE 编码）、`thread`（未决暂停）。
+  已登记进 `rebar.config` 的 `project_app_dirs` / `shell` / `relx`。
+- [x] **事件翻译层**。惰性 `TEXT_MESSAGE_START`（纯工具轮不冒空的 START/END 对）、
+  非流式回落（`on_message_end` 一次性补三件套）、`tool_call_id` 配对
+  `TOOL_CALL_RESULT`、错误路径先闭合再发 `RUN_ERROR`。11 个单测。
+- [x] **端到端事件序列测试**。mock LLM 跑一轮真工具循环，断言事件序列正好是
+  `RUN_STARTED → STEP* → TOOL_CALL_START/ARGS/END → TOOL_CALL_RESULT → STEP_STARTED
+  → TEXT_MESSAGE_* → RUN_FINISHED`。作用是**证明翻译层对上游回调的假设成立**
+  （emitter 单测喂的是假回调，这里喂的是 `beamai_agent` 真发的）。
+- [x] **跨请求 HITL（run 持久化）**。发现上游已有完整机制（`pause_store` +
+  `beamai_agent_pause` + `resume` 的透明回落），故**不另造 run 表**，只把三个 id
+  对齐：`threadId == conversation_id == pause_store 键`。答复三条来路
+  （`forwardedProps.resume` > 对得上 id 的 `tool` 消息 > 最后一条 user 文本）；
+  payload 转 atom 键**只认 `message` / `args`**（外部输入不做 `binary_to_atom`）。
+  `available_store/0` 保证 store 不可用时静默退化 —— 上游在每个终态都 `pause_clear`，
+  把死句柄交给 agent 会让正常的 run 也崩在收尾上。5 个测试，主用例是两次**完全
+  独立**的 run，中间只隔着 pause store。
+
+beamai_extra 验证：`rebar3 eunit` **666 tests 0 failures**（`beamai_agui` 贡献 79 个）；
+dialyzer 只剩既有的 `beamai_mcp_server.erl:442`；xref 无非 unused-export 警告。
+上游验证：`rebar3 eunit` **750 tests 0 failures**；编译零警告；dialyzer 无警告。
+
+### 已做·HTTP 层（此前零覆盖）
+
+- [x] **cowboy 集成测试**（`beamai_agui_cowboy_tests`，6 个）。此前所有用例都直接调
+  `beamai_agui_runner:run/3`，绕开了适配器 —— `stream_reply` / `stream_body` /
+  `forward` 循环一行都没执行过。现在真起 cowboy（端口 0 由内核挑，避免抢端口）、
+  用 gun 真发请求、用 `beamai_sse:parse/1` 读帧：SSE 完整往返（含
+  `x-accel-buffering: no`，nginx 缓冲了就不是流式了）、info 端点、未知 agent 404、
+  畸形体 400、方法 405、OPTIONS 预检 204 + CORS。**一次跑通**。
+- [x] **修 `stream_run/3` 的 link 方向**。`link` 是双向的：它要的是「客户端断开 →
+  agent 跟着停」，但 run 进程异常退出会**先把请求进程带走**，前端只剩截断的流，
+  连 `RUN_ERROR` 都发不出去；那个补发的 `{'DOWN', ..., Reason}` 分支是死代码。
+  请求进程又不能 `trap_exit`（它本身是 cowboy `spawn_link` 出来的，trap 了会破坏
+  「请求进程随连接消亡」的假设）。解法：让 run 进程**永不异常退出** —— 自己兜住
+  异常、把结局随 `{done, Ref, Outcome}` 交回来，由请求进程决定发什么。于是 link
+  只剩下我们想要的那个方向。
+
+### 已做·功能
+
+- [x] **前端工具（frontend tools）**。`RunAgentInput.tools` 挂成 agent 的
+  `interrupt_tools`：模型看得见（看不见就永远不会调），调到就暂停把球交出去 ——
+  与人工审批**同一条**管道，没有新增任何机制。由 runtime 挂而不是让工厂挂：工具是
+  每个请求带上来的，工厂却应当是可重放的常量配置。追加不覆盖，重名时服务端那个赢
+  （它有真实现）；没 `name` 的条目直接丢（会变成 name 为空的 spec 把 LLM 请求带坏）。
+  上游 `interrupt_tool_to_spec` / `is_interrupt_tool` 同时认 atom 与 binary 键，
+  故 AG-UI 的定义原样挂上去即可。4 个测试，含「确实下发给了模型」与完整往返。
+- [x] **`TOOL_CALL_ARGS` 逐字增量 + `REASONING_*`**（`beamai_agui_raw`，runner 缺省
+  接上）。两组 provider 分支：OpenAI 系（`delta.tool_calls[].function.arguments`
+  片段、`reasoning_content` / `reasoning`）与 Anthropic 系
+  （`input_json_delta.partial_json`、`thinking_delta.thinking`）。认不出的 chunk
+  **安静丢弃** —— 旁路增强不该让主流程有感知。
+  增量路会与 `on_message_end` **争同一个 `TOOL_CALL_START`**，故 emitter 记着
+  「哪些 id 已流过」，对它们只补 `TOOL_CALL_END`；没流过的仍走一次性发完整 JSON 的
+  回落。推理段在正文开口或消息落定时收尾，保证 `MESSAGE_END` 排在 `END` 前。
+  9 个测试，含两家形状、混批、index 每条消息重置、陌生 chunk 丢弃。
+
+### 已做·共享状态（`STATE_SNAPSHOT` / `STATE_DELTA`）
+
+- [x] **上游 F：state 可观测、可种子**。state 槽此前**没有任何出口** —— 工具经
+  writes 写、屏障处折叠，但没有回调把它透出来；而且 turn 的 context 每轮新建，
+  也没有种初值的地方，工具只能从空 state 起步。（此前 README 里"不需要改上游"
+  那句话是错的，据此更正。）改法两条：agent 配置新增 `initial_state`
+  （`initial_turn_context/1` 种进每轮 context），回调新增
+  `on_state_change(State, Meta)`（屏障处折叠完 writes、且 state **确实变了**才触发，
+  参数是整份 state）。只在变了时发 —— 绝大多数工具不写 state，每批都发是噪音；
+  增量由宿主自己比，框架不替它决定 diff 的形状。上游 4 个测试。
+- [x] **`beamai_agui_state`：JSON Patch 差分**。只产 `add` / `remove` / `replace`
+  （RFC 6902 的 `move` / `copy` 对状态槽没意义且易算错，`test` 是断言）。只对 map
+  递归，数组与标量整体替换（元素级 diff 要 LCS 才不会算出一堆无意义移位补丁，
+  收益不抵复杂度）。路径按 RFC 6901 转义（`~`→`~0`、`/`→`~1`）—— 槽键是用户给的，
+  含斜杠完全可能，不转义会算出一条指向别处的路径。键序固定，同样输入总得同样补丁。
+- [x] **runtime 接线**。请求的 `state` 经 `initial_state` 种进 agent；每次 run 开头
+  发 `STATE_SNAPSHOT` **立基线**（补丁相对某一份具体 state 算，没有共同基线就对不上）；
+  `on_state_change` → 与上一份算补丁 → `STATE_DELTA`。**续跑不采纳前端 state**：
+  暂停快照里带着服务端累积的那份，停在半路的 turn 其状态权威在服务端。
+  11 个测试（差分 8 + 端到端 3）。
+- [x] 既有 9 处事件序列断言随基线快照更新。
+
+### 已做·实机验证（真 LLM + 真 HTTP + 真 SSE）
+
+- [x] **`examples/src/example_agui_live.erl`**。真起 cowboy → gun 发 POST → 真模型
+  决定调不调工具 → SSE 帧一帧帧回来，最后把 `STATE_DELTA` 打回客户端基线比对。
+  **MiniMax `m2.7` 与 ZHIPU `glm-5.3-flash` 两家都跑通**。现场证据：
+  - `TOOL_CALL_ARGS` 确实**逐字**流出（`{"` → `text` → `":"` → `买` → `牛奶` →
+    `"` → `}`）—— 增量翻译在真 provider 上成立，不只在合成 chunk 里成立；
+  - `REASONING_*` 在 glm-5.3-flash 上整段流出；
+  - 两个并发工具调用的 `TOOL_CALL_RESULT` **到达顺序与调用顺序相反** —— 这是
+    `tool_call_id` 配对不可省的现场证据（改动 A 的理由）；
+  - 客户端把补丁打到基线上，重建的 state 与服务端一致。
+- [x] 顺手修 `examples/src/beamai_examples.app.src` 的 `applications` 仍列
+  `jsx` / `hackney`（两者早已从项目移除，谁真去 `ensure_all_started` 就会莫名失败）。
+
+### 发现·待决
+
+- [ ] **模型看不到 state**。state 是给**工具**读的（`beamai_context:state_get/3`），
+  不进 prompt。实机测试里模型正是因为看不见基线里已有的那项而数错了数
+  （"共有 2 项"，实为 3）。要让模型能就当前状态推理，得由工厂把 state 渲染进
+  system prompt —— 是留给宿主自己决定，还是 runtime 提供一个可选的注入？
+
+### 已做·持久化 pause_store（跨节点重启的 HITL）
+
+- [x] **上游 `beamai_pause_store_dets`**。DETS 实现 `beamai_pause_store` 的三个回调，
+  `set` 表、key 即 conversation_id（每会话至多一份，覆盖语义天然成立），
+  **每次写后 `dets:sync`** —— 一个没来得及落盘的暂停，恰恰是节点崩溃时你最需要
+  的那个；暂停本身是"等人"级别的低频事件，多一次 fsync 无关紧要。
+  写失败只能记 error 日志：behaviour 契约是 `-> ok`，上游 `beamai_agent_pause:save/1`
+  也不看返回值，丢一个暂停比让整个 run 崩在收尾上强，但必须留痕。
+- [x] **额外的运维 API**：`conversations/1` + `prune/2`（按 `paused_at` 清理）。
+  持久化带来 ETS 版没有的新问题 —— 进程一死表就回收 vs 快照永远躺在磁盘上：
+  用户开了个话题、agent 停下来问、人再也没回来。没有 `paused_at` 的快照当作陈旧
+  （连什么时候存的都说不清，判断不了该不该留）。
+- [x] **上游回归测试**（9 个）：behaviour 契约、覆盖语义、会话隔离、
+  **重启后快照还在**、**清除也落了盘**（否则重启会"复活"一个已恢复的暂停）、
+  复杂快照无损往返、prune 三例。
+- [x] **上游 agent 级测试**（2 个）：暂停落 DETS → store 进程停掉再从同一文件开起来
+  → **全新的 agent** 只靠 conversation_id 从磁盘接上并跑完；以及会话隔离
+  （另一个会话 resume 应当 `{error, not_interrupted}`，不能捡起别人的暂停）。
+  顺带写清楚一件事：新 agent 的 `interrupt_state` 是 `undefined`，但
+  `is_interrupted/1` 返回 `true` —— 它会去 store 里问，这正是持久化的意义。
+- [x] **runtime 接线**：`beamai_agui_thread:backend/0` 三选一
+  （宿主自带句柄 > `pause_store_file` 走 DETS > 缺省 ETS），`beamai_agui_sup`
+  据此起对应的 child。缺省仍是 ETS —— 开发期够用，也不会在谁的机器上凭空多出
+  一个文件。5 个测试，含后端选择四例与**跨 store 重启的 runtime 级 HITL 往返**。
+
+- [x] **另一半：chat memory 也落 DETS**。pause_store 只存"停在哪儿"，不存对话
+  历史；两者缺一，恢复出来的会话都是残的。agent 配 `memory => {store, Handle}`
+  即可接 `beamai_chat_memory_dets`（上游已有）。memory 归工厂管，runtime 不越俎
+  代庖 —— 但 README 与设计文档把配置示例给全了。
+- [x] **`examples/src/example_agui_durable.erl`：跨 BEAM 进程的重启验证**。
+  不是同一个 VM 里 stop 再 start，是**两个独立的 OS 进程**共享磁盘上那两个文件：
+  phase1 告诉 agent「我叫小李，项目代号 Falcon」后进程退出；phase2 是全新 BEAM，
+  从 `history.dets` 读回历史，答出「你叫小李，项目代号是 Falcon」。
+  MiniMax `m2.7` 与 ZHIPU `glm-5.3-flash` 都验过。
+  （HITL 跨重启由 `beamai_agui_durable_tests` 与上游
+  `hitl_survives_store_restart_test` 覆盖，本例只走历史那一半。）
+- [x] 顺手修两个例子里按**字节**截断 UTF-8 的显示 bug（`binary:part/3` 会把一个
+  码点劈成两半，打出来是乱码）—— 改用 `string:slice/2` 按字符截。
+
+### 待办·功能
+
+- [ ] **认证与限流**。抄 `beamai_a2a_auth` / `beamai_a2a_rate_limit`。
+
+### 待办·验证
+
+- [ ] **对真实 CopilotKit 前端验证协议兼容性**。事件形状是照协议文档写的，
+  还没被真客户端消费过。
+
+### 已做·文档
+
+- [x] [docs/design/agui_runtime.md](docs/design/agui_runtime.md) —— 设计与取舍
+  （决策 + 理由，含刻意**没**做的部分）。
+- [x] [docs/design/agui_runtime_EN.md](docs/design/agui_runtime_EN.md) —— 英文对照。
+
+
 ## 与上游统一 + 优化（2026-07-17）
 
 > 目标：让 beamai_extra 与上游 beamai 在依赖/约定/OTP 版本上对齐，并清理结构。

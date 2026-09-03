@@ -2,11 +2,11 @@
     {description, "BeamAI ChatClient Examples"},
     {vsn, "1.0.0"},
     {registered, []},
+    %% jsx / hackney 早已从本项目移除（JSON 走 OTP 27 stdlib json、HTTP 走 gun），
+    %% 这里曾经一直列着它们 —— 谁真去 ensure_all_started 这个 app 就会莫名失败。
     {applications, [
         kernel,
-        stdlib,
-        jsx,
-        hackney
+        stdlib
     ]},
     {env, []},
     {modules, [
@@ -14,7 +14,9 @@
         example_agent,
         example_agent_scenarios,
         test_anthropic_agent,
-        test_zhipu_anthropic
+        test_zhipu_anthropic,
+        example_agui_live,
+        example_agui_durable
     ]},
     {licenses, ["Apache-2.0"]},
     {links, []}
