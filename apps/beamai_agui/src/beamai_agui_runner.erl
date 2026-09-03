@@ -92,7 +92,11 @@ resume_run(Input, Factory, Emitter, Snapshot) ->
         {ok, Decision, Payload} ->
             ok = emit_resume_result(Emitter, PendingId, Decision, Payload),
             with_agent(Input, Factory, Emitter,
-                       fun(Agent) -> beamai_agent:resume(Agent, Decision, Payload) end)
+                       fun(Agent) ->
+                           %% stream_resume 而非 resume：人回完话之后的那段答案
+                           %% 才是用户在等的正文，它得逐 token 出来
+                           beamai_agent:stream_resume(Agent, Decision, Payload)
+                       end)
     end.
 
 %% @private 把人给的答复补成被中断那次调用的 TOOL_CALL_RESULT
@@ -100,10 +104,10 @@ resume_run(Input, Factory, Emitter, Snapshot) ->
 %% 前端在暂停时看到的是一个**没有结果**的 TOOL_CALL_START/ARGS/END —— 那正是
 %% 「等你回话」的表示。续跑时得把这个坑填上，否则前端那次调用永远悬着。
 %%
-%% 只有结果**由人给出**时才发得出来（reply / 拒绝 / 自由文本）：approved 是让
-%% 服务端真去执行那个工具，输出要等执行完才知道，而上游 resume 的执行路径
-%% 没有触发 on_tool_result（execute_tool_calls 没传 on_result），拿不到。
-%% 这条缺口记在 README，属于上游可补的一小块。
+%% 只有结果**由人给出**时才在这里发（reply / 拒绝 / 自由文本）。approved 是让
+%% 服务端真去执行那个工具，结果得等执行完才知道——那一条由上游 resume 执行时
+%% 触发的 on_tool_result 经 emitter 发出，**不能在这里也发一遍**，否则前端会
+%% 看到同一次调用的两条结果。
 emit_resume_result(_Emitter, undefined, _Decision, _Payload) ->
     ok;
 emit_resume_result(Emitter, ToolCallId, Decision, Payload) ->
