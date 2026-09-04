@@ -21,7 +21,9 @@
         example_agui_scripted,
         example_agui_full,
         %% Open Generative UI 插件（示例：它是前端 runtime 的中间件约定，不是协议）
-        example_agui_genui
+        example_agui_genui,
+        %% 联调服务器：所有能力接齐，等前端来连
+        example_agui_server
     ]},
     {licenses, ["Apache-2.0"]},
     {links, []}
