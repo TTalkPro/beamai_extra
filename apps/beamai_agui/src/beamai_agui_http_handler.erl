@@ -50,6 +50,9 @@
 -type config() :: #{
     %% 该端点固定服务的 agent 名；不给则从 forwardedProps.agent 取
     agent => binary(),
+    %% 路径里的 `:agent`（`{base}/agent/:agent/run`），由适配器填 —— **优先于**
+    %% 上面那个，于是一条路由就能服务 `/info` 里报的所有 agent
+    path_agent => binary() | undefined,
     %% 事件流 / 入站插件（`beamai_agui_a2ui` / `beamai_agui_mcp_apps` 各产一个，
     %% examples 里的 `example_agui_genui` 也是；装两个以上用
     %% `beamai_agui_plugin:compose/1` 串起来）
@@ -284,7 +287,15 @@ since_of(_, Default) ->
 %% 内部
 %%====================================================================
 
-%% @private 定位 agent 工厂：端点配置优先，其次 forwardedProps.agent
+%% @private 定位 agent 工厂
+%%
+%% 三条来路，按优先级：**路径里的 `:agent`** > 端点配置钉死的那个 >
+%% `forwardedProps.agent`。
+%%
+%% 路径优先是要紧的：`/info` 报的是一张 **agents 字典**，标准 AG-UI 客户端据此
+%% 拼 `{base}/agent/{id}/run` —— 报了字典却只有一条扁平的 `/run`，客户端没有别的
+%% 读法，只能 404。（而 404 那条路上要是没有 CORS 头，浏览器还会把它显示成跨源
+%% 被拒，把人指去查 CORS。见 beamai_agui_cowboy_handler 的 fallback 模式。）
 resolve_agent(Input, Config) ->
     case agent_name(Input, Config) of
         undefined ->
@@ -292,14 +303,20 @@ resolve_agent(Input, Config) ->
         Name ->
             case beamai_agui_registry:lookup(Name) of
                 {ok, Factory} -> {ok, Factory};
-                {error, not_found} -> {error, {unknown_agent, Name}}
+                {error, not_found} -> {error, {unknown_agent, Name,
+                                               beamai_agui_registry:list()}}
             end
     end.
 
 agent_name(Input, Config) ->
-    case maps:get(agent, Config, undefined) of
-        undefined -> beamai_agui_types:agent_name(Input);
-        Name -> Name
+    case maps:get(path_agent, Config, undefined) of
+        Name when is_binary(Name), Name =/= <<>> ->
+            Name;
+        _ ->
+            case maps:get(agent, Config, undefined) of
+                undefined -> beamai_agui_types:agent_name(Input);
+                Name -> Name
+            end
     end.
 
 %% @private 一个 agent 的能力声明

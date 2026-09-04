@@ -7,11 +7,16 @@
 %%% Dispatch = cowboy_router:compile([
 %%%     {'_', [
 %%%         {"/agui/run",              beamai_agui_cowboy_handler, #{agent => <<"my-agent">>}},
+%%%         %% **按 agent 寻址**：`/info` 报的是一张 agents 字典，标准 AG-UI 客户端
+%%%         %% 据此拼 `{base}/agent/{id}/run` —— 这条不挂，它们连不上
+%%%         {"/agui/agent/:agent/run", beamai_agui_cowboy_handler, #{}},
 %%%         {"/agui/info",             beamai_agui_cowboy_handler, #{mode => info}},
 %%%         {"/agui/threads",          beamai_agui_cowboy_handler, #{mode => threads}},
 %%%         {"/agui/threads/:thread",  beamai_agui_cowboy_handler, #{mode => thread}},
 %%%         {"/agui/threads/:thread/:sub",
-%%%                                    beamai_agui_cowboy_handler, #{mode => thread}}
+%%%                                    beamai_agui_cowboy_handler, #{mode => thread}},
+%%%         %% **兜底放最后**：没匹配上的回一个**带 CORS 头**的 404
+%%%         {"/agui/[...]",            beamai_agui_cowboy_handler, #{mode => fallback}}
 %%%     ]}
 %%% ]),
 %%% {ok, _} = cowboy:start_clear(agui_listener, [{port, 8080}],
@@ -19,6 +24,13 @@
 %%% ```
 %%%
 %%% `:sub` 认四个：`events` / `state` / `stop` / `stream`。
+%%%
+%%% == 为什么兜底路由值得挂 ==
+%%%
+%%% cowboy 自己那条「没有路由匹配」的 404 **走不到这个 handler**，于是响应上没有
+%%% CORS 头 —— 浏览器把「没这条路」显示成
+%%% `No 'Access-Control-Allow-Origin' header is present`。拿到那行报文的人第一反应
+%%% 一定是去查 CORS，而 CORS 是好的。挂上兜底，走错路的情况就能自己说清。
 %%%
 %%% == 两种 run 的活法 ==
 %%%
@@ -68,7 +80,9 @@
 %% Cowboy 回调
 %%====================================================================
 
-init(Req, Config) ->
+init(Req, Config0) ->
+    %% `{base}/agent/:agent/run` —— 路径里的那个优先于路由钉死的
+    Config = Config0#{path_agent => cowboy_req:binding(agent, Req)},
     Method = cowboy_req:method(Req),
     Mode = maps:get(mode, Config, run),
     dispatch(Method, Mode, Req, Config).
@@ -86,6 +100,8 @@ dispatch(<<"GET">>, threads, Req, Config) ->
                    beamai_agui_http_handler:init(Config)), Req);
 dispatch(Method, thread, Req, Config) ->
     handle_thread(Method, Req, Config);
+dispatch(_Method, fallback, Req, Config) ->
+    not_found(Req, Config);
 dispatch(<<"OPTIONS">>, _Mode, Req, _Config) ->
     Req2 = cowboy_req:reply(204, headers_map(
                               beamai_agui_http_handler:cors_headers()), <<>>, Req),
@@ -100,6 +116,7 @@ dispatch(Method, Mode, Req, _Config) ->
     Req2 = cowboy_req:reply(405, Headers#{<<"allow">> => allowed(Mode)}, Body, Req),
     {ok, Req2, undefined}.
 
+allowed(fallback) -> <<"GET, POST, DELETE, OPTIONS">>;
 allowed(info) -> <<"GET, OPTIONS">>;
 allowed(threads) -> <<"GET, OPTIONS">>;
 allowed(thread) -> <<"GET, POST, DELETE, OPTIONS">>;
@@ -361,6 +378,24 @@ reply_result({ok, Body, RespHeaders}, Req) ->
 reply_result({error, Status, Body, RespHeaders}, Req) ->
     Req2 = cowboy_req:reply(Status, headers_map(RespHeaders), Body, Req),
     {ok, Req2, undefined}.
+
+%% @private 404 —— **带 CORS 头**
+%%
+%% cowboy 自己那条「没有路由匹配」的 404 走不到这个 handler，所以宿主要挂一条
+%% 兜底路由（`{"/agui/[...]", ..., #{mode => fallback}}`，放在最后）。
+%%
+%% 为什么值得专门做这件事：不带 CORS 的 404 在浏览器里显示成
+%% 「No 'Access-Control-Allow-Origin' header is present」—— 于是拿到报文的人第一
+%% 反应是去查 CORS，而 CORS 是好的，真正的原因是**那条路不存在**。让 404 自己
+%% 说清楚，比事后解释便宜得多。
+not_found(Req, _Config) ->
+    Body = beamai_utils:encode_json(
+             #{<<"error">> => <<"not_found">>,
+               <<"path">> => cowboy_req:path(Req),
+               <<"method">> => cowboy_req:method(Req),
+               <<"hint">> => <<"这台运行时的端点见 GET /agui/info；按 agent 寻址的 "
+                               "run 路径是 {base}/agent/{agentId}/run"/utf8>>}),
+    reply_result({error, 404, Body, beamai_agui_http_handler:json_headers()}, Req).
 
 query_map(Req) ->
     maps:from_list(cowboy_req:parse_qs(Req)).

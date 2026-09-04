@@ -31,10 +31,13 @@ setup() ->
     Dispatch = cowboy_router:compile([
         {'_', [
             {"/agui/run", beamai_agui_cowboy_handler, #{agent => <<"echo">>}},
+            %% 标准 AG-UI 客户端按 `/info` 的 agents 字典拼出来的那条
+            {"/agui/agent/:agent/run", beamai_agui_cowboy_handler, #{}},
             {"/agui/info", beamai_agui_cowboy_handler, #{mode => info}},
             {"/agui/threads", beamai_agui_cowboy_handler, #{mode => threads}},
             {"/agui/threads/:thread", beamai_agui_cowboy_handler, #{mode => thread}},
-            {"/agui/threads/:thread/:sub", beamai_agui_cowboy_handler, #{mode => thread}}
+            {"/agui/threads/:thread/:sub", beamai_agui_cowboy_handler, #{mode => thread}},
+            {"/agui/[...]", beamai_agui_cowboy_handler, #{mode => fallback}}
         ]}
     ]),
     {ok, _} = cowboy:start_clear(?LISTENER, [{port, 0}],
@@ -64,7 +67,9 @@ stream_test_() ->
          {"threads 只读面", fun() -> threads_readonly(Ctx) end},
          {"会话层起着时 info 如实报 threadEndpoints",
           fun() -> info_reports_threads(Ctx) end},
-         {"未知 thread → 404", fun() -> unknown_thread(Ctx) end}]
+         {"未知 thread → 404", fun() -> unknown_thread(Ctx) end},
+         {"按 agent 寻址的 run 路径", fun() -> per_agent_run(Ctx) end},
+         {"没匹配上的路由 → 404 **带 CORS**", fun() -> fallback_has_cors(Ctx) end}]
      end}.
 
 %%====================================================================
@@ -327,3 +332,33 @@ drain_types(Conn, Ref, Timeout, Buf, Acc) ->
 
 header(Name, Headers) ->
     proplists:get_value(Name, Headers).
+
+%% `/info` 报的是一张 **agents 字典**，标准客户端据此拼 `{base}/agent/{id}/run` ——
+%% 报了字典却只有一条扁平的 `/run`，客户端没有别的读法
+per_agent_run(#{port := Port}) ->
+    ok = mock_fast(),
+    try
+        {200, _, Data} = post(Port, "/agui/agent/echo/run", run_body(<<"t-per-agent">>)),
+        {_Rest, Frames} = beamai_sse:parse(Data),
+        Types = [maps:get(<<"type">>, beamai_utils:parse_json(maps:get(data, F)))
+                 || F <- Frames],
+        ?assertEqual(<<"RUN_STARTED">>, hd(Types)),
+        ?assertEqual(<<"RUN_FINISHED">>, lists:last(Types)),
+        %% 认不出的 agent 名如实 404（而不是回落到路由钉死的那个）
+        {404, _, Err} = post(Port, "/agui/agent/nope/run", run_body(<<"t-nope">>)),
+        ?assertEqual(<<"agent_not_found">>,
+                     maps:get(<<"error">>, beamai_utils:parse_json(Err)))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%% 不带 CORS 的 404 在浏览器里显示成「No 'Access-Control-Allow-Origin' header」——
+%% 拿到那行报文的人第一反应是去查 CORS，而 CORS 是好的，真正的原因是那条路不存在
+fallback_has_cors(#{port := Port}) ->
+    {404, Headers, Body} = request(Port, <<"POST">>, "/agui/agent/echo/nonsense",
+                                   [{<<"origin">>, <<"http://localhost:3002">>}], <<>>),
+    ?assertEqual(<<"*">>, header(<<"access-control-allow-origin">>, Headers)),
+    Json = beamai_utils:parse_json(Body),
+    ?assertEqual(<<"not_found">>, maps:get(<<"error">>, Json)),
+    %% 404 自己说清楚该往哪走
+    ?assertMatch({_, _}, binary:match(maps:get(<<"hint">>, Json), <<"/agui/info">>)).
