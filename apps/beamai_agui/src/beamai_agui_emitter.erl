@@ -58,7 +58,7 @@
 -module(beamai_agui_emitter).
 
 -export([new/1, close/1, callbacks/1]).
--export([thread_id/1, run_id/1]).
+-export([thread_id/1, run_id/1, sink/1]).
 -export([tool_open/4, tool_args/3, reasoning_delta/2]).
 -export([state_snapshot/1]).
 -export([run_started/1, run_finished/1, run_finished/2, run_finished/3]).
@@ -75,6 +75,12 @@
     run_id := binary(),
     sink := fun((beamai_agui_event:event()) -> ok),
     parent_run_id => binary() | undefined,
+    %% 每条事件都补上的字段（子 agent lane 的 `subagentRunId` 走这条），见 emit/2
+    tag => map(),
+    %% 状态表的可见性。缺省 private（同进程无并发）；子 agent lane 要 public ——
+    %% 表在**发起委派的那个工具进程**里建，回调却在 subagent manager 的 worker
+    %% 进程里触发，跨进程读不到 private 表
+    access => private | public,
     raw_translator => fun((map(), emitter()) -> ok),
     %% 事件流插件的通用挂点，见 emit/2
     event_transform => fun((beamai_agui_event:event()) ->
@@ -89,12 +95,13 @@
 %% @doc 新建 emitter（表属主 = 调用进程，即跑 agent 的那个进程）
 -spec new(opts()) -> emitter().
 new(#{thread_id := ThreadId, run_id := RunId, sink := Sink} = Opts) ->
-    Tab = ets:new(beamai_agui_emitter, [set, private]),
+    Tab = ets:new(beamai_agui_emitter, [set, maps:get(access, Opts, private)]),
     true = ets:insert(Tab, {config, #{thread_id => ThreadId,
                                       run_id => RunId,
                                       sink => Sink,
                                       parent_run_id =>
                                           maps:get(parent_run_id, Opts, undefined),
+                                      tag => maps:get(tag, Opts, #{}),
                                       event_transform =>
                                           maps:get(event_transform, Opts, undefined),
                                       raw_translator =>
@@ -120,6 +127,14 @@ thread_id(#{table := Tab}) ->
 run_id(#{table := Tab}) ->
     maps:get(run_id, config(Tab)).
 
+%% @doc 本 emitter 的事件汇
+%%
+%% 交出去是给**子 agent lane** 用的：lane 是另一个发射器，但事件要进同一条流。
+%% sink 是个闭包，跨进程调用没有问题（它要么 cast 给会话，要么发消息给请求进程）。
+-spec sink(emitter()) -> fun((beamai_agui_event:event()) -> ok).
+sink(#{table := Tab}) ->
+    maps:get(sink, config(Tab)).
+
 %% @doc 释放 emitter
 -spec close(emitter()) -> ok.
 close(#{table := Tab}) ->
@@ -134,10 +149,14 @@ close(#{table := Tab}) ->
 %% 一个字都不用改。
 %%
 %% transform 自己抛异常不该把 run 带走：它是旁路增强，出事就退回原事件。
+%%
+%% `tag` 在 transform **之后**打：插件产出的事件同样属于这条 lane，漏打会让前端
+%% 把子 agent 的 activity 画到主线里。已有的字段不覆盖（见 beamai_agui_event:tag/2）。
 -spec emit(emitter(), beamai_agui_event:event()) -> ok.
 emit(#{table := Tab}, Event) ->
-    #{sink := Sink} = Config = config(Tab),
-    lists:foreach(fun(E) -> _ = Sink(E) end, transform(Event, Config)),
+    #{sink := Sink, tag := Tags} = Config = config(Tab),
+    lists:foreach(fun(E) -> _ = Sink(beamai_agui_event:tag(E, Tags)) end,
+                  transform(Event, Config)),
     ok.
 
 %% @private 过一遍插件；认不出的返回值按"原样"处理
