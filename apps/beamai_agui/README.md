@@ -84,6 +84,14 @@ Dispatch = cowboy_router:compile([
 
 `:sub` 认五个：`events` / `messages` / `state` / `stop` / `stream`。
 
+404 的响应体把候选摊成字段，客户端换个 id 再来一次即可：
+
+```json
+{"error":"agent_not_found","requested":"nope",
+ "available":["my-agent"],
+ "detail":"no agent registered as 'nope'; available: my-agent"}
+```
+
 ⚠️ **兜底那条值得挂**：cowboy 自己那条「没有路由匹配」的 404 走不到 handler，
 响应上就没有 CORS 头 —— 浏览器会把「没这条路」显示成
 `No 'Access-Control-Allow-Origin' header is present`，拿到报文的人第一反应是去查

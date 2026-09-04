@@ -110,7 +110,7 @@ handle_run(Body, _Headers, Config) ->
         {ok, Input} ->
             case resolve_agent(Input, Config) of
                 {error, Reason} ->
-                    error_response(404, <<"agent_not_found">>, Reason, Config);
+                    agent_not_found(Reason, Config);
                 {ok, Factory} ->
                     {stream, Input, Factory, sse_headers(Config)}
             end
@@ -403,6 +403,7 @@ since_of(_, Default) ->
 %% 拼 `{base}/agent/{id}/run` —— 报了字典却只有一条扁平的 `/run`，客户端没有别的
 %% 读法，只能 404。（而 404 那条路上要是没有 CORS 头，浏览器还会把它显示成跨源
 %% 被拒，把人指去查 CORS。见 beamai_agui_cowboy_handler 的 fallback 模式。）
+%%
 resolve_agent(Input, Config) ->
     case agent_name(Input, Config) of
         undefined ->
@@ -528,6 +529,45 @@ first_defined(Values) ->
 
 null_if_undefined(undefined) -> null;
 null_if_undefined(V) -> V.
+
+%% @private agent 定位失败 → 404，**把「要的是谁 / 有哪些」摊成字段**
+%%
+%% 这里曾经回的是 `io_lib:format("~p", [{unknown_agent, ...}])` —— 一个 Erlang
+%% 项式塞进 JSON 字符串里：
+%%
+%% ```json
+%% {"error":"agent_not_found","detail":"{unknown_agent,<<\"default\">>,[<<\"beamai-demo\">>]}"}
+%% ```
+%%
+%% 客户端读不动它（要写个项式解析器），能做的只有把这行原样弹给用户；而「换哪个
+%% id 再来一次」恰好是它自己能修的事 —— 只要候选列表给成**数据**而不是一行字。
+%% `detail` 仍留一句人话，给的是趴在 curl 上的人看。
+agent_not_found(Reason, Config) ->
+    {Requested, Available} =
+        case Reason of
+            {unknown_agent, Name, Names} -> {Name, Names};
+            %% 谁都没指定：路径里没有 `:agent`，端点没钉死，forwardedProps 也没给
+            no_agent_specified -> {null, beamai_agui_registry:list()}
+        end,
+    Body = beamai_utils:encode_json(#{
+        <<"error">> => <<"agent_not_found">>,
+        <<"requested">> => Requested,
+        <<"available">> => Available,
+        <<"detail">> => agent_not_found_detail(Requested, Available)
+    }),
+    {error, 404, Body, json_headers(Config)}.
+
+agent_not_found_detail(Requested, Available) ->
+    Head = case Requested of
+               null -> <<"no agent specified">>;
+               Name -> <<"no agent registered as '", Name/binary, "'">>
+           end,
+    Tail = case Available of
+               [] -> <<"; no agents registered">>;
+               Names -> <<"; available: ",
+                          (iolist_to_binary(lists:join(<<", ">>, Names)))/binary>>
+           end,
+    <<Head/binary, Tail/binary>>.
 
 error_response(Status, Code, Reason) ->
     error_response(Status, Code, Reason, #{}).

@@ -50,7 +50,7 @@ cowboy_test_() ->
      fun(Ctx) ->
         [{"SSE 流式响应", fun() -> sse_stream(Ctx) end},
          {"info 端点", fun() -> info_endpoint(Ctx) end},
-         {"未知 agent → 404", fun() -> unknown_agent(Ctx) end},
+         {"未知 agent → 404，候选摊成字段", fun() -> unknown_agent(Ctx) end},
          {"畸形请求体 → 400", fun() -> bad_body(Ctx) end},
          {"方法不允许 → 405", fun() -> method_not_allowed(Ctx) end},
          {"OPTIONS 预检 → 204 + CORS", fun() -> options_preflight(Ctx) end},
@@ -147,8 +147,13 @@ unknown_agent(#{port := Port}) ->
                <<"forwardedProps">> => #{<<"agent">> => <<"nope">>}}),
     {Status, _Headers, Data} = post(Port, "/agui/open", Body),
     ?assertEqual(404, Status),
-    ?assertEqual(<<"agent_not_found">>,
-                 maps:get(<<"error">>, beamai_utils:parse_json(Data))).
+    Json = beamai_utils:parse_json(Data),
+    ?assertEqual(<<"agent_not_found">>, maps:get(<<"error">>, Json)),
+    %% 候选是**数据**而不是一行 `~p` 出来的 Erlang 项式 —— 客户端换个 id 就能自救
+    ?assertEqual(<<"nope">>, maps:get(<<"requested">>, Json)),
+    ?assertEqual([<<"echo">>], maps:get(<<"available">>, Json)),
+    ?assertEqual(<<"no agent registered as 'nope'; available: echo">>,
+                 maps:get(<<"detail">>, Json)).
 
 bad_body(#{port := Port}) ->
     {Status, _Headers, Data} = post(Port, "/agui/run", <<"not json">>),
