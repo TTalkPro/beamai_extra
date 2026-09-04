@@ -84,6 +84,13 @@ Dispatch = cowboy_router:compile([
 
 `:sub` 认五个：`events` / `messages` / `state` / `stop` / `stream`。
 
+**`default` 这个 id 认**：客户端在用户还没从 `/info` 那张字典里挑之前（或者压根
+没读 `/info`），拼出来的常常是 `{base}/agent/default/run`。注册表里没有叫
+`default` 的时候，它落到端点钉死的那个 agent 上，否则落到注册表里**唯一**那个；
+两个以上就 404 —— 那时 `default` 指谁只能靠猜。**别的名字一律不回落**：
+`/agent/my-agnet/run` 这种手抖要是也被喂给唯一那个 agent，就成了「能跑但跑的不是
+你以为那个」，比 404 难查。
+
 404 的响应体把候选摊成字段，客户端换个 id 再来一次即可：
 
 ```json

@@ -24,6 +24,8 @@ setup() ->
         {'_', [
             {"/agui/run", beamai_agui_cowboy_handler, #{agent => <<"echo">>}},
             {"/agui/open", beamai_agui_cowboy_handler, #{}},
+            %% 按 agent 寻址那条：标准客户端照 `/info` 的字典拼出来的就是它
+            {"/agui/agent/:agent/run", beamai_agui_cowboy_handler, #{}},
             {"/agui/info", beamai_agui_cowboy_handler, #{mode => info}},
             %% 允许列表模式（缺省是 `*`，见 cors_* 用例）
             {"/agui/scoped", beamai_agui_cowboy_handler,
@@ -51,6 +53,9 @@ cowboy_test_() ->
         [{"SSE 流式响应", fun() -> sse_stream(Ctx) end},
          {"info 端点", fun() -> info_endpoint(Ctx) end},
          {"未知 agent → 404，候选摊成字段", fun() -> unknown_agent(Ctx) end},
+         {"`/agent/default/run` → 落到唯一那个 agent", fun() -> default_agent(Ctx) end},
+         {"两个 agent 时 `default` → 404（不猜）", fun() -> default_ambiguous(Ctx) end},
+         {"手抖的名字不回落 → 404", fun() -> typo_not_aliased(Ctx) end},
          {"畸形请求体 → 400", fun() -> bad_body(Ctx) end},
          {"方法不允许 → 405", fun() -> method_not_allowed(Ctx) end},
          {"OPTIONS 预检 → 204 + CORS", fun() -> options_preflight(Ctx) end},
@@ -154,6 +159,49 @@ unknown_agent(#{port := Port}) ->
     ?assertEqual([<<"echo">>], maps:get(<<"available">>, Json)),
     ?assertEqual(<<"no agent registered as 'nope'; available: echo">>,
                  maps:get(<<"detail">>, Json)).
+
+%% `default` 不是名字，是「就这一台」的惯用写法：注册表里唯一那个接下来
+default_agent(#{port := Port}) ->
+    ok = mock_llm(),
+    try
+        Body = beamai_utils:encode_json(
+                 #{<<"threadId">> => <<"t-default">>,
+                   <<"messages">> => [#{<<"role">> => <<"user">>,
+                                        <<"content">> => <<"hi">>}]}),
+        {Status, Headers, Data} = post(Port, "/agui/agent/default/run", Body),
+        ?assertEqual(200, Status),
+        ?assertEqual(<<"text/event-stream">>, header(<<"content-type">>, Headers)),
+        ?assertMatch([#{<<"type">> := <<"RUN_STARTED">>} | _], parse_sse(Data))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%% 两个候选时 `default` 指谁只能靠猜 —— 猜错是静悄悄的，所以宁可 404
+default_ambiguous(#{port := Port}) ->
+    ok = beamai_agui_registry:register(<<"echo-2">>, factory()),
+    try
+        Body = beamai_utils:encode_json(
+                 #{<<"messages">> => [#{<<"role">> => <<"user">>,
+                                        <<"content">> => <<"hi">>}]}),
+        {Status, _Headers, Data} = post(Port, "/agui/agent/default/run", Body),
+        ?assertEqual(404, Status),
+        Json = beamai_utils:parse_json(Data),
+        ?assertEqual(<<"default">>, maps:get(<<"requested">>, Json)),
+        ?assertEqual([<<"echo">>, <<"echo-2">>],
+                     lists:sort(maps:get(<<"available">>, Json)))
+    after
+        beamai_agui_registry:unregister(<<"echo-2">>)
+    end.
+
+%% 只有字面的 `default` 回落：手抖的名字喂给唯一那个 agent，就成了
+%% 「能跑但跑的不是你以为那个」——比 404 难查得多
+typo_not_aliased(#{port := Port}) ->
+    Body = beamai_utils:encode_json(
+             #{<<"messages">> => [#{<<"role">> => <<"user">>, <<"content">> => <<"hi">>}]}),
+    {Status, _Headers, Data} = post(Port, "/agui/agent/ech0/run", Body),
+    ?assertEqual(404, Status),
+    ?assertEqual(<<"ech0">>,
+                 maps:get(<<"requested">>, beamai_utils:parse_json(Data))).
 
 bad_body(#{port := Port}) ->
     {Status, _Headers, Data} = post(Port, "/agui/run", <<"not json">>),

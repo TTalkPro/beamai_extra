@@ -29,6 +29,12 @@
 %%% 清楚：会话空闲 30 分钟被驱逐后就不在列表里（对话历史归 chat memory，不归
 %%% 这里），而环形缓冲是**有界**的（缺省 512 条），久远的事件补不回来。
 %%%
+%%% == agent 怎么定位 ==
+%%%
+%%% 三条来路，按优先级：路径里的 `:agent` > 端点配置钉死的 `agent` >
+%%% `forwardedProps.agent`。字面的 `default` 另有一条回落（单 agent 的部署认它），
+%%% 见 resolve_agent/2；定位不到回 404，候选列表在响应体里给成数据。
+%%%
 %%% == 用法 ==
 %%%
 %%% ```erlang
@@ -404,6 +410,7 @@ since_of(_, Default) ->
 %% 读法，只能 404。（而 404 那条路上要是没有 CORS 头，浏览器还会把它显示成跨源
 %% 被拒，把人指去查 CORS。见 beamai_agui_cowboy_handler 的 fallback 模式。）
 %%
+%% 查不到时还有**一条**回落，只给字面的 `default`：见 fallback_agent/2。
 resolve_agent(Input, Config) ->
     case agent_name(Input, Config) of
         undefined ->
@@ -411,10 +418,49 @@ resolve_agent(Input, Config) ->
         Name ->
             case beamai_agui_registry:lookup(Name) of
                 {ok, Factory} -> {ok, Factory};
-                {error, not_found} -> {error, {unknown_agent, Name,
-                                               beamai_agui_registry:list()}}
+                {error, not_found} -> fallback_agent(Name, Config)
             end
     end.
+
+%% @private `default` 这个 id 认，别的不认
+%%
+%% 客户端在用户还没从 `/info` 那张字典里挑之前（或者压根没读 `/info`），拼出来的
+%% 就是 `{base}/agent/default/run` —— `default` 是「就这一台，你自己知道是谁」的
+%% 惯用写法，不是一个真名字。单 agent 的部署认下来是对的：候选唯一，猜不出别的。
+%%
+%% **只认字面的 `default`**，且**只在注册表里没有这个名字时**（真注册了一个叫
+%% `default` 的就走正常那条）。别的名字一律 404 ——
+%% `/agent/beamai-dem0/run` 这种手抖要是也被喂给唯一那个 agent，就成了一个
+%% 「能跑但跑的不是你以为那个」的错，比 404 难查得多。
+%%
+%% 两个以上 agent 时也 404：这时 `default` 指谁只能靠猜，而猜错是静悄悄的。
+fallback_agent(<<"default">>, Config) ->
+    case fallback_name(Config) of
+        undefined ->
+            unknown_agent(<<"default">>);
+        Name ->
+            case beamai_agui_registry:lookup(Name) of
+                {ok, Factory} -> {ok, Factory};
+                {error, not_found} -> unknown_agent(<<"default">>)
+            end
+    end;
+fallback_agent(Name, _Config) ->
+    unknown_agent(Name).
+
+%% @private `default` 该落到谁头上：端点钉死的那个优先，否则注册表里唯一那个
+fallback_name(Config) ->
+    case maps:get(agent, Config, undefined) of
+        Pinned when is_binary(Pinned), Pinned =/= <<>>, Pinned =/= <<"default">> ->
+            Pinned;
+        _ ->
+            case beamai_agui_registry:list() of
+                [Only] -> Only;
+                _ -> undefined
+            end
+    end.
+
+unknown_agent(Name) ->
+    {error, {unknown_agent, Name, beamai_agui_registry:list()}}.
 
 agent_name(Input, Config) ->
     case maps:get(path_agent, Config, undefined) of
