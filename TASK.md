@@ -189,9 +189,90 @@ dialyzer 只剩既有的 `beamai_mcp_server.erl:442`；xref 无非 unused-export
 - [x] 顺手修两个例子里按**字节**截断 UTF-8 的显示 bug（`binary:part/3` 会把一个
   码点劈成两半，打出来是乱码）—— 改用 `string:slice/2` 按字符截。
 
+### 已做·会话层：run 的寿命脱离 HTTP 请求（2026-09-04，参照 clj-agent-agui）
+
+> 参照 `~/workspace/clj-agent/modules/clj-agent-agui` 的 `runtime` / `codec` 两个 ns
+> 补齐。那边的头号能力（「让 run 的寿命不再由 HTTP 请求的寿命决定」）此前
+> beamai_agui 完全没有：run 由 cowboy 适配器在请求进程下 spawn，连接一断就死，
+> 另一个请求也看不见它。
+
+- [x] **`beamai_agui_session`**（一个 thread 一个 gen_server）+ `beamai_agui_sessions`
+  （threadId → 进程的注册表，读走 ETS、建走 gen_server 串行化）+
+  `beamai_agui_session_sup`（`simple_one_for_one`，`temporary` —— 会话里全是易失的
+  东西，重启出来是个空壳，且 seq 归零会让没断线的客户端补出上一轮的事件）。
+  三者进 `beamai_agui_sup`，顺序有意义（建会话要 `supervisor:start_child`）。
+- [x] **事件环形缓冲 + 会话级单调 seq**。号**不进事件 JSON**（AG-UI 的 BaseEvent 没
+  这一位），只写进 SSE 帧的 `id:` 行 —— 浏览器 `EventSource` 重连自带
+  `Last-Event-ID`，前端一行代码不用写。**跨 run 连续**：第二轮不重置回 0，否则
+  「补 3 号之后的」会把上一轮的也补一遍。水位早于缓冲起点时先发 `CUSTOM(resync)`。
+- [x] **run 进程挂在会话下**（会话 `trap_exit` + `spawn_link`）。两个方向都要：
+  run 崩了会话不跟着死（替它补终态事件），会话没了 run 也不留成孤儿。
+  **停一个 run 就是杀掉那个进程** —— BEAM 有抢占，不需要 JVM 那套「协作式取消 +
+  正在跑的工具会跑完」的妥协（clj 那边受限于 JVM，只能协作式）。
+- [x] **「一条 run 恰好一个终态事件且它是最后一条」不因崩溃而破**：会话在 run 进程
+  的 `EXIT` 里看它有没有把话说完，没有就补 —— 被 stop 的补
+  `RUN_FINISHED result.status=cancelled`，崩的补 `RUN_ERROR code=runner_died`，
+  正常退出却没发终态的补 `runner_silent`（如实报契约破了，而不是假装跑完了）。
+- [x] **并发策略**：`reject`（缺省，HTTP 409）/ `supersede`。supersede 要先放掉
+  会话这一跳再等旧 run 收尾 —— 收尾本身要回到同一个 gen_server，同步等必死锁；
+  做法是把新 run 挂成 `pending_start`，在旧 run 的 `EXIT` 里起它并 `gen_server:reply`，
+  另加一个超时兜底（不能让调用方无限期挂着）。
+- [x] **空闲驱逐**（缺省 30 分钟）。有 run / 有订阅者 / 停在等人的都不驱逐。
+  会话自己拿 `send_after` 定期自检，不长一根扫表线程。
+- [x] **HTTP 层**：`GET /threads`、`GET /threads/:id/{events,state}`、
+  `GET /threads/:id/stream`（重连，认 `?since=` / `?lastEventId=` / `Last-Event-ID`）、
+  `POST /threads/:id/stop`、`DELETE /threads/:id`。只读面**没有第二套存储** ——
+  列表来自会话注册表、事件来自环形缓冲、状态由流上的 SNAPSHOT + DELTA 折出来。
+  CORS 放行 `last-event-id`、暴露 `x-agui-run-id`。SSE 加 25s 心跳注释帧。
+- [x] **`beamai_agui_state:apply_patch/2`**（`diff/2` 的逆）。会话要维护"现在的 state
+  是什么"，只记最后一次快照的话，第一个补丁之后就过期了。只认自己产得出的三种 op，
+  路径按 RFC 6901 反转义（**`~1` 必须先解**：先解 `~0` 会把 `~01` 变成 `/`）。
+  既有的 atom 键沿用 atom 形态，不写成两份。
+- [x] **回落不变**：会话层没起来时 cowboy 适配器仍走"run 绑在请求上"的老路径，
+  既有 6 个 cowboy 集成测试一字未改照过。
+
+### 已做·协议保真（同批，对着 clj 的 `codec` 逐条核）
+
+- [x] **AG-UI 的 interrupt 协议**。暂停原来只发 `CUSTOM(interrupt)`（自家约定），
+  通用客户端不认。现在同时发
+  `RUN_FINISHED + outcome:{type:"interrupt", interrupts:[…]}` —— 收口与告知是同一条
+  事件。`interrupt.id` 取被中断调用的 tool-call id，带 `responseSchema` 与
+  `metadata.pendingTool`。**`approveWithEdits` 不报**（改参数再执行没实现）。
+  `CUSTOM` 那条照旧发，两条互不冲突。
+- [x] **`RunAgentInput.resume[]`**（协议里答复暂停的唯一入口）。放在四条来路的最前
+  面。`interruptId` 对得上 pending 调用才采纳，**对不上就不认** —— 拿别的 interrupt
+  的答复去恢复这一个，是把人的意思安到别处；只有一条且不带 id 时宽容采纳（不少
+  客户端只发 `[{status:"approved"}]`）。措辞归一（accept/deny/respond → 上游关键词）。
+- [x] **`/info` 的 `agents` 从数组改成以 id 为键的字典**。这是个**真 bug**：客户端做
+  `Object.entries(runtimeInfo.agents)` 再按 id 建 proxy，给数组它会把下标当 agent id，
+  于是去请求 `/agent/0/run`。同批补上 `capabilities`（humanInTheLoop / transport /
+  tools / reasoning / state，**每一位都是真的**）、`threadEndpoints`（会话层起没起
+  如实报；`realtimeMetadata` 恒 false）、`mode` / `version` / 三个插件位。
+  **`threadEndpoints` 无论开关都发** —— 省略与「明确说没有」在客户端那儿是两码事。
+- [x] **`RunAgentInput.context` → system prompt**（此前解析了但从没用过）。追加不
+  覆盖；抬头写明出处，否则这几行会被模型当成用户指令。与 state 的分工写进 README：
+  state 给工具读、context 说给模型听。
+- [x] **多模态 `content` 数组**。此前 `content_of/1` 只认 binary，数组直接变 `<<>>`
+  —— 内容全丢**且不报错**。现在把文本部件拼起来，非文本部件跳过。
+- [x] **`RUN_STARTED.parentRunId`**（原样带着走，不建父子索引、不做级联停止）与
+  **`RUN_FINISHED.usage`**（数组；没有的位不发 —— 发 0 会被客户端当真求和进去）。
+- [x] **`event_transform`**：事件流插件的通用挂点（改写 / 吞掉 / 前后插事件），
+  插件抛异常退回原事件。A2UI / genui / MCP Apps 那三个插件本身**没做** —— 挂点与
+  `/info` 的位在了，不装就如实报 false。
+
+新增 33 个测试（会话 10、HTTP 会话能力 6、apply_patch 6、协议解析 11 之外另有
+runner 级 7 与 interrupt 协议 2）。验证：`rebar3 eunit` **708 tests 0 failures**
+（此前 666）；编译零警告；dialyzer 只剩既有的 `beamai_mcp_server.erl:442`；
+xref 无非 unused-export 警告。
+
 ### 待办·功能
 
 - [ ] **认证与限流**。抄 `beamai_a2a_auth` / `beamai_a2a_rate_limit`。
+- [ ] **A2UI / Open Generative UI / MCP Apps 三个插件**。挂点（`event_transform`）
+  与 `/info` 的能力位已就位，插件本身没写。clj 那边 `agui.a2ui` / `agui.mcp` 可照抄
+  改写（判据：协议认不认 —— 认的留在模块里，只是某个前端 runtime 的中间件约定的
+  当示例）。
+- [ ] **多实例部署**。会话在进程内，要么 sticky session，要么把缓冲挪到共享存储。
 
 ### 待办·验证
 
