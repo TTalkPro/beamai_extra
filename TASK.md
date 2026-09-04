@@ -265,14 +265,85 @@ runner 级 7 与 interrupt 协议 2）。验证：`rebar3 eunit` **708 tests 0 f
 （此前 666）；编译零警告；dialyzer 只剩既有的 `beamai_mcp_server.erl:442`；
 xref 无非 unused-export 警告。
 
+### 已做·三个 activity 插件 + 子 agent lane + 协议补全（2026-09-04 第二批）
+
+- [x] **`beamai_agui_plugin`（公共零件）**。三个插件干的是同一件事：盯住某个工具的
+  调用，把参数翻成 activity 事件。`tool_watcher/1` 收口这一半：攒 `TOOL_CALL_ARGS`
+  的片段（**单独一片解析不了** —— 那是 JSON 文本碎片），到 `TOOL_CALL_END` 一次
+  解析。`hold_start` 决定要不要扣住工具卡片（生成式 UI 扣，A2UI 不扣，两边照各自
+  上游的取舍来）；**扣住的一定在 END 放完** —— 终态不过 transform，扣着就是真丢了。
+  `compose/1` 串多个插件。
+  状态放**进程字典**：一次 run 就是一个进程（会话给每个 run spawn 一个），
+  「按 run 隔离」由进程边界天然给到，不需要自己造一层；key 里带构造期的
+  `make_ref()`，同进程挂两个插件也互不干扰。
+- [x] **`beamai_agui_a2ui`**（移植 `@ag-ui/a2ui-middleware`）。`render_a2ui` 工具 +
+  用法提示词 + **catalog**（A2UI v0.9 基础 catalog 的 18 个组件；catalog 既是模型的
+  词汇表，也是「编不出别的组件」的保证）。事件是一条 `ACTIVITY_SNAPSHOT`
+  （`replace: true`，所以不需要 delta），content 里三条 op 的**顺序是协议要求的**
+  （createSurface → updateComponents → updateDataModel）。用户动作回流经
+  `input_transform/0` 合成一条 user 消息 —— 上游把它塞成工具结果，我们历史是服务端
+  权威塞不进去，**语义相同、路径不同**。
+- [x] **`beamai_agui_genui`**（移植 CopilotKit 的 open-generative-ui 中间件）。
+  三条猜错了前端不报错只会静默少渲染的细节都守住了：snapshot 必须最早且只一条、
+  `add` 必须带 value（null 整条跳过）、`html` 是**数组**不是字符串。扣住工具卡片
+  直到第一条 activity 出去。键序按约定重排（模型的原始 key 顺序在 provider 解析
+  JSON 时就没了，而这个特性的提示词恰恰按顺序要求生成）。
+- [x] **`beamai_agui_mcp_apps`**。判据同 clj：**协议认不认**。JSON-RPC / 握手 /
+  传输在 `beamai_mcp`；这里只剩前端约定 —— 带 `_meta."ui/resourceUri"` 的工具出结果
+  时补一条 `mcp-apps` activity（带 `toolInput`：那块界面要知道这次是用什么参数调的），
+  以及 UI 代理的**四方法白名单**（界面跑在浏览器里）。哪些工具带 UI 在装配期算一次。
+- [x] **`beamai_agui_subagent`：子 agent lane**。**没有改上游** ——
+  `beamai_agent_delegate` 的 `subagent` 是个返回 agent 配置的函数，配置里可以有
+  `callbacks`，包一层就够了；再包一层 handler 负责收口。`SUBAGENT_STARTED` →
+  lane 事件（每条带 `subagentRunId`）→ `SUBAGENT_FINISHED` / `SUBAGENT_ERROR`。
+  三个进程边界踩了一次才对：**父 emitter 的表是 private，工具进程读不到** ——
+  所以 observer 交出去的是 thread id / run id / sink 三样，不是 emitter 本身；
+  lane 的表要 `public`（回调在 manager 的 worker 进程里触发）。
+  **缺省关**：`@ag-ui/client` ≤ 0.0.57 一条未知类型掐断整条流；而给既有事件多一个
+  字段是安全的（schema 是 passthrough），所以只有三个新类型要开关。
+  emitter 新增 `tag`（每条事件补字段）与 `access`（表可见性）两个选项。
+- [x] **协议补全：非弃用的 29 个事件类型全部有构造器**。新增 `ACTIVITY_SNAPSHOT` /
+  `ACTIVITY_DELTA`、`SUBAGENT_STARTED` / `FINISHED` / `ERROR`、
+  `TEXT_MESSAGE_CHUNK` / `TOOL_CALL_CHUNK`。
+  **`THINKING_*` 一族刻意不做**（0.0.59 起 deprecated、1.0 移除，思考走
+  `REASONING_*`）。**两条 `*_CHUNK` 缺省不发**：它们是给「分不出边界的生产者」的
+  便利事件，而我们的边界分得出，发显式三件套严格更好；构造器留着给宿主。
+- [x] **`MESSAGES_SNAPSHOT` 真的发出去了**（此前只有构造器）。会话从事件流折出一份
+  **消息账本**，断线重连补不回缺口时发它 —— 客户端丢的是增量，增量对不上之后它
+  手里那份就是错的，`MESSAGES_SNAPSHOT` 正是协议里说「照这份对齐」的那条。
+  账本**不是第二个真相店**：它是这条流自己的投影，有界（缺省 200 条），完整历史
+  仍在 chat memory。子 agent lane 的事件不进账本。
+- [x] **`input_transform` 入站挂点**（对称于 `event_transform`）：在解析之后、分路
+  之前改写 `RunAgentInput`，A2UI 的用户动作回流走它。端点配置里的
+  `event_transform` / `input_transform` 经 `run_opts` 一路传到 `runner:run/4`
+  （会话模式与请求回落模式都走同一条路）。
+
+### 已做·全能力走查 examples
+
+- [x] **`examples/src/example_agui_scripted.erl`**：照剧本演的 LLM。四种幕
+  （text / tool_call / reasoning_then_text / hang），tool_call 那幕**逐字**吐参数
+  （这是 `beamai_agui_raw` 增量路唯一的输入形状）。**不需要 API key**。
+- [x] **`examples/src/example_agui_full.erl`**：九个场景一条命令跑完，每个都下断言
+  并把事件流打在屏幕上 —— `basic` / `reconnect`（**真断开**再凭水位接回来）/
+  `stop` / `threads` / `hitl`（interrupt → `resume[]`）/ `a2ui` / `genui` /
+  `mcp_apps` / `subagent`。首次跑通即 9/9。
+  顺手记一条：Erlang 的 `io:format` 打中文要 `~ts` 且 `io:setopts([{encoding,
+  unicode}])`，`~s` 直接 badarg；而**格式串是普通字符串，不能写 `/utf8`**
+  （那是 binary 的语法）。
+
+验证：`rebar3 eunit` **739 tests 0 failures**（此前 708）；编译零警告；dialyzer 只剩
+既有的 `beamai_mcp_server.erl:442`；`example_agui_full:run()` 九个场景全过。
+
 ### 待办·功能
 
 - [ ] **认证与限流**。抄 `beamai_a2a_auth` / `beamai_a2a_rate_limit`。
-- [ ] **A2UI / Open Generative UI / MCP Apps 三个插件**。挂点（`event_transform`）
-  与 `/info` 的能力位已就位，插件本身没写。clj 那边 `agui.a2ui` / `agui.mcp` 可照抄
-  改写（判据：协议认不认 —— 认的留在模块里，只是某个前端 runtime 的中间件约定的
-  当示例）。
 - [ ] **多实例部署**。会话在进程内，要么 sticky session，要么把缓冲挪到共享存储。
+- [ ] **异步委派的 lane**（`management_tools`）。子 agent 在工具进程死后还在跑，
+  那时 lane 的状态表已经回收 —— 要让 `beamai_subagent_manager` 透出观察钩子，
+  那是上游的改动。
+- [ ] **插件的中间态**。三个 activity 插件都在参数到齐时一次翻译；「边生成边长
+  出来」要把 `TOOL_CALL_ARGS` 的片段做增量 JSON 扫描（clj 那边有一个现成的
+  `scanner` 可照抄）。
 
 ### 待办·验证
 
