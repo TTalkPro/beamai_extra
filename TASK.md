@@ -417,6 +417,50 @@ activity、子 agent lane。跳过的两条是模型的选择（这轮没思考�
 编译零警告；dialyzer 只剩既有的 `beamai_mcp_server.erl:442`；
 `example_agui_full:run()` 9/9。
 
+### 已做·修下游报上来的四条账（2026-09-04 第四批，见 feedbacks/）
+
+happy（ClojureScript + UIx 的 AG-UI 客户端）拿 `beamai_agui/1.1` 做联调后端，
+逐页对着 CopilotKit 的参照实现比，报回来四条。全修了，每份反馈末尾附了回执。
+
+- [x] 🔴 **`resume[].payload.decision` 完全不读 + 替客户端工具伪造结果**
+  （这批里最要紧的一条）。取值顺序曾是 `status > decision` 取第一个非空，于是
+  客户端发 `{status:"resolved", payload:{decision:"rejected"}}` 时读到的是
+  `"resolved"` —— 认不出的词又原样往下传，上游把它当"自由文本作结果"，
+  `"resolved"` 就成了工具的返回值。**批准与拒绝变成同义词，而且一个字都不报。**
+  三处一起改：① `payload.decision` 优先，`status` 只在字面上就是决策词时才算，
+  认不出的词**不再原样透传**；② runner 按 interrupt 的类型分路（判据：被中断的
+  工具在不在 `RunAgentInput.tools` 里），前端工具没结果时**如实说没拿到**而不是
+  编一个成功；③ 两类 interrupt 的 `reason` / `responseSchema` / `metadata.kind`
+  分开 —— 客户端照 schema 填就自然回对，不用把"这是哪一类"编进自己的 if。
+- [x] 🔴 **run 端点不按 agent 寻址**。`/info` 报的是一张 agents 字典，标准客户端
+  据此拼 `{base}/agent/{id}/run` → 404；而 404 那条路上没有 CORS 头，浏览器把
+  「没这条路」显示成**跨源被拒**，把人指去查 CORS（而 CORS 是这台里最齐的一块）。
+  两条一起补：`:agent` 路径绑定（优先于路由钉死的那个，查不到如实 404）+
+  `mode => fallback` 兜底路由（**404 带 CORS**，响应体里还有一句 `hint`）。
+- [x] 🟡 **线程只读面四处与协议对不上**。`threadId` → **`id`**（客户端按 `id`
+  归一化，只给 `threadId` 的话每条都被判成坏记录丢掉 —— 200 却 0 行）；补
+  `name` / `createdAt` / `updatedAt` / `agentId`；`GET /threads/:id` 认路径参数
+  （不存在回 404）；补 `/threads/:id/messages`（`inspect: true` 因此是真话，用的是
+  会话那份消息账本）；`/events` 去掉外层包装、`seq` 挪进事件对象。
+- [x] 🟢 **三条小的**。`STEP_FINISHED` 曾夹在未闭合的消息/工具生命周期中间 ——
+  改成记一笔欠账，等消息与工具都闭合了才发（**步骤是容器，容器最后关**），
+  三个时机补发：消息闭合后、下一步开始前、run 到终态前；删掉与 `outcome` 重复的
+  `CUSTOM(interrupt)`（两份总有一天不同步）；`/info` 补 `multimodal` 能力格，
+  如实报全 false —— 缺席在客户端那儿只能读成"不知道"，而报 false 是确定的信息。
+
+新增 11 个用例（决策两条路不同、`status` 不当结果、前端工具要 result、不伪造结果、
+按 agent 寻址、fallback 带 CORS、线程形状、`STEP_FINISHED` 的两条时机…），
+九处既有序列断言随之更新。
+
+实机验过（MiniMax m2.7，端口 8080）：`POST /agui/agent/beamai-demo/run` 200；
+走错路的 404 带 `access-control-allow-origin` 与 `hint`；`/threads` 的记录有
+`id`/`agentId`/`createdAt`/`updatedAt`，`/threads/no-such` 404，`/messages` 200，
+`/events` 的元素是事件本身（`type` 在、`seq` 在里面），`/info` 有 `multimodal`。
+
+验证：`rebar3 eunit` **744 tests 0 failures**；examples **9 tests 0 failures**；
+编译零警告；dialyzer 只剩既有的 `beamai_mcp_server.erl:442`；
+`example_agui_full:run()` 9/9。
+
 ### 待办·功能
 
 - [ ] **认证与限流**。抄 `beamai_a2a_auth` / `beamai_a2a_rate_limit`。
