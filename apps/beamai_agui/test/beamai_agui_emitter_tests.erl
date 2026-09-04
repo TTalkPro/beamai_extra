@@ -146,11 +146,45 @@ tool_call_args_is_json_text_test() ->
 %% STEP_STARTED / STEP_FINISHED 用同一个序号，逐轮递增
 step_pairs_test() ->
     E = new_emitter(),
-    #{on_llm_call := LC, on_llm_result := LR} = beamai_agui_emitter:callbacks(E),
-    LC([], #{}), LR(#{}, #{}),
-    LC([], #{}), LR(#{}, #{}),
+    #{on_llm_call := LC, on_llm_result := LR, on_message_end := ME} =
+        beamai_agui_emitter:callbacks(E),
+    LC([], #{}), LR(#{}, #{}), ME(undefined, #{message_id => <<"m1">>}),
+    LC([], #{}), LR(#{}, #{}), ME(undefined, #{message_id => <<"m2">>}),
     Names = [maps:get(<<"stepName">>, Ev) || Ev <- drain()],
     ?assertEqual([<<"step-1">>, <<"step-1">>, <<"step-2">>, <<"step-2">>], Names),
+    beamai_agui_emitter:close(E).
+
+%% **步骤是容器，容器最后关**：`on_llm_result` 一返回就发 STEP_FINISHED 的话，
+%% 它会夹在 TOOL_CALL_ARGS 与 TOOL_CALL_END 中间 —— 按步骤分组渲染的客户端会看到
+%% 一个「里面还开着两个东西」的步骤。所以它欠着，等消息闭合了才补。
+step_finished_closes_after_the_message_test() ->
+    E = new_emitter(),
+    #{on_llm_call := LC, on_llm_result := LR, on_token := TK,
+      on_message_start := MS, on_message_end := ME} = beamai_agui_emitter:callbacks(E),
+    Meta = #{message_id => <<"m1">>},
+    LC([], Meta),
+    MS(<<"m1">>, Meta),
+    TK(<<"hi">>, Meta),
+    %% LLM 返回了，但这条消息还没闭合 —— 此刻**不该**有 STEP_FINISHED
+    LR(#{}, Meta),
+    ME(#{content => <<"hi">>, tool_calls => [tc(<<"c1">>, <<"t1">>)]}, Meta),
+    Types = [maps:get(<<"type">>, Ev) || Ev <- drain()],
+    ?assertEqual([<<"STEP_STARTED">>,
+                  <<"TEXT_MESSAGE_START">>, <<"TEXT_MESSAGE_CONTENT">>,
+                  <<"TEXT_MESSAGE_END">>,
+                  <<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
+                  %% 容器最后关
+                  <<"STEP_FINISHED">>], Types),
+    beamai_agui_emitter:close(E).
+
+%% run 到终态时欠着的那条也要补上 —— 否则步骤永远不闭合
+step_finished_flushed_at_terminal_test() ->
+    E = new_emitter(),
+    #{on_llm_call := LC, on_llm_result := LR} = beamai_agui_emitter:callbacks(E),
+    LC([], #{}), LR(#{}, #{}),
+    ok = beamai_agui_emitter:run_finished(E),
+    Types = [maps:get(<<"type">>, Ev) || Ev <- drain()],
+    ?assertEqual([<<"STEP_STARTED">>, <<"STEP_FINISHED">>, <<"RUN_FINISHED">>], Types),
     beamai_agui_emitter:close(E).
 
 %%====================================================================

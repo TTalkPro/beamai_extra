@@ -76,15 +76,17 @@ full_run_event_sequence_test() ->
         Types = [maps:get(<<"type">>, E) || E <- Events],
         ?assertEqual([
             <<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>,
-            %% 第一轮：模型要调工具
-            <<"STEP_STARTED">>, <<"STEP_FINISHED">>,
+            %% 第一轮：模型要调工具。**STEP_FINISHED 排在工具调用闭合之后** ——
+            %% 步骤是容器，容器最后关
+            <<"STEP_STARTED">>,
             <<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
+            <<"STEP_FINISHED">>,
             <<"TOOL_CALL_RESULT">>,
             %% 第二轮：逐 token 吐最终答案
             <<"STEP_STARTED">>,
             <<"TEXT_MESSAGE_START">>, <<"TEXT_MESSAGE_CONTENT">>,
             <<"TEXT_MESSAGE_CONTENT">>,
-            <<"STEP_FINISHED">>, <<"TEXT_MESSAGE_END">>,
+            <<"TEXT_MESSAGE_END">>, <<"STEP_FINISHED">>,
             <<"RUN_FINISHED">>
         ], Types)
     after

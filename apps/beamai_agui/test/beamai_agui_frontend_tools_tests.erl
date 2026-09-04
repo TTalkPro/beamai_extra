@@ -143,9 +143,9 @@ full_round_trip() ->
     try
         Ev1 = run(input(Thread, [user_msg(<<"go">>)], Tools), plain_factory()),
         ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>,
-                      <<"STEP_STARTED">>, <<"STEP_FINISHED">>,
+                      <<"STEP_STARTED">>,
                       <<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
-                      <<"RUN_FINISHED">>], types(Ev1)),
+                      <<"STEP_FINISHED">>, <<"RUN_FINISHED">>], types(Ev1)),
         %% 服务端没有实现，当然也就没有结果——等前端给
         ?assertEqual([], [E || E <- Ev1,
                               maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>]),

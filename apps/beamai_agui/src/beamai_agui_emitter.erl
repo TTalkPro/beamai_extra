@@ -7,7 +7,8 @@
 %%%
 %%% | AG-UI 事件 | 由哪个回调驱动 |
 %%% |---|---|
-%%% | `STEP_STARTED` / `STEP_FINISHED` | `on_llm_call` / `on_llm_result` |
+%%% | `STEP_STARTED` | `on_llm_call` |
+%%% | `STEP_FINISHED` | `on_llm_result` **记账**，等消息闭合后才发（见 step_finished/1） |
 %%% | `TEXT_MESSAGE_START` | 第一个 token 到达时**惰性**发出 |
 %%% | `TEXT_MESSAGE_CONTENT` | `on_token`（Meta 带 `message_id`） |
 %%% | `TEXT_MESSAGE_END` | `on_message_end` |
@@ -108,6 +109,9 @@ new(#{thread_id := ThreadId, run_id := RunId, sink := Sink} = Opts) ->
                                           maps:get(raw_translator, Opts, undefined)}}),
     true = ets:insert(Tab, {text_open, undefined}),
     true = ets:insert(Tab, {step, 0}),
+    %% 有没有一个「LLM 已经返回、但这一步的消息/工具还没闭合」的 STEP_FINISHED
+    %% 欠着（见 step_finished/1）
+    true = ets:insert(Tab, {step_pending, false}),
     %% 增量路的状态：index → {Id, Name}（provider 后续 delta 只给 index）、
     %% 已经流过的调用 id、以及推理段是否开着
     true = ets:insert(Tab, {tool_index, #{}}),
@@ -196,6 +200,7 @@ state_snapshot(#{table := Tab} = E) ->
 %% @doc RUN_FINISHED
 -spec run_finished(emitter()) -> ok.
 run_finished(#{table := Tab} = E) ->
+    ok = flush_step(E),
     #{thread_id := T, run_id := R} = config(Tab),
     emit(E, beamai_agui_event:run_finished(T, R)).
 
@@ -207,12 +212,14 @@ run_finished(E, Result) ->
 %% @doc RUN_FINISHED（带结果与用量）
 -spec run_finished(emitter(), term(), [map()]) -> ok.
 run_finished(#{table := Tab} = E, Result, Usage) ->
+    ok = flush_step(E),
     #{thread_id := T, run_id := R} = config(Tab),
     emit(E, beamai_agui_event:run_finished(T, R, Result, Usage)).
 
 %% @doc RUN_FINISHED + `outcome:"interrupt"`（AG-UI 的 interrupt 协议）
 -spec run_interrupted(emitter(), [map()]) -> ok.
 run_interrupted(#{table := Tab} = E, Interrupts) ->
+    ok = flush_step(E),
     #{thread_id := T, run_id := R} = config(Tab),
     emit(E, beamai_agui_event:run_interrupted(T, R, Interrupts)).
 
@@ -221,6 +228,7 @@ run_interrupted(#{table := Tab} = E, Interrupts) ->
 run_error(E, Reason) ->
     ok = close_reasoning(E),
     ok = close_open_text(E),
+    ok = flush_step(E),
     emit(E, beamai_agui_event:run_error(format_reason(Reason), <<"agent_error">>)).
 
 %%====================================================================
@@ -338,7 +346,8 @@ message_end(#{table := Tab} = E, Msg, Meta) ->
     ok = emit_tool_calls(E, MsgId, tool_calls_of(Msg)),
     %% index 是**每次 LLM 调用**内的序号，下一条消息要从头记
     true = ets:insert(Tab, {tool_index, #{}}),
-    ok.
+    %% 消息与工具都闭合了，这一步才算完（见 step_finished/1）
+    flush_step(E).
 
 %% @private 非流式路径：整条文本一次性发完
 emit_whole_text(_E, _MsgId, null) -> ok;
@@ -411,13 +420,36 @@ raw_event(#{table := Tab} = E, Event) ->
 
 %% @private STEP_STARTED（步名用递增序号，够前端区分「第几轮」）
 step_started(#{table := Tab} = E) ->
+    %% 上一步要是还欠着收口（正常到不了这里），先补上再开新的
+    ok = flush_step(E),
     N = ets:update_counter(Tab, step, 1),
     emit(E, beamai_agui_event:step_started(step_name(N))).
 
-%% @private STEP_FINISHED（与 step_started 用同一个序号）
-step_finished(#{table := Tab} = E) ->
-    N = ets:lookup_element(Tab, step, 2),
-    emit(E, beamai_agui_event:step_finished(step_name(N))).
+%% @private LLM 返回了 —— 但**先不发 STEP_FINISHED**
+%%
+%% `on_llm_result` 在 LLM 调用一返回就触发，而这一步产出的消息与工具调用要等
+%% `on_message_end` 才闭合。照着触发顺序发，`STEP_FINISHED` 就夹在
+%% `TOOL_CALL_ARGS` 与 `TOOL_CALL_END` 中间、`TEXT_MESSAGE_END` 也跑到了步骤收口
+%% 之后 —— **步骤是容器，容器该最后关**。按步骤分组渲染的客户端会看到一个"里面
+%% 还开着两个东西"的步骤。
+%%
+%% 所以这里只记一笔欠账，由 `flush_step/1` 在消息闭合之后补发。
+step_finished(#{table := Tab}) ->
+    true = ets:insert(Tab, {step_pending, true}),
+    ok.
+
+%% @private 把欠着的 STEP_FINISHED 补上（与 step_started 用同一个序号）
+%%
+%% 三个时机：`on_message_end` 收完尾、下一步开始前、run 到终态前。
+flush_step(#{table := Tab} = E) ->
+    case ets:lookup_element(Tab, step_pending, 2) of
+        false ->
+            ok;
+        true ->
+            true = ets:insert(Tab, {step_pending, false}),
+            N = ets:lookup_element(Tab, step, 2),
+            emit(E, beamai_agui_event:step_finished(step_name(N)))
+    end.
 
 %%====================================================================
 %% 内部 - 辅助

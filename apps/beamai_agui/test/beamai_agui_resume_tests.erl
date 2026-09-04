@@ -142,9 +142,9 @@ hitl_round_trip() ->
         %% 收口只有 `RUN_FINISHED + outcome:"interrupt"` 这一条 —— 曾经还并发一条
         %% `CUSTOM(interrupt)`，同一件事两份迟早不同步，已经去掉
         ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>,
-                      <<"STEP_STARTED">>, <<"STEP_FINISHED">>,
+                      <<"STEP_STARTED">>,
                       <<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
-                      <<"RUN_FINISHED">>], types(Ev1)),
+                      <<"STEP_FINISHED">>, <<"RUN_FINISHED">>], types(Ev1)),
         %% 前端看到的是一个**没有结果**的工具调用——那就是"等你回话"
         ?assertEqual([], [E || E <- Ev1,
                               maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>]),
@@ -165,7 +165,7 @@ hitl_round_trip() ->
         ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>, <<"TOOL_CALL_RESULT">>,
                       <<"STEP_STARTED">>,
                       <<"TEXT_MESSAGE_START">>, <<"TEXT_MESSAGE_CONTENT">>,
-                      <<"STEP_FINISHED">>, <<"TEXT_MESSAGE_END">>,
+                      <<"TEXT_MESSAGE_END">>, <<"STEP_FINISHED">>,
                       <<"RUN_FINISHED">>], types(Ev2)),
         %% 补上的结果对回了那次调用，内容是人给的
         [Result] = [E || E <- Ev2, maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>],
@@ -267,9 +267,9 @@ store_down_degrades_to_no_hitl() ->
         Ev = run(input(<<"t-nostore">>, [user_msg(<<"go">>)])),
         %% 照常跑到中断（只是这次中断没地方存，下个请求接不上）
         ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>,
-                      <<"STEP_STARTED">>, <<"STEP_FINISHED">>,
+                      <<"STEP_STARTED">>,
                       <<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
-                      <<"RUN_FINISHED">>], types(Ev)),
+                      <<"STEP_FINISHED">>, <<"RUN_FINISHED">>], types(Ev)),
         ?assertEqual(none, beamai_agui_thread:pending(<<"t-nostore">>))
     after
         meck:unload(beamai_chat_model),
