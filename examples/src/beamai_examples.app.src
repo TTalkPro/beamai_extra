@@ -16,7 +16,10 @@
         test_anthropic_agent,
         test_zhipu_anthropic,
         example_agui_live,
-        example_agui_durable
+        example_agui_durable,
+        %% AG-UI 全能力走查（离线，剧本化 LLM）
+        example_agui_scripted,
+        example_agui_full
     ]},
     {licenses, ["Apache-2.0"]},
     {links, []}
