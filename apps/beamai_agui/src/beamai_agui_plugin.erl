@@ -81,9 +81,20 @@ compose(Transforms) ->
     end.
 
 %% @doc 往一份 agent 配置里追加一个内联工具
+%%
+%% **工具挂在 chat client 上，不是 agent 配置的某个键** —— `beamai_agent:new/1`
+%% 根本没有 `tools` 这一位（只有 `interrupt_tools`）。写成 `Config#{tools => ...}`
+%% 编译得过、跑得动、模型却**永远看不见那个工具** —— 实机联调时才照出来：模型
+%% 反复去调别的工具，还振振有词地说"没有可用的 render_a2ui"。
+%%
+%% 所以配置里没有 `chat_client` 就**直接报错**，不静默放过：一个装不上的插件
+%% 应当在装配期炸，而不是等到线上发现模型行为不对。
 -spec add_tool(map(), map()) -> map().
-add_tool(Config, Tool) ->
-    Config#{tools => maps:get(tools, Config, []) ++ [Tool]}.
+add_tool(#{chat_client := Client} = Config, Tool) ->
+    Config#{chat_client => beamai_chat_client:add_tool(Client, Tool)};
+add_tool(_Config, _Tool) ->
+    error({beamai_agui_plugin, no_chat_client,
+           <<"with_tool/1,2 要在配置里已经有 chat_client 之后调用"/utf8>>}).
 
 %% @doc 往一份 agent 配置的 system prompt 后面追加一段
 %%

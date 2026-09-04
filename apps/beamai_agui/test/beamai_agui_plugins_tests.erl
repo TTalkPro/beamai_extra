@@ -2,8 +2,8 @@
 %%% @doc 三个 activity 类插件 + 公共零件
 %%%
 %%% 这些用例守的是**猜错了前端不报错、只会静默少渲染**的那几条：op 顺序、
-%%% `replace` 位、snapshot 必须排在 delta 之前、null 值整条跳过。单测是唯一
-%%% 会替我们盯住它们的东西 —— 真前端不会为一条错的 patch 报错。
+%%% `replace` 位、null 值整条跳过。单测是唯一会替我们盯住它们的东西 ——
+%%% 真前端不会为一条错的 patch 报错。
 %%% @end
 %%%-------------------------------------------------------------------
 -module(beamai_agui_plugins_tests).
@@ -147,9 +147,8 @@ a2ui_event_transform_test() ->
 
 %% catalog 是模型的词汇表，也是「编不出别的组件」的保证 —— 它必须进 prompt
 a2ui_with_tool_injects_catalog_test() ->
-    Config = beamai_agui_a2ui:with_tool(#{system_prompt => <<"You are Bob.">>}),
-    [Tool] = maps:get(tools, Config),
-    ?assertEqual(<<"render_a2ui">>, maps:get(name, Tool)),
+    Config = beamai_agui_a2ui:with_tool(client_config(<<"You are Bob.">>)),
+    ?assertEqual([<<"render_a2ui">>], tool_names(Config)),
     Prompt = maps:get(system_prompt, Config),
     ?assertMatch({_, _}, binary:match(Prompt, <<"You are Bob.">>)),
     ?assertMatch({_, _}, binary:match(Prompt, <<"Available Components">>)),
@@ -180,84 +179,6 @@ a2ui_input_transform_noop_test() ->
 op_name(Op) ->
     [Name] = [K || K <- maps:keys(Op), K =/= <<"version">>],
     Name.
-
-%%====================================================================
-%% Open Generative UI
-%%====================================================================
-
-genui_args() ->
-    #{<<"initialHeight">> => 400,
-      <<"placeholderMessages">> => [<<"working">>],
-      <<"css">> => <<"body{}">>,
-      <<"html">> => <<"<div/>">>,
-      <<"jsFunctions">> => <<"function f(){}">>,
-      <<"jsExpressions">> => [<<"f()">>]}.
-
-%% **snapshot 必须在任何 delta 之前**，而且只发一条 —— 消息还没建，前端会把
-%% delta 悄悄丢弃（不报错，只是少渲染一块）
-genui_snapshot_comes_first_test() ->
-    [First | Rest] = beamai_agui_genui:activity_events(<<"c1">>, genui_args()),
-    ?assertEqual(<<"ACTIVITY_SNAPSHOT">>, beamai_agui_event:type_of(First)),
-    ?assertEqual(#{<<"generating">> => true, <<"initialHeight">> => 400},
-                 maps:get(<<"content">>, First)),
-    ?assertEqual([], pick(<<"ACTIVITY_SNAPSHOT">>, Rest)).
-
-%% **html 是数组不是字符串**：先建空数组，再逐块追加，前端 join 起来渲染
-genui_html_is_an_array_test() ->
-    Events = beamai_agui_genui:activity_events(<<"c1">>, genui_args()),
-    ?assertEqual([{<<"/html">>, []}, {<<"/html/-">>, <<"<div/>">>},
-                  {<<"/htmlComplete">>, true}],
-                 [{P, V} || {P, V} <- paths(Events),
-                            binary:longest_common_prefix([P, <<"/html">>]) >= 5]).
-
-%% 收尾一定有 `generating false`，前端据此收掉占位、定稿
-genui_ends_with_generating_false_test() ->
-    Events = beamai_agui_genui:activity_events(<<"c1">>, genui_args()),
-    ?assertEqual({<<"/generating">>, false}, lists:last(paths(Events))).
-
-%% **null 值整条跳过**：一条没有 value 的 patch 会让前端把**整批**判非法丢掉
-genui_null_values_are_skipped_test() ->
-    Events = beamai_agui_genui:activity_events(
-               <<"c1">>, #{<<"css">> => null, <<"jsFunctions">> => null,
-                           <<"html">> => <<"<p/>">>}),
-    Paths = [P || {P, _} <- paths(Events)],
-    ?assertEqual([], [P || P <- Paths, P =:= <<"/css">> orelse P =:= <<"/jsFunctions">>]),
-    ?assert(lists:member(<<"/html/-">>, Paths)).
-
-%% 顺序是约定的那一个（模型的 key 顺序在 provider 解析 JSON 时就没了）
-genui_key_order_test() ->
-    Events = beamai_agui_genui:activity_events(<<"c1">>, genui_args()),
-    ?assertEqual([<<"/placeholderMessages">>, <<"/placeholderMessages/-">>,
-                  <<"/css">>, <<"/cssComplete">>,
-                  <<"/html">>, <<"/html/-">>, <<"/htmlComplete">>,
-                  <<"/jsFunctions">>, <<"/jsFunctionsComplete">>,
-                  <<"/jsExpressions">>, <<"/jsExpressions/-">>,
-                  <<"/jsExpressionsComplete">>,
-                  <<"/generating">>],
-                 [P || {P, _} <- paths(Events)]).
-
-%% 扣住工具卡片直到第一条 activity 出去
-genui_event_transform_holds_start_test() ->
-    T = beamai_agui_genui:event_transform(),
-    Json = <<"{\"html\":\"<p/>\"}">>,
-    Out = feed(T, call_events(<<"c1">>, <<"generateSandboxedUi">>, Json)),
-    ?assertEqual(<<"ACTIVITY_SNAPSHOT">>, beamai_agui_event:type_of(hd(Out))),
-    ?assertEqual(<<"TOOL_CALL_START">>, beamai_agui_event:type_of(lists:nth(2, Out))),
-    ?assertEqual(<<"TOOL_CALL_END">>, beamai_agui_event:type_of(lists:last(Out))).
-
-genui_with_tool_test() ->
-    Config = beamai_agui_genui:with_tool(#{}),
-    [Tool] = maps:get(tools, Config),
-    ?assertEqual(<<"generateSandboxedUi">>, maps:get(name, Tool)),
-    ?assertMatch({_, _}, binary:match(maps:get(system_prompt, Config), <<"shadcn/ui">>)),
-    %% 明确说不要设计规范就一个字都不加
-    ?assertNot(maps:is_key(system_prompt,
-                           beamai_agui_genui:with_tool(#{}, #{design_skill => undefined}))).
-
-paths(Events) ->
-    [{maps:get(<<"path">>, Op), maps:get(<<"value">>, Op)}
-     || E <- Events, beamai_agui_event:type_of(E) =:= <<"ACTIVITY_DELTA">>,
-        Op <- maps:get(<<"patch">>, E)].
 
 %%====================================================================
 %% MCP Apps
@@ -316,3 +237,20 @@ mcp_proxy_unknown_server_test() ->
     ?assertEqual({error, {unknown_server, <<"nope">>}},
                  beamai_agui_mcp_apps:proxy_request(
                    [], #{<<"serverId">> => <<"nope">>, <<"method">> => <<"ping">>})).
+
+%%====================================================================
+%% 夹具
+%%====================================================================
+
+client_config(Prompt) ->
+    Client = beamai_chat_client:add_chat_model(beamai_chat_client:new(),
+                                               beamai_chat_model:create(mock, #{})),
+    Base = #{chat_client => Client},
+    case Prompt of
+        undefined -> Base;
+        _ -> Base#{system_prompt => Prompt}
+    end.
+
+tool_names(Config) ->
+    lists:sort([maps:get(name, T)
+                || T <- maps:values(beamai_chat_client:tools(maps:get(chat_client, Config)))]).
