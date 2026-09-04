@@ -58,9 +58,11 @@
 -module(beamai_agui_emitter).
 
 -export([new/1, close/1, callbacks/1]).
+-export([thread_id/1, run_id/1]).
 -export([tool_open/4, tool_args/3, reasoning_delta/2]).
 -export([state_snapshot/1]).
--export([run_started/1, run_finished/1, run_finished/2, run_error/2]).
+-export([run_started/1, run_finished/1, run_finished/2, run_finished/3]).
+-export([run_interrupted/2, run_error/2]).
 -export([emit/2]).
 
 -export_type([emitter/0]).
@@ -72,7 +74,11 @@
     thread_id := binary(),
     run_id := binary(),
     sink := fun((beamai_agui_event:event()) -> ok),
+    parent_run_id => binary() | undefined,
     raw_translator => fun((map(), emitter()) -> ok),
+    %% 事件流插件的通用挂点，见 emit/2
+    event_transform => fun((beamai_agui_event:event()) ->
+                              beamai_agui_event:event() | [beamai_agui_event:event()] | drop),
     state => map()
 }.
 
@@ -87,6 +93,10 @@ new(#{thread_id := ThreadId, run_id := RunId, sink := Sink} = Opts) ->
     true = ets:insert(Tab, {config, #{thread_id => ThreadId,
                                       run_id => RunId,
                                       sink => Sink,
+                                      parent_run_id =>
+                                          maps:get(parent_run_id, Opts, undefined),
+                                      event_transform =>
+                                          maps:get(event_transform, Opts, undefined),
                                       raw_translator =>
                                           maps:get(raw_translator, Opts, undefined)}}),
     true = ets:insert(Tab, {text_open, undefined}),
@@ -100,6 +110,16 @@ new(#{thread_id := ThreadId, run_id := RunId, sink := Sink} = Opts) ->
     true = ets:insert(Tab, {state, maps:get(state, Opts, #{})}),
     #{table => Tab}.
 
+%% @doc 本次 run 所属的 thread
+-spec thread_id(emitter()) -> binary().
+thread_id(#{table := Tab}) ->
+    maps:get(thread_id, config(Tab)).
+
+%% @doc 本次 run 的 id
+-spec run_id(emitter()) -> binary().
+run_id(#{table := Tab}) ->
+    maps:get(run_id, config(Tab)).
+
 %% @doc 释放 emitter
 -spec close(emitter()) -> ok.
 close(#{table := Tab}) ->
@@ -107,11 +127,34 @@ close(#{table := Tab}) ->
     ok.
 
 %% @doc 直接发一个事件（供 runner 发 run 级事件、或宿主发 CUSTOM）
+%%
+%% `event_transform` 是**事件流插件的通用挂点**：可以改写一条事件、吞掉它
+%% （返回 `drop`）、或在它前后插事件（返回列表）。A2UI / 生成式 UI 那类插件
+%% 就住在这个位置 —— 它们把工具调用翻成 `CUSTOM` 活动事件，而 runner / emitter
+%% 一个字都不用改。
+%%
+%% transform 自己抛异常不该把 run 带走：它是旁路增强，出事就退回原事件。
 -spec emit(emitter(), beamai_agui_event:event()) -> ok.
 emit(#{table := Tab}, Event) ->
-    #{sink := Sink} = config(Tab),
-    _ = Sink(Event),
+    #{sink := Sink} = Config = config(Tab),
+    lists:foreach(fun(E) -> _ = Sink(E) end, transform(Event, Config)),
     ok.
+
+%% @private 过一遍插件；认不出的返回值按"原样"处理
+transform(Event, #{event_transform := Fun}) when is_function(Fun, 1) ->
+    try Fun(Event) of
+        drop -> [];
+        Events when is_list(Events) -> Events;
+        Rewritten when is_map(Rewritten) -> [Rewritten];
+        _ -> [Event]
+    catch
+        Class:Reason:Stack ->
+            logger:warning("beamai_agui event_transform crashed: ~p:~p", [Class, Reason],
+                           #{stacktrace => Stack}),
+            [Event]
+    end;
+transform(Event, _Config) ->
+    [Event].
 
 %%====================================================================
 %% run 级事件
@@ -120,8 +163,8 @@ emit(#{table := Tab}, Event) ->
 %% @doc RUN_STARTED
 -spec run_started(emitter()) -> ok.
 run_started(#{table := Tab} = E) ->
-    #{thread_id := T, run_id := R} = config(Tab),
-    emit(E, beamai_agui_event:run_started(T, R)).
+    #{thread_id := T, run_id := R, parent_run_id := P} = config(Tab),
+    emit(E, beamai_agui_event:run_started(T, R, P)).
 
 %% @doc STATE_SNAPSHOT：把当前这份 state 作为基线告诉前端
 %%
@@ -139,9 +182,20 @@ run_finished(#{table := Tab} = E) ->
 
 %% @doc RUN_FINISHED（带结果）
 -spec run_finished(emitter(), term()) -> ok.
-run_finished(#{table := Tab} = E, Result) ->
+run_finished(E, Result) ->
+    run_finished(E, Result, []).
+
+%% @doc RUN_FINISHED（带结果与用量）
+-spec run_finished(emitter(), term(), [map()]) -> ok.
+run_finished(#{table := Tab} = E, Result, Usage) ->
     #{thread_id := T, run_id := R} = config(Tab),
-    emit(E, beamai_agui_event:run_finished(T, R, Result)).
+    emit(E, beamai_agui_event:run_finished(T, R, Result, Usage)).
+
+%% @doc RUN_FINISHED + `outcome:"interrupt"`（AG-UI 的 interrupt 协议）
+-spec run_interrupted(emitter(), [map()]) -> ok.
+run_interrupted(#{table := Tab} = E, Interrupts) ->
+    #{thread_id := T, run_id := R} = config(Tab),
+    emit(E, beamai_agui_event:run_interrupted(T, R, Interrupts)).
 
 %% @doc RUN_ERROR（先闭合还开着的文本消息，避免留下不成对的 START）
 -spec run_error(emitter(), term()) -> ok.

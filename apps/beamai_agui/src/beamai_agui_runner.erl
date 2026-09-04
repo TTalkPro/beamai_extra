@@ -28,9 +28,17 @@
 %%%-------------------------------------------------------------------
 -module(beamai_agui_runner).
 
--export([run/3]).
+-export([run/3, run/4]).
 
 -type sink() :: fun((beamai_agui_event:event()) -> ok).
+
+%% - `event_transform` —— 事件流插件的挂点，见 beamai_agui_emitter:emit/2
+-type opts() :: #{
+    event_transform => fun((beamai_agui_event:event()) ->
+                              beamai_agui_event:event() | [beamai_agui_event:event()] | drop)
+}.
+
+-export_type([sink/0, opts/0]).
 
 %% @doc 跑一次 run（或续跑一次暂停），事件推给 Sink
 %%
@@ -41,11 +49,19 @@
 -spec run(beamai_agui_types:run_input(),
           beamai_agui_registry:factory(), sink()) -> ok.
 run(Input, Factory, Sink) ->
+    run(Input, Factory, Sink, #{}).
+
+%% @doc 同 run/3，另带运行时选项（见 opts/0）
+-spec run(beamai_agui_types:run_input(),
+          beamai_agui_registry:factory(), sink(), opts()) -> ok.
+run(Input, Factory, Sink, Opts) ->
     ThreadId = beamai_agui_types:thread_id(Input),
     Emitter = beamai_agui_emitter:new(#{
         thread_id => ThreadId,
         run_id => beamai_agui_types:run_id(Input),
         sink => Sink,
+        parent_run_id => beamai_agui_types:parent_run_id(Input),
+        event_transform => maps:get(event_transform, Opts, undefined),
         %% 缺省接上增量翻译：工具参数逐字、思维链逐字（认不出的 chunk 安静丢弃）
         raw_translator => beamai_agui_raw:translator(),
         state => initial_state(Input)
@@ -151,8 +167,32 @@ reject_text(_) ->
 %% @private 造 agent 并把结果分派成事件
 with_agent(Input, Factory, Emitter, Go) ->
     case Factory(Input, runtime_config(Input, Emitter)) of
-        {ok, Agent} -> finish(Emitter, Go(with_frontend_tools(Agent, Input)));
-        {error, Reason} -> beamai_agui_emitter:run_error(Emitter, Reason)
+        {ok, Agent} ->
+            Ready = with_context(with_frontend_tools(Agent, Input), Input),
+            finish(Emitter, Go(Ready));
+        {error, Reason} ->
+            beamai_agui_emitter:run_error(Emitter, Reason)
+    end.
+
+%% @private 把 `RunAgentInput.context` 追加到 system prompt 后面
+%%
+%% `context` 是前端每轮重发的**页面状态**（`useAgentContext`）：当前选中了哪一行、
+%% 用户是谁、页面在哪一屏。它是 turn 级的（这轮带就有，下轮不带就没了），所以
+%% **追加而不是覆盖** —— 工厂那份人设是常量配置，不该被一次请求改掉。
+%%
+%% 由 runtime 追加而不是让工厂自己读：与前端工具同一条理由，请求带上来的东西
+%% 不该渗进"必须可重放"的工厂里（见 beamai_agui_thread 模块头）。
+with_context(Agent, Input) ->
+    case beamai_agui_types:context_prompt(Input) of
+        undefined ->
+            Agent;
+        Context ->
+            case maps:get(system_prompt, Agent, undefined) of
+                P when is_binary(P), P =/= <<>> ->
+                    Agent#{system_prompt => <<P/binary, "\n\n", Context/binary>>};
+                _ ->
+                    Agent#{system_prompt => Context}
+            end
     end.
 
 %% @private 把前端声明的工具挂成 interrupt_tools
@@ -228,19 +268,29 @@ runtime_config(Input, Emitter) ->
     end.
 
 finish(Emitter, {ok, Result, _State}) ->
-    beamai_agui_emitter:run_finished(Emitter, result_of(Result));
+    beamai_agui_emitter:run_finished(Emitter, result_of(Result),
+                                     beamai_agui_event:usage(usage_of(Result)));
 finish(Emitter, {interrupt, Info, _State}) ->
     %% 中断态此刻已由上游落进 pause_store（agent 配了 pause_store）：
     %% 这次 run 到此为止，下一个带答复的请求会从 store 里接着跑。
+    %%
+    %% 发**两条**：`CUSTOM(interrupt)` 是我们先于协议实现的那条（老前端在用，
+    %% 不动它），`RUN_FINISHED + outcome:"interrupt"` 才是 AG-UI 的 interrupt
+    %% 协议 —— 通用客户端（`useInterrupt` / `useHumanInTheLoop`）认的是后者，
+    %% 而且它同时把流收口了（run 必须有终态，流才关得掉）。
     ok = beamai_agui_emitter:emit(
            Emitter, beamai_agui_event:custom(<<"interrupt">>, interrupt_of(Info))),
-    beamai_agui_emitter:run_finished(Emitter);
+    beamai_agui_emitter:run_interrupted(Emitter, [beamai_agui_event:interrupt(
+                                                    interrupt_spec(Emitter, Info))]);
 finish(Emitter, {error, Reason}) ->
     beamai_agui_emitter:run_error(Emitter, Reason).
 
-%% RUN_FINISHED.result：只回答案文本，run 的统计（iterations/usage）不属于协议
+%% RUN_FINISHED.result：只回答案文本；用量走协议自己的 `usage` 位，
+%% 迭代次数是我们的内部统计，协议里没有对应位，不硬塞
 result_of(Result) ->
     #{<<"content">> => maps:get(content, Result, null)}.
+
+usage_of(Result) -> maps:get(usage, Result, undefined).
 
 %% CUSTOM(interrupt) 的载荷：前端要知道「在等哪次调用的回话」
 interrupt_of(Info) ->
@@ -255,3 +305,23 @@ interrupt_of(Info) ->
         _ ->
             Base
     end.
+
+%% @private `RUN_FINISHED.outcome.interrupts[]` 那一条的原料
+%%
+%% `id` 取被中断调用的 tool-call id —— 它本来就唯一，客户端把它原样放回
+%% `resume[].interruptId`，服务端据此认得出「回的是不是当前这一条」
+%% （beamai_agui_types:resume_input/2）。纯 ask-user 式的暂停没有 tool call，
+%% 退回 run id 派生的一个稳定 id。
+interrupt_spec(Emitter, Info) ->
+    Reason = atom_to_binary(maps:get(interrupt_type, Info, paused), utf8),
+    case maps:get(interrupted_tool_call, Info, undefined) of
+        TC when is_map(TC) ->
+            {Id, Name, Args} = beamai_tool:parse_tool_call(TC),
+            #{id => Id, reason => Reason, tool_call_id => Id,
+              tool_name => Name, args => Args};
+        _ ->
+            #{id => <<(run_id_of(Emitter))/binary, "-interrupt">>, reason => Reason}
+    end.
+
+run_id_of(Emitter) ->
+    beamai_agui_emitter:run_id(Emitter).

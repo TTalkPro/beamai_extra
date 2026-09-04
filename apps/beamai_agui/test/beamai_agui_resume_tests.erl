@@ -31,7 +31,9 @@ resume_test_() ->
       fun resume_without_input_errors/0,
       fun rejected_decision_emits_result/0,
       fun approved_decision_emits_real_tool_result/0,
-      fun store_down_degrades_to_no_hitl/0]}.
+      fun store_down_degrades_to_no_hitl/0,
+      fun interrupt_uses_agui_outcome/0,
+      fun protocol_resume_round_trip/0]}.
 
 %%====================================================================
 %% 辅助
@@ -266,4 +268,59 @@ store_down_degrades_to_no_hitl() ->
     after
         meck:unload(beamai_chat_model),
         application:unset_env(beamai_agui, pause_store_name)
+    end.
+
+%% AG-UI 的 interrupt 协议：**收口与告知是同一条事件**
+%%
+%% `RUN_FINISHED` 让流关得掉（run 必须有终态），`outcome` 又说清了「不是跑完了，
+%% 是停在这儿等人」。通用客户端（`useInterrupt` / `useHumanInTheLoop`）认的是
+%% 这一条 —— `CUSTOM(interrupt)` 是我们先于协议实现的那条，只有自家前端认。
+interrupt_uses_agui_outcome() ->
+    Thread = <<"t-outcome">>,
+    _CC = mock_llm(),
+    try
+        Events = run(input(Thread, [user_msg(<<"go">>)])),
+        [Finished] = [E || E <- Events, maps:get(<<"type">>, E) =:= <<"RUN_FINISHED">>],
+        Outcome = maps:get(<<"outcome">>, Finished),
+        ?assertEqual(<<"interrupt">>, maps:get(<<"type">>, Outcome)),
+        [Interrupt] = maps:get(<<"interrupts">>, Outcome),
+        %% id 取被中断调用的 tool-call id：客户端把它原样放回 resume[].interruptId，
+        %% 服务端据此认得出"回的是不是当前这一条"
+        ?assertEqual(<<"ask1">>, maps:get(<<"id">>, Interrupt)),
+        ?assertEqual(<<"ask1">>, maps:get(<<"toolCallId">>, Interrupt)),
+        %% responseSchema 让通用客户端知道该渲染什么控件
+        Schema = maps:get(<<"responseSchema">>, Interrupt),
+        ?assertEqual([<<"decision">>], maps:get(<<"required">>, Schema)),
+        %% metadata 带着被中断的工具是谁、参数是什么
+        Pending = maps:get(<<"pendingTool">>, maps:get(<<"metadata">>, Interrupt)),
+        ?assertEqual(<<"ask_human">>, maps:get(<<"name">>, Pending))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%% 走协议正路续跑：客户端把决定放在**下一次 run 的 `resume[]`** 里带回来
+protocol_resume_round_trip() ->
+    Thread = <<"t-protocol">>,
+    _CC = mock_llm(),
+    try
+        Ev1 = run(input(Thread, [user_msg(<<"go">>)])),
+        [Finished] = [E || E <- Ev1, maps:get(<<"type">>, E) =:= <<"RUN_FINISHED">>],
+        [Interrupt] = maps:get(<<"interrupts">>, maps:get(<<"outcome">>, Finished)),
+        InterruptId = maps:get(<<"id">>, Interrupt),
+
+        %% 请求二：只带 resume[]，连 user 消息都不用有
+        {ok, Input2} = beamai_agui_types:parse_run_input(
+                         #{<<"threadId">> => Thread,
+                           <<"messages">> => [user_msg(<<"go">>)],
+                           <<"resume">> => [#{<<"interruptId">> => InterruptId,
+                                              <<"status">> => <<"reply">>,
+                                              <<"payload">> => #{<<"message">> => <<"yes">>}}]}),
+        Ev2 = run(Input2, factory()),
+        [Result] = [E || E <- Ev2, maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>],
+        ?assertEqual(InterruptId, maps:get(<<"toolCallId">>, Result)),
+        ?assertEqual(<<"yes">>, maps:get(<<"content">>, Result)),
+        %% 跑到终态，暂停清掉
+        ?assertEqual(none, beamai_agui_thread:pending(Thread))
+    after
+        meck:unload(beamai_chat_model)
     end.

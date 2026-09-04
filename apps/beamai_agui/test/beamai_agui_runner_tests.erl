@@ -152,3 +152,177 @@ factory_crash_is_contained_test() ->
     ok = beamai_agui_runner:run(input(), Crash, fun(Ev) -> Self ! {ev, Ev}, ok end),
     Types = [maps:get(<<"type">>, E) || E <- collect()],
     ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>, <<"RUN_ERROR">>], Types).
+
+%%====================================================================
+%% `RunAgentInput.context`：前端每轮重发的页面状态
+%%
+%% 它得**进 system prompt** 才有用 —— state 是给工具读的，模型看不见；context
+%% 是说给模型听的。追加而不是覆盖：工厂那份人设是常量配置，不该被一次请求改掉。
+%%====================================================================
+
+%% 捕获真正发给模型的消息，看 context 有没有到位
+capture_llm(Ref) ->
+    Self = self(),
+    meck:new(beamai_chat_model, [passthrough]),
+    meck:expect(beamai_chat_model, stream_chat,
+        fun(_Config, Messages, _RawCb, _Opts) ->
+            Self ! {Ref, Messages},
+            {ok, beamai_chat_response:new(#{content => <<"ok">>,
+                                            finish_reason => <<"stop">>})}
+        end),
+    ok.
+
+simple_factory(Prompt) ->
+    fun(_Input, RuntimeCfg) ->
+        K = beamai_chat_client:add_chat_model(beamai_chat_client:new(),
+                                              beamai_chat_model:create(mock, #{})),
+        Base = #{chat_client => K, memory => false},
+        beamai_agent:new(maps:merge(
+            case Prompt of
+                undefined -> Base;
+                _ -> Base#{system_prompt => Prompt}
+            end, RuntimeCfg))
+    end.
+
+context_input(Context) ->
+    {ok, Input} = beamai_agui_types:parse_run_input(
+                    #{<<"threadId">> => <<"t-ctx">>, <<"runId">> => <<"r1">>,
+                      <<"context">> => Context,
+                      <<"messages">> => [#{<<"role">> => <<"user">>,
+                                           <<"content">> => <<"go">>}]}),
+    Input.
+
+system_text(Messages) ->
+    iolist_to_binary([maps:get(content, M, <<>>)
+                      || M <- Messages, maps:get(role, M, undefined) =:= system]).
+
+context_is_appended_to_system_prompt_test() ->
+    Ref = make_ref(),
+    ok = capture_llm(Ref),
+    try
+        ok = beamai_agui_runner:run(
+               context_input([#{<<"description">> => <<"current page">>,
+                                <<"value">> => <<"settings">>}]),
+               simple_factory(<<"You are Bob.">>), fun(_) -> ok end),
+        Messages = receive {Ref, M} -> M after 2000 -> [] end,
+        Text = system_text(Messages),
+        %% 人设还在（追加不覆盖）
+        ?assertMatch({_, _}, binary:match(Text, <<"You are Bob.">>)),
+        %% 页面状态到了模型眼前
+        ?assertMatch({_, _}, binary:match(Text, <<"- current page settings">>)),
+        %% 抬头说清了出处：不写它这几行会被当成用户指令
+        ?assertMatch({_, _}, binary:match(Text, <<"AG-UI context">>))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%% 工厂没设人设时，context 自己就是那份 system prompt
+context_without_system_prompt_test() ->
+    Ref = make_ref(),
+    ok = capture_llm(Ref),
+    try
+        ok = beamai_agui_runner:run(
+               context_input([#{<<"value">> => <<"page: home">>}]),
+               simple_factory(undefined), fun(_) -> ok end),
+        Messages = receive {Ref, M} -> M after 2000 -> [] end,
+        ?assertMatch({_, _}, binary:match(system_text(Messages), <<"- page: home">>))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%% 这轮没 context → 一个字都不加（不拿空抬头去占 system prompt）
+no_context_leaves_prompt_alone_test() ->
+    Ref = make_ref(),
+    ok = capture_llm(Ref),
+    try
+        ok = beamai_agui_runner:run(context_input([]), simple_factory(<<"You are Bob.">>),
+                                    fun(_) -> ok end),
+        Messages = receive {Ref, M} -> M after 2000 -> [] end,
+        ?assertEqual(<<"You are Bob.">>, system_text(Messages))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%%====================================================================
+%% parentRunId：原样带着走
+%%====================================================================
+
+%% 只有 RUN_STARTED 有这一位（RUN_FINISHED / RUN_ERROR 都没有），
+%% 所以父链的声明就这一次机会
+parent_run_id_rides_on_run_started_test() ->
+    Ref = make_ref(),
+    ok = capture_llm(Ref),
+    try
+        {ok, Input} = beamai_agui_types:parse_run_input(
+                        #{<<"threadId">> => <<"t-parent">>, <<"runId">> => <<"r1">>,
+                          <<"parentRunId">> => <<"p1">>,
+                          <<"messages">> => [#{<<"role">> => <<"user">>,
+                                               <<"content">> => <<"go">>}]}),
+        Self = self(),
+        ok = beamai_agui_runner:run(Input, simple_factory(undefined),
+                                    fun(Ev) -> Self ! {ev, Ev}, ok end),
+        Events = collect(),
+        [Started] = [E || E <- Events, maps:get(<<"type">>, E) =:= <<"RUN_STARTED">>],
+        ?assertEqual(<<"p1">>, maps:get(<<"parentRunId">>, Started)),
+        [Finished] = [E || E <- Events, maps:get(<<"type">>, E) =:= <<"RUN_FINISHED">>],
+        ?assertNot(maps:is_key(<<"parentRunId">>, Finished))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%%====================================================================
+%% event_transform：事件流插件的通用挂点
+%%
+%% A2UI / 生成式 UI 那类插件住在这个位置 —— 它们把工具调用翻成活动事件，
+%% 而 runner / emitter 一个字都不用改。
+%%====================================================================
+
+transform_run(Transform) ->
+    Self = self(),
+    ok = beamai_agui_runner:run(context_input([]), simple_factory(undefined),
+                                fun(Ev) -> Self ! {ev, Ev}, ok end,
+                                #{event_transform => Transform}),
+    collect().
+
+%% 改写一条
+event_transform_rewrites_test() ->
+    Ref = make_ref(),
+    ok = capture_llm(Ref),
+    try
+        Events = transform_run(fun(E) -> E#{<<"tagged">> => true} end),
+        ?assert(lists:all(fun(E) -> maps:get(<<"tagged">>, E, false) end, Events))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%% 吞掉一条 / 在一条前后插事件
+event_transform_drops_and_expands_test() ->
+    Ref = make_ref(),
+    ok = capture_llm(Ref),
+    try
+        Events = transform_run(fun(E) ->
+            case maps:get(<<"type">>, E) of
+                <<"STATE_SNAPSHOT">> -> drop;
+                <<"RUN_STARTED">> -> [E, beamai_agui_event:custom(<<"hello">>, 1)];
+                _ -> E
+            end
+        end),
+        Types = [maps:get(<<"type">>, E) || E <- Events],
+        ?assertEqual([], [T || T <- Types, T =:= <<"STATE_SNAPSHOT">>]),
+        ?assertEqual([<<"RUN_STARTED">>, <<"CUSTOM">>], lists:sublist(Types, 2))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%% 插件自己炸了不该把 run 带走：它是旁路增强，出事就退回原事件
+event_transform_crash_is_contained_test() ->
+    Ref = make_ref(),
+    ok = capture_llm(Ref),
+    try
+        Events = transform_run(fun(_) -> error(boom) end),
+        Types = [maps:get(<<"type">>, E) || E <- Events],
+        ?assertEqual(<<"RUN_STARTED">>, hd(Types)),
+        ?assertEqual(<<"RUN_FINISHED">>, lists:last(Types))
+    after
+        meck:unload(beamai_chat_model)
+    end.
