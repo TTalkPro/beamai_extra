@@ -26,7 +26,10 @@
 -export([reasoning_start/1, reasoning_message_start/1,
          reasoning_message_content/2, reasoning_message_end/1, reasoning_end/1]).
 -export([state_snapshot/1, state_delta/1, messages_snapshot/1]).
--export([custom/2, raw/1]).
+-export([activity_snapshot/3, activity_snapshot/4, activity_delta/3]).
+-export([subagent_started/1, subagent_finished/1, subagent_error/3]).
+-export([text_message_chunk/2, text_message_chunk/3, tool_call_chunk/2, tool_call_chunk/4]).
+-export([custom/2, raw/1, tag/2]).
 
 %% 断言
 -export([type_of/1, is_terminal/1]).
@@ -207,9 +210,142 @@ state_delta(Delta) ->
     new(<<"STATE_DELTA">>, #{<<"delta">> => Delta}).
 
 %% @doc 消息历史快照
+%%
+%% AG-UI 里「这是权威的消息列表，照它对齐」。我们在**断线重连补不回缺口**时发它
+%% （`beamai_agui_session` 的环形缓冲越界）——客户端丢了中间那几条事件，增量已经
+%% 对不上了，给它一份完整的消息列表比让它带着一个洞继续渲染强。
 -spec messages_snapshot([map()]) -> event().
 messages_snapshot(Messages) ->
     new(<<"MESSAGES_SNAPSHOT">>, #{<<"messages">> => Messages}).
+
+%%--------------------------------------------------------------------
+%% activity 消息：不是聊天文本、但要在对话流里占一块
+%%--------------------------------------------------------------------
+
+%% @doc activity 快照（建消息）
+%%
+%% 生成式 UI、进度卡片这类东西。产出方是 **activity 类插件**
+%% （`beamai_agui_a2ui` / `beamai_agui_genui` / `beamai_agui_mcp_apps`），
+%% 核心路径不发这两条 —— 不装插件前端就看不到任何 activity。
+%%
+%% `activityType` 是前端挑 renderer 的依据；`replace` 为真表示这条快照**整块换掉**
+%% 上一条（A2UI 就靠它，每次发完整的一份，于是根本不需要 delta）。
+-spec activity_snapshot(binary(), binary(), term()) -> event().
+activity_snapshot(MessageId, ActivityType, Content) ->
+    activity_snapshot(MessageId, ActivityType, Content, false).
+
+-spec activity_snapshot(binary(), binary(), term(), boolean()) -> event().
+activity_snapshot(MessageId, ActivityType, Content, false) ->
+    new(<<"ACTIVITY_SNAPSHOT">>, #{<<"messageId">> => MessageId,
+                                   <<"activityType">> => ActivityType,
+                                   <<"content">> => Content});
+activity_snapshot(MessageId, ActivityType, Content, true) ->
+    new(<<"ACTIVITY_SNAPSHOT">>, #{<<"messageId">> => MessageId,
+                                   <<"activityType">> => ActivityType,
+                                   <<"content">> => Content,
+                                   <<"replace">> => true}).
+
+%% @doc activity 增量（JSON Patch）
+%%
+%% **快照必须排在任何 delta 之前**：前端把 delta 打在 `messageId` 对应的 activity
+%% 消息上，消息还没建就**悄悄丢弃** —— 不报错，只是少渲染一块。
+-spec activity_delta(binary(), binary(), [map()]) -> event().
+activity_delta(MessageId, ActivityType, Patch) ->
+    new(<<"ACTIVITY_DELTA">>, #{<<"messageId">> => MessageId,
+                                <<"activityType">> => ActivityType,
+                                <<"patch">> => Patch}).
+
+%%--------------------------------------------------------------------
+%% 子 agent lane
+%%--------------------------------------------------------------------
+
+%% @doc 一条子 agent lane 开始
+%%
+%% **这三个类型是老客户端的雷**：`@ag-ui/client` ≤ 0.0.57 在 HTTP transport 里就拿
+%% discriminated union 校验每一条事件，一条未知类型掐断整条流，客户端侧什么都救不
+%% 回来。所以产出侧有开关（`{beamai_agui, subagent_events, true}`，**缺省关**）。
+%%
+%% 相比之下**给既有事件多一个 `subagentRunId` 字段是安全的** —— AG-UI 的事件
+%% schema 是 passthrough，老客户端原样忽略。
+-spec subagent_started(map()) -> event().
+subagent_started(Info) ->
+    Fields = #{<<"subagentRunId">> => maps:get(subagent_run_id, Info),
+               <<"name">> => maps:get(name, Info, <<"subagent">>)},
+    new(<<"SUBAGENT_STARTED">>,
+        put_some(Fields, [{<<"description">>, maps:get(task, Info, undefined)},
+                          {<<"parentSubagentRunId">>,
+                           maps:get(parent_subagent_run_id, Info, undefined)},
+                          {<<"parentToolCallId">>,
+                           maps:get(parent_tool_call_id, Info, undefined)},
+                          {<<"parentMessageId">>,
+                           maps:get(parent_message_id, Info, undefined)}])).
+
+%% @doc 一条子 agent lane 收场
+%%
+%% **挂起不是失败**：AG-UI 给它留了 `outcome.type = "suspended"`，报成
+%% `SUBAGENT_ERROR` 前端会画成红条。`interruptIds` 与父那条
+%% `RUN_FINISHED.outcome.interrupts[].id` 用同一套 id（都取 pending 工具的
+%% tool-call id），客户端才对得上号。
+-spec subagent_finished(map()) -> event().
+subagent_finished(#{outcome := suspended} = Info) ->
+    Outcome0 = #{<<"type">> => <<"suspended">>},
+    Outcome = case maps:get(interrupt_ids, Info, []) of
+        [] -> Outcome0;
+        Ids -> Outcome0#{<<"interruptIds">> => Ids}
+    end,
+    new(<<"SUBAGENT_FINISHED">>,
+        #{<<"subagentRunId">> => maps:get(subagent_run_id, Info),
+          <<"outcome">> => Outcome});
+subagent_finished(Info) ->
+    Fields = #{<<"subagentRunId">> => maps:get(subagent_run_id, Info),
+               <<"outcome">> => #{<<"type">> => <<"success">>}},
+    new(<<"SUBAGENT_FINISHED">>,
+        put_some(Fields, [{<<"result">>, maps:get(result, Info, undefined)}])).
+
+%% @doc 一条子 agent lane 出错
+%%
+%% AG-UI 没有 killed / timeout 这两种收尾，按 `SUBAGENT_ERROR` 发并把原因写进
+%% `code` —— 同 `cancelled → RUN_FINISHED + result.status` 的既有取舍：宁可换个
+%% 类型说清楚，也不造协议外的类型。
+-spec subagent_error(binary(), binary(), binary()) -> event().
+subagent_error(SubagentRunId, Message, Code) ->
+    new(<<"SUBAGENT_ERROR">>, #{<<"subagentRunId">> => SubagentRunId,
+                                <<"message">> => Message,
+                                <<"code">> => Code}).
+
+%%--------------------------------------------------------------------
+%% chunk 形式（协议留给「分不出边界的生产者」的便利事件）
+%%--------------------------------------------------------------------
+
+%% @doc `TEXT_MESSAGE_CHUNK` —— 客户端自己展开成 START/CONTENT/END 三件套
+%%
+%% **我们缺省不发它**：边界我们分得出（上游 `on_message_start` / `on_message_end`
+%% 恒成对），发显式三件套严格更好。留着构造器是给宿主用的 —— 有些代理层只能转发
+%% 不带边界的 token 流，那时这一条才是对的表达。两种**不能混着发同一条消息**，
+%% 客户端会把它当成两条。
+-spec text_message_chunk(binary() | undefined, binary()) -> event().
+text_message_chunk(MessageId, Delta) ->
+    text_message_chunk(MessageId, Delta, <<"assistant">>).
+
+-spec text_message_chunk(binary() | undefined, binary(), binary()) -> event().
+text_message_chunk(MessageId, Delta, Role) ->
+    new(<<"TEXT_MESSAGE_CHUNK">>,
+        put_some(#{<<"delta">> => Delta},
+                 [{<<"messageId">>, MessageId}, {<<"role">>, Role}])).
+
+%% @doc `TOOL_CALL_CHUNK` —— 同上，工具调用那一族的合并形式
+-spec tool_call_chunk(binary() | undefined, binary()) -> event().
+tool_call_chunk(ToolCallId, Delta) ->
+    tool_call_chunk(ToolCallId, undefined, Delta, undefined).
+
+-spec tool_call_chunk(binary() | undefined, binary() | undefined,
+                      binary(), binary() | undefined) -> event().
+tool_call_chunk(ToolCallId, ToolCallName, Delta, ParentMessageId) ->
+    new(<<"TOOL_CALL_CHUNK">>,
+        put_some(#{<<"delta">> => Delta},
+                 [{<<"toolCallId">>, ToolCallId},
+                  {<<"toolCallName">>, ToolCallName},
+                  {<<"parentMessageId">>, ParentMessageId}])).
 
 %% @doc 自定义事件（协议留给宿主的扩展位）
 -spec custom(binary(), term()) -> event().
@@ -220,6 +356,22 @@ custom(Name, Value) ->
 -spec raw(term()) -> event().
 raw(Event) ->
     new(<<"RAW">>, #{<<"event">> => Event}).
+
+%% @doc 给一条事件补几个字段（已有的不覆盖）
+%%
+%% 子 agent lane 的 `subagentRunId` 就是这么打上去的：它对所有事件类型一视同仁，
+%% 统一在出口打比逐个构造器写一遍强。**已有的不覆盖** —— `SUBAGENT_STARTED`
+%% 自己那份是构造时写死的，别让 lane 的标签把它顶掉。
+-spec tag(event(), map()) -> event().
+tag(Event, Tags) when is_map(Event), is_map(Tags) ->
+    maps:fold(fun(K, V, Acc) ->
+        case maps:is_key(K, Acc) of
+            true -> Acc;
+            false -> Acc#{K => V}
+        end
+    end, Event, Tags);
+tag(Event, _) ->
+    Event.
 
 %%====================================================================
 %% 构造 - 载荷片段
@@ -279,6 +431,15 @@ usage(Usage) when is_map(Usage), map_size(Usage) > 0 ->
     end;
 usage(_) ->
     [].
+
+%% @private 只把非 undefined 的位写进去
+%%
+%% AG-UI 的这些字段**全部可选**，没有就不发 —— 发一个 null 与「没有这一位」在
+%% 客户端那儿不是一回事（`?? ` 只兜 undefined 的写法到处都是）。
+put_some(Fields, Pairs) ->
+    lists:foldl(fun({_K, undefined}, Acc) -> Acc;
+                   ({K, V}, Acc) -> Acc#{K => V}
+                end, Fields, Pairs).
 
 %%====================================================================
 %% 断言
