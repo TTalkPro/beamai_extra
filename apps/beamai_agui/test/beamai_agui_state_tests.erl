@@ -184,3 +184,65 @@ index_of(X, L) -> index_of(X, L, 1).
 index_of(X, [X | _], N) -> N;
 index_of(X, [_ | T], N) -> index_of(X, T, N + 1);
 index_of(_X, [], _N) -> 9999.
+
+%%====================================================================
+%% apply_patch：diff 的逆
+%%
+%% 会话层要维护"这个 thread 现在的 state 是什么"，而流上跑的是一条基线快照
+%% 加一串补丁。没有 apply 就只能记住最后一次快照 —— 那份在第一个补丁之后
+%% 就过期了，`/threads/:id/state` 只好撒谎。
+%%====================================================================
+
+%% diff 出来的补丁，打回去要得到那份新 state（往返无损）
+apply_patch_round_trips_diff_test() ->
+    Cases = [
+        {#{}, #{<<"a">> => 1}},
+        {#{<<"a">> => 1}, #{}},
+        {#{<<"a">> => 1}, #{<<"a">> => 2}},
+        {#{<<"a">> => #{<<"b">> => 1, <<"c">> => 2}},
+         #{<<"a">> => #{<<"b">> => 9, <<"d">> => 3}}},
+        {#{<<"list">> => [1, 2]}, #{<<"list">> => [3]}},
+        {#{<<"keep">> => <<"x">>, <<"drop">> => 1},
+         #{<<"keep">> => <<"x">>, <<"add">> => true}}
+    ],
+    lists:foreach(fun({Old, New}) ->
+        Patch = beamai_agui_state:diff(Old, New),
+        ?assertEqual(New, beamai_agui_state:apply_patch(Old, Patch))
+    end, Cases).
+
+%% 根整体换型：diff 产的是 path `/` 的 replace，apply 认得它
+apply_patch_root_replace_test() ->
+    Patch = beamai_agui_state:diff(#{<<"a">> => 1}, <<"scalar">>),
+    ?assertEqual(<<"scalar">>, beamai_agui_state:apply_patch(#{<<"a">> => 1}, Patch)).
+
+%% 键里含斜杠：路径转义了才指得对地方（不转义会写到别处去）
+apply_patch_escaped_key_test() ->
+    Old = #{<<"a/b">> => 1},
+    New = #{<<"a/b">> => 2},
+    Patch = beamai_agui_state:diff(Old, New),
+    ?assertEqual([<<"/a~1b">>], [maps:get(<<"path">>, P) || P <- Patch]),
+    ?assertEqual(New, beamai_agui_state:apply_patch(Old, Patch)).
+
+%% `~1` 先解、`~0` 后解 —— 反过来会把 `~01` 解成 `/`，而它本该是字面量 `~1`
+unescape_order_test() ->
+    ?assertEqual(<<"~1">>, beamai_agui_state:unescape(<<"~01">>)),
+    ?assertEqual(<<"/">>, beamai_agui_state:unescape(<<"~1">>)),
+    ?assertEqual(<<"~">>, beamai_agui_state:unescape(<<"~0">>)).
+
+%% 认不出的 op、指向不存在父节点的路径：跳过而不是让整份 state 作废
+apply_patch_skips_unknown_test() ->
+    State = #{<<"a">> => 1},
+    ?assertEqual(State, beamai_agui_state:apply_patch(
+                          State, [#{<<"op">> => <<"move">>, <<"path">> => <<"/a">>,
+                                    <<"from">> => <<"/b">>}])),
+    ?assertEqual(State, beamai_agui_state:apply_patch(
+                          State, [#{<<"op">> => <<"add">>, <<"path">> => <<"/x/y">>,
+                                    <<"value">> => 1}])),
+    ?assertEqual(State, beamai_agui_state:apply_patch(State, not_a_list)).
+
+%% 既有的 atom 键不该被写成两份（工具随手写的 map 里 atom 键完全可能）
+apply_patch_keeps_atom_key_shape_test() ->
+    Patched = beamai_agui_state:apply_patch(
+                #{count => 1}, [#{<<"op">> => <<"replace">>, <<"path">> => <<"/count">>,
+                                  <<"value">> => 2}]),
+    ?assertEqual(#{count => 2}, Patched).

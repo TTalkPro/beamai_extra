@@ -26,7 +26,7 @@
 %%%-------------------------------------------------------------------
 -module(beamai_agui_state).
 
--export([diff/2, escape/1]).
+-export([diff/2, apply_patch/2, escape/1, unescape/1]).
 
 -export_type([patch/0, op/0]).
 
@@ -44,11 +44,33 @@
 diff(Old, New) ->
     lists:reverse(diff(Old, New, <<>>, [])).
 
+%% @doc 把一串补丁打到一份 state 上（`diff/2` 的逆）
+%%
+%% 为什么需要它：会话层要维护"这个 thread 现在的 state 是什么"，而流上跑的是
+%% `STATE_SNAPSHOT` 立基线 + 一串 `STATE_DELTA`。没有 apply 就只能记住最后一次
+%% 快照 —— 那份在第一个补丁之后就过期了，`/threads/:id/state` 只好撒谎。
+%%
+%% **只认自己产得出的三种 op**（`add` / `remove` / `replace`），别的原样跳过 ——
+%% 补丁也可能来自宿主自己发的 `STATE_DELTA`，一条不认识的 op 不该让整份 state 作废。
+%% 路径指向不存在的父节点同样跳过：宁可少改一处，也不要凭空造出一棵中间树。
+-spec apply_patch(term(), patch()) -> term().
+apply_patch(State, Ops) when is_list(Ops) ->
+    lists:foldl(fun apply_op/2, State, Ops);
+apply_patch(State, _) ->
+    State.
+
 %% @doc JSON Pointer 的单段转义（RFC 6901：`~` → `~0`，`/` → `~1`）
 -spec escape(binary()) -> binary().
 escape(Segment) ->
     binary:replace(binary:replace(Segment, <<"~">>, <<"~0">>, [global]),
                    <<"/">>, <<"~1">>, [global]).
+
+%% @doc `escape/1` 的逆（**`~1` 必须先解**：先解 `~0` 会把 `~01` 变成 `~1` 再变成
+%% `/`，而它本该是字面量 `~1`）
+-spec unescape(binary()) -> binary().
+unescape(Segment) ->
+    binary:replace(binary:replace(Segment, <<"~1">>, <<"/">>, [global]),
+                   <<"~0">>, <<"~">>, [global]).
 
 %%====================================================================
 %% 内部
@@ -102,3 +124,82 @@ op(Op, Path) ->
 
 op(Op, Path, Value) ->
     #{<<"op">> => Op, <<"path">> => Path, <<"value">> => Value}.
+
+%%====================================================================
+%% 内部 - 打补丁
+%%====================================================================
+
+%% @private 根整体替换：与 diff/3 的根分支对称（那条产的就是 path `/`）
+apply_op(#{<<"op">> := <<"replace">>, <<"path">> := <<"/">>, <<"value">> := V}, _State) ->
+    V;
+apply_op(#{<<"op">> := Op, <<"path">> := Path} = PatchOp, State) ->
+    case segments(Path) of
+        [] ->
+            State;
+        Segments ->
+            update(State, Segments, Op, maps:get(<<"value">>, PatchOp, undefined))
+    end;
+apply_op(_Unknown, State) ->
+    State.
+
+%% @private 路径拆成段（去掉前导 `/`，逐段反转义）
+segments(<<"/", Rest/binary>>) ->
+    [unescape(S) || S <- binary:split(Rest, <<"/">>, [global])];
+segments(<<>>) ->
+    [];
+segments(Path) when is_binary(Path) ->
+    %% 不以 `/` 开头不是合法 JSON Pointer，但宽容地当作单段处理
+    [unescape(Path)];
+segments(_) ->
+    [].
+
+%% @private 沿路径下钻到父节点再改那一格
+update(Map, [Key], Op, Value) when is_map(Map) ->
+    case Op of
+        <<"remove">> -> del(Key, Map);
+        <<"add">> -> put(Key, Value, Map);
+        <<"replace">> -> put(Key, Value, Map);
+        _ -> Map
+    end;
+update(Map, [Key | Rest], Op, Value) when is_map(Map) ->
+    case find(Key, Map) of
+        {ok, Child} when is_map(Child) ->
+            put(Key, update(Child, Rest, Op, Value), Map);
+        _ ->
+            %% 父节点不存在或不是 map：跳过（见 apply_patch/2 的模块说明）
+            Map
+    end;
+update(Other, _Segments, _Op, _Value) ->
+    Other.
+
+%% @private 写一格：既有键是什么形态就沿用什么形态（atom 键的 map 不该被写成两份）
+put(Key, Value, Map) ->
+    Map2 = maps:remove(Key, Map),
+    case existing_atom_key(Key, Map) of
+        {ok, Atom} -> (maps:remove(Atom, Map2))#{Atom => Value};
+        error -> Map2#{Key => Value}
+    end.
+
+%% @private 删一格（binary 与同名 atom 两种形态都删）
+del(Key, Map) ->
+    Map2 = maps:remove(Key, Map),
+    case existing_atom_key(Key, Map) of
+        {ok, Atom} -> maps:remove(Atom, Map2);
+        error -> Map2
+    end.
+
+%% @private 这张 map 里有没有与该 binary 键同名的 atom 键
+existing_atom_key(Key, Map) ->
+    case maps:is_key(Key, Map) of
+        true ->
+            error;
+        false ->
+            try binary_to_existing_atom(Key, utf8) of
+                Atom -> case maps:is_key(Atom, Map) of
+                            true -> {ok, Atom};
+                            false -> error
+                        end
+            catch
+                error:badarg -> error
+            end
+    end.

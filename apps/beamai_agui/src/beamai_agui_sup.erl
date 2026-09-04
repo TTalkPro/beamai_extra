@@ -4,16 +4,23 @@
 %%% ```
 %%% beamai_agui_sup
 %%% ├── beamai_agui_registry (worker)          %% agent 工厂注册表
+%%% ├── beamai_agui_session_sup (supervisor)   %% 会话进程（动态）
+%%% │   └── beamai_agui_session (worker) ×N    %% 一个 thread 一个
+%%% ├── beamai_agui_sessions (worker)          %% threadId → 会话进程
 %%% └── beamai_pause_store_ets|_dets (worker)  %% thread 的未决暂停快照
 %%% ```
 %%%
-%%% run 本身**不进监督树**：一次 run 的生命周期绑在它的 HTTP 连接上
-%%% （连接断了这次 run 就没有意义），由适配器 spawn_link，见
-%%% beamai_agui_cowboy_handler。
+%%% **run 进程挂在会话下，不挂在 HTTP 连接上** —— 这正是会话层要补的那件事：
+%%% 连接断了 run 照跑，客户端重连凭 `Last-Event-ID` 补缺口。见
+%%% beamai_agui_session 模块头。（会话层没起来时 beamai_agui_cowboy_handler
+%%% 退化成"run 绑在请求上"的老行为，少一层能力而不是坏掉。）
 %%%
-%%% 跨请求活下来的不是 run 进程而是**中断态快照**：暂停时落进 pause store，
-%%% 下个请求由新进程读回来接着跑。起哪一个（ETS / DETS / 完全不起）由
-%%% beamai_agui_thread:backend/0 按应用配置决定，见那个模块的模块头。
+%%% 起的顺序有意义：`beamai_agui_sessions` 建会话要 `supervisor:start_child`，
+%%% 故 `beamai_agui_session_sup` 必须排在它前面。
+%%%
+%%% 会话是**进程内**的，节点一重启就没了。跨重启活下来的是**中断态快照**：
+%%% 暂停时落进 pause store，下个请求由新进程读回来接着跑。起哪一个
+%%% （ETS / DETS / 完全不起）由 beamai_agui_thread:backend/0 按应用配置决定。
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -40,7 +47,24 @@ init([]) ->
         type => worker,
         modules => [beamai_agui_registry]
     },
-    {ok, {SupFlags, [Registry | pause_store_child()]}}.
+    SessionSup = #{
+        id => beamai_agui_session_sup,
+        start => {beamai_agui_session_sup, start_link, []},
+        restart => permanent,
+        shutdown => infinity,
+        type => supervisor,
+        modules => [beamai_agui_session_sup]
+    },
+    Sessions = #{
+        id => beamai_agui_sessions,
+        start => {beamai_agui_sessions, start_link, []},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [beamai_agui_sessions]
+    },
+    Children = [Registry, SessionSup, Sessions | pause_store_child()],
+    {ok, {SupFlags, Children}}.
 
 %% @private 内置 pause store（宿主给了自己的句柄就不起）
 pause_store_child() ->
