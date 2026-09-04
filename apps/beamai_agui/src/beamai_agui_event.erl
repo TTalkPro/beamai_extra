@@ -225,7 +225,8 @@ messages_snapshot(Messages) ->
 %% @doc activity 快照（建消息）
 %%
 %% 生成式 UI、进度卡片这类东西。产出方是 **activity 类插件**
-%% （`beamai_agui_a2ui` / `beamai_agui_genui` / `beamai_agui_mcp_apps`），
+%% （`beamai_agui_a2ui` / `beamai_agui_mcp_apps`，以及 examples 里的
+%% `example_agui_genui`），
 %% 核心路径不发这两条 —— 不装插件前端就看不到任何 activity。
 %%
 %% `activityType` 是前端挑 renderer 的依据；`replace` 为真表示这条快照**整块换掉**

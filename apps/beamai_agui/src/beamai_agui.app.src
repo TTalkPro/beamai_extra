@@ -40,10 +40,11 @@
         beamai_agui_state,
         %% 子 agent lane（SUBAGENT_* + subagentRunId 标签）
         beamai_agui_subagent,
-        %% 事件流插件：公共零件 + 三个 activity 类插件
+        %% 事件流插件：公共零件 + 两个 activity 类插件
+        %% （Open Generative UI 那个在 examples/ —— 它是某个前端 runtime 的
+        %%  中间件约定，不是协议，见 example_agui_genui 模块头）
         beamai_agui_plugin,
         beamai_agui_a2ui,
-        beamai_agui_genui,
         beamai_agui_mcp_apps,
         %% 一次 run 的编排
         beamai_agui_runner,

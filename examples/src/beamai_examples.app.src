@@ -19,7 +19,9 @@
         example_agui_durable,
         %% AG-UI 全能力走查（离线，剧本化 LLM）
         example_agui_scripted,
-        example_agui_full
+        example_agui_full,
+        %% Open Generative UI 插件（示例：它是前端 runtime 的中间件约定，不是协议）
+        example_agui_genui
     ]},
     {licenses, ["Apache-2.0"]},
     {links, []}

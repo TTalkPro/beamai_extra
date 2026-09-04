@@ -1,10 +1,26 @@
 %%%-------------------------------------------------------------------
-%%% @doc Open Generative UI —— 模型直接生成一块**沙箱 UI**（可选插件）
+%%% @doc Open Generative UI —— 模型直接生成一块**沙箱 UI**（示例插件）
 %%%
 %%% 移植自 CopilotKit 的 `open-generative-ui-middleware`：工具名
 %%% `generateSandboxedUi`、活动类型 `open-generative-ui`、`ACTIVITY_SNAPSHOT` /
 %%% `ACTIVITY_DELTA` 的 JSON Patch 形状全部对齐，前端那半边（沙箱 iframe 的
 %%% renderer）原样可用。
+%%%
+%%% == 它为什么在 examples 里，不在 `beamai_agui` 里 ==
+%%%
+%%% 判据是**协议认不认**。AG-UI 协议层只认 `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA`
+%%% 这对**通用**事件；而 `generateSandboxedUi` 这个工具名、`open-generative-ui`
+%%% 这个活动类型、以及下面那套 JSON Patch 的形状，全是 **CopilotKit Runtime 的一个
+%%% 可选中间件**自己的约定 —— 上游自己的分层也是这么切的。
+%%%
+%%% 所以：**通用的那半留在库里** —— `beamai_agui_event` 认 activity 事件、
+%%% `beamai_agui_plugin` 提供 `tool_watcher` / `compose`、`/info` 有
+%%% `openGenerativeUIEnabled` 这个位；**约定的那半是一份示例**，照抄改写即可
+%%% （换个工具名、换套 patch 形状，复制这个文件改就是了）。
+%%%
+%%% 与它并列的 `beamai_agui_a2ui` 留在库里，判据同一条：A2UI 有自己的外部规范
+%%% （catalog id 指向 `a2ui.org/specification/v0_9/...`），不绑某一个前端 runtime
+%%% 的中间件实现。
 %%%
 %%% == 它是可选插件，不是新机制 ==
 %%%
@@ -52,7 +68,7 @@
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
--module(beamai_agui_genui).
+-module(example_agui_genui).
 
 -export([tool_name/0, activity_type/0, design_skill/0]).
 -export([sandboxed_ui_tool/0, sandboxed_ui_tool/1, with_tool/1, with_tool/2]).
@@ -222,9 +238,9 @@ description() ->
       "Websandbox.connection.remote.<functionName>(args) which returns a Promise.\n\n"
       "You CAN use external libraries from CDNs by including <script> or <link> tags in the "
       "HTML <head> (e.g. Chart.js, D3, Three.js). CDN resources load normally inside the sandbox.\n\n"
-      "PARAMETER ORDER IS CRITICAL — generate parameters in exactly this order:\n"
+      "PARAMETER ORDER IS CRITICAL -- generate parameters in exactly this order:\n"
       "1. initialHeight + placeholderMessages (shown to user while generating)\n"
-      "2. css (all styles FIRST — the user sees a placeholder until CSS is complete)\n"
+      "2. css (all styles FIRST -- the user sees a placeholder until CSS is complete)\n"
       "3. html (the UI markup)\n"
       "4. jsFunctions (reusable helper functions)\n"
       "5. jsExpressions (applied one-by-one)">>.
@@ -235,7 +251,7 @@ description() ->
 design_skill() ->
     <<"When generating UI with generateSandboxedUi, follow these design principles "
       "inspired by shadcn/ui:\n\n"
-      "- Use a minimal, flat aesthetic. Avoid drop shadows and gradients — rely on subtle "
+      "- Use a minimal, flat aesthetic. Avoid drop shadows and gradients -- rely on subtle "
       "borders (1px solid, light gray like #e5e7eb) to define surfaces.\n"
       "- Neutral base palette: white backgrounds, zinc/slate gray text (#09090b for headings, "
       "#71717a for secondary text). One accent color for interactive elements.\n"
@@ -246,4 +262,4 @@ design_skill() ->
       "Subtle hover state.\n"
       "- Use CSS Grid or Flexbox for layout. Ensure the UI looks good at any width.\n"
       "- Minimal transitions (150ms) for hover/focus states only. No decorative animations.\n"
-      "- Keep the UI focused and dense — compact spacing (8-12px gaps, 10-14px padding).">>.
+      "- Keep the UI focused and dense -- compact spacing (8-12px gaps, 10-14px padding).">>.

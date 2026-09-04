@@ -192,7 +192,7 @@ factory(Opts) ->
                   system_prompt => <<"你是演示助手。"/utf8>>},
         Base = case maps:get(with_plugin_tools, Opts, undefined) of
                    a2ui -> beamai_agui_a2ui:with_tool(Base0);
-                   genui -> beamai_agui_genui:with_tool(Base0);
+                   genui -> example_agui_genui:with_tool(Base0);
                    _ -> Base0
                end,
         Interrupt = case maps:get(interrupt_tools, Opts, []) of
@@ -486,7 +486,7 @@ do_run(genui) ->
     ok = script([example_agui_scripted:tool_call(<<"c1">>, <<"generateSandboxedUi">>, Args),
                  example_agui_scripted:text(<<"UI 生成好了。"/utf8>>)]),
     Port = serve(#{factory => factory(#{with_plugin_tools => genui}),
-                   event_transform => beamai_agui_genui:event_transform(),
+                   event_transform => example_agui_genui:event_transform(),
                    open_generative_ui => true}),
 
     {200, _, Data} = post(Port, "/agui/run", body(<<"t-genui">>, <<"画个卡片"/utf8>>)),

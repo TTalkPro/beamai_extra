@@ -1,9 +1,10 @@
 %%%-------------------------------------------------------------------
 %%% @doc A2UI —— 声明式生成式 UI（可选插件）
 %%%
-%%% 移植自 `@ag-ui/a2ui-middleware`。与 `beamai_agui_genui` 的分工：
+%%% 移植自 `@ag-ui/a2ui-middleware`。与 Open Generative UI
+%%% （`example_agui_genui`，在 examples 里）的分工：
 %%%
-%%% | | `beamai_agui_genui`（Open Generative UI） | 本模块（A2UI） |
+%%% | | `example_agui_genui`（Open Generative UI） | 本模块（A2UI） |
 %%% |---|---|---|
 %%% | 模型生成什么 | 一整块 HTML/CSS/JS | **组件树**（只能用 catalog 里有的组件） |
 %%% | 谁来渲染 | 沙箱 iframe 执行模型写的代码 | 前端按自己的组件库渲染 |
@@ -11,6 +12,11 @@
 %%% | 交互回流 | 沙箱自己的通道 | `forwardedProps.a2uiAction`（见 input_transform/0） |
 %%%
 %%% 要「像素级自由」用 genui，要「设计系统一致 + 不执行任意代码」用 A2UI。
+%%%
+%%% **A2UI 留在库里、genui 在 examples 里**，判据是「协议认不认」：A2UI 有自己的
+%%% 外部规范（catalog id 指向 `a2ui.org/specification/v0_9/...`），不绑某一个前端
+%%% runtime；而 genui 那套工具名与 patch 形状是 CopilotKit Runtime 一个可选中间件
+%%% 自己的约定 —— 见 `example_agui_genui` 模块头。
 %%%
 %%% == 装 ==
 %%%

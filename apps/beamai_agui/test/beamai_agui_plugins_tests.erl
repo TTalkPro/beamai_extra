@@ -4,6 +4,9 @@
 %%% 这些用例守的是**猜错了前端不报错、只会静默少渲染**的那几条：op 顺序、
 %%% `replace` 位、null 值整条跳过。单测是唯一会替我们盯住它们的东西 ——
 %%% 真前端不会为一条错的 patch 报错。
+%%%
+%%% Open Generative UI 那个插件在 examples 里（它是某个前端 runtime 的中间件约定，
+%%% 不是协议），它的用例在 `examples/test/example_agui_genui_tests.erl`。
 %%% @end
 %%%-------------------------------------------------------------------
 -module(beamai_agui_plugins_tests).

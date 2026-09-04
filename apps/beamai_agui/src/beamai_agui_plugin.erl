@@ -1,9 +1,10 @@
 %%%-------------------------------------------------------------------
 %%% @doc 事件流插件的公共零件
 %%%
-%%% 三个 activity 类插件（`beamai_agui_a2ui` / `beamai_agui_genui` /
-%%% `beamai_agui_mcp_apps`）干的是同一件事：**盯住某个工具的调用，把它的参数
-%%% 翻成 activity 事件**。差别只在翻成什么形状。公共的那一半在这里。
+%%% activity 类插件（`beamai_agui_a2ui` / `beamai_agui_mcp_apps`，以及 examples 里的
+%%% `example_agui_genui`）干的是同一件事：**盯住某个工具的调用，把它的参数翻成
+%%% activity 事件**。差别只在翻成什么形状。公共的那一半在这里 —— 所以宿主自己写
+%%% 一个 activity 插件时，要抄的只是 `on_args` 那个函数。
 %%%
 %%% == 为什么状态放进程字典 ==
 %%%

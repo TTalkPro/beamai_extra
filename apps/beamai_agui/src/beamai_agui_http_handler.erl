@@ -50,8 +50,9 @@
 -type config() :: #{
     %% 该端点固定服务的 agent 名；不给则从 forwardedProps.agent 取
     agent => binary(),
-    %% 事件流 / 入站插件（`beamai_agui_a2ui` / `_genui` / `_mcp_apps` 各产一个；
-    %% 装两个以上用 `beamai_agui_plugin:compose/1` 串起来）
+    %% 事件流 / 入站插件（`beamai_agui_a2ui` / `beamai_agui_mcp_apps` 各产一个，
+    %% examples 里的 `example_agui_genui` 也是；装两个以上用
+    %% `beamai_agui_plugin:compose/1` 串起来）
     event_transform => beamai_agui_plugin:transform(),
     input_transform => fun((beamai_agui_types:run_input()) ->
                               beamai_agui_types:run_input()),
