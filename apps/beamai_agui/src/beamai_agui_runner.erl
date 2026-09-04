@@ -33,9 +33,13 @@
 -type sink() :: fun((beamai_agui_event:event()) -> ok).
 
 %% - `event_transform` —— 事件流插件的挂点，见 beamai_agui_emitter:emit/2
+%% - `input_transform` —— 入站挂点：改写本轮的 RunAgentInput（A2UI 的用户动作回流
+%%   走这条）。**在解析之后、分路之前**跑，于是新跑与续跑两条路都看得到它的产出
 -type opts() :: #{
     event_transform => fun((beamai_agui_event:event()) ->
-                              beamai_agui_event:event() | [beamai_agui_event:event()] | drop)
+                              beamai_agui_event:event() | [beamai_agui_event:event()] | drop),
+    input_transform => fun((beamai_agui_types:run_input()) ->
+                              beamai_agui_types:run_input())
 }.
 
 -export_type([sink/0, opts/0]).
@@ -54,7 +58,8 @@ run(Input, Factory, Sink) ->
 %% @doc 同 run/3，另带运行时选项（见 opts/0）
 -spec run(beamai_agui_types:run_input(),
           beamai_agui_registry:factory(), sink(), opts()) -> ok.
-run(Input, Factory, Sink, Opts) ->
+run(Input0, Factory, Sink, Opts) ->
+    Input = transform_input(Input0, Opts),
     ThreadId = beamai_agui_types:thread_id(Input),
     Emitter = beamai_agui_emitter:new(#{
         thread_id => ThreadId,
@@ -78,6 +83,29 @@ run(Input, Factory, Sink, Opts) ->
             beamai_agui_emitter:run_error(Emitter, Reason)
     after
         beamai_agui_emitter:close(Emitter)
+    end.
+
+%%====================================================================
+%% 内部 - 入站挂点
+%%====================================================================
+
+%% @private 插件改写本轮输入（A2UI 的用户动作回流走这条）
+%%
+%% 插件炸了退回原输入 —— 与 `event_transform` 同款取舍：旁路增强不该让主流程出事。
+transform_input(Input, Opts) ->
+    case maps:get(input_transform, Opts, undefined) of
+        Fun when is_function(Fun, 1) ->
+            try Fun(Input) of
+                #{thread_id := _} = Transformed -> Transformed;
+                _ -> Input
+            catch
+                Class:Reason:Stack ->
+                    logger:warning("beamai_agui input_transform crashed: ~p:~p",
+                                   [Class, Reason], #{stacktrace => Stack}),
+                    Input
+            end;
+        _ ->
+            Input
     end.
 
 %%====================================================================
@@ -254,7 +282,8 @@ initial_state(Input) ->
 %% - callbacks：事件流的来源，不传就是个哑巴 agent；
 %% - conversation_id：对齐 threadId，跨请求的历史与暂停都靠它索引；
 %% - initial_state：前端持有的那份共享状态，工具在它之上改；
-%% - pause_store：中断态落库的去处，不配就没有跨请求 HITL。
+%% - pause_store：中断态落库的去处，不配就没有跨请求 HITL；
+%% - subagent_observer：子 agent lane 的观察者（开关开着才有，见下）。
 runtime_config(Input, Emitter) ->
     Base = #{
         callbacks => beamai_agui_emitter:callbacks(Emitter),
@@ -262,9 +291,17 @@ runtime_config(Input, Emitter) ->
         %% 前端持有的那份 state 种进 agent：工具在它之上增量改
         initial_state => initial_state(Input)
     },
-    case beamai_agui_thread:available_store() of
+    WithStore = case beamai_agui_thread:available_store() of
         {ok, Store} -> Base#{pause_store => Store};
         none -> Base
+    end,
+    %% 子 agent lane 的观察者：**开关关着就不放这个键**，工厂那边
+    %% `maps:get(subagent_observer, RuntimeCfg, undefined)` 取到 undefined，
+    %% `beamai_agui_subagent:delegate_tool/2` 于是原样返回上游的工具 ——
+    %% 「不塞就什么都不会发生」。
+    case beamai_agui_subagent:enabled() of
+        true -> WithStore#{subagent_observer => beamai_agui_subagent:observer(Emitter)};
+        false -> WithStore
     end.
 
 finish(Emitter, {ok, Result, _State}) ->

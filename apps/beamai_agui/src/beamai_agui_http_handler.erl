@@ -45,11 +45,16 @@
 -export([handle_threads/1, handle_thread_events/2, handle_thread_state/2,
          handle_thread_stop/2, handle_thread_delete/2]).
 -export([sse_headers/0, json_headers/0, cors_headers/0]).
--export([json_response/2, since_of/2]).
+-export([json_response/2, since_of/2, run_opts/1]).
 
 -type config() :: #{
     %% 该端点固定服务的 agent 名；不给则从 forwardedProps.agent 取
     agent => binary(),
+    %% 事件流 / 入站插件（`beamai_agui_a2ui` / `_genui` / `_mcp_apps` 各产一个；
+    %% 装两个以上用 `beamai_agui_plugin:compose/1` 串起来）
+    event_transform => beamai_agui_plugin:transform(),
+    input_transform => fun((beamai_agui_types:run_input()) ->
+                              beamai_agui_types:run_input()),
     %% `/info` 里如实声明的可选能力位（都是**装配方**才知道的事，本层不猜）
     suggestions => boolean(),
     open_generative_ui => boolean(),
@@ -241,6 +246,13 @@ cors_headers() ->
 -spec json_response(pos_integer(), map()) -> {ok, binary(), [{binary(), binary()}]}.
 json_response(_Status, Body) ->
     {ok, beamai_utils:encode_json(Body), json_headers()}.
+
+%% @doc 端点配置里属于 `beamai_agui_runner:run/4` 的那几个键
+%%
+%% 只挑出来、不做别的 —— 适配器不该知道 runner 的选项长什么样。
+-spec run_opts(config()) -> beamai_agui_runner:opts().
+run_opts(Config) ->
+    maps:with([event_transform, input_transform], Config).
 
 %% @doc 从查询串 / 头里解出重连水位
 %%
