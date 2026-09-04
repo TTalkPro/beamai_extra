@@ -109,8 +109,28 @@ info_endpoint(#{port := Port}) ->
     ?assertEqual(200, Status),
     ?assertEqual(<<"application/json">>, header(<<"content-type">>, Headers)),
     Json = beamai_utils:parse_json(Data),
-    ?assertEqual([<<"echo">>], maps:get(<<"agents">>, Json)),
-    ?assertEqual(<<"beamai_agui">>, maps:get(<<"runtime">>, Json)).
+    ?assertEqual(<<"beamai_agui">>, maps:get(<<"runtime">>, Json)),
+    %% agents 是**以 id 为键的字典**，不是数组 —— 给数组前端会把下标当 agent id
+    Agents = maps:get(<<"agents">>, Json),
+    ?assert(is_map(Agents)),
+    ?assertEqual([<<"echo">>], maps:keys(Agents)),
+    Echo = maps:get(<<"echo">>, Agents),
+    ?assertEqual(<<"echo">>, maps:get(<<"name">>, Echo)),
+    %% 能力位：走 AG-UI 的 interrupt 协议、逐 token 出、认前端工具、有共享状态
+    Caps = maps:get(<<"capabilities">>, Echo),
+    ?assertEqual(true, maps:get(<<"interrupts">>, maps:get(<<"humanInTheLoop">>, Caps))),
+    ?assertEqual(true, maps:get(<<"streaming">>, maps:get(<<"transport">>, Caps))),
+    ?assertEqual(true, maps:get(<<"clientProvided">>, maps:get(<<"tools">>, Caps))),
+    ?assertEqual(true, maps:get(<<"deltas">>, maps:get(<<"state">>, Caps))),
+    %% 不谎报：三个插件位缺省全 false
+    ?assertEqual(false, maps:get(<<"suggestions">>, Json)),
+    ?assertEqual(false, maps:get(<<"openGenerativeUIEnabled">>, Json)),
+    ?assertEqual(false, maps:get(<<"a2uiEnabled">>, Json)),
+    %% threadEndpoints **无论开关开关这个键都发**：省略与"明确说没有"在客户端
+    %% 那儿是两码事（本例没起会话层，故如实全报 false）
+    Endpoints = maps:get(<<"threadEndpoints">>, Json),
+    ?assertEqual(false, maps:get(<<"list">>, Endpoints)),
+    ?assertEqual(false, maps:get(<<"realtimeMetadata">>, Endpoints)).
 
 %% 端点没绑 agent、请求也没指定 → 404（不是 500）
 unknown_agent(#{port := Port}) ->
