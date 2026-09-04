@@ -140,12 +140,14 @@ fresh_run(Input, Factory, Emitter) ->
 
 resume_run(Input, Factory, Emitter, Snapshot) ->
     PendingId = beamai_agui_thread:pending_tool_call_id(Snapshot),
+    Kind = pending_kind(Input, Snapshot),
     case beamai_agui_types:resume_input(Input, PendingId) of
         none ->
             %% thread 卡在暂停上，而这个请求没带任何可用的输入
             beamai_agui_emitter:run_error(Emitter, {awaiting_input, PendingId});
-        {ok, Decision, Payload} ->
-            ok = emit_resume_result(Emitter, PendingId, Decision, Payload),
+        {ok, Decision0, Payload0} ->
+            {Decision, Payload} = settle(Kind, Decision0, Payload0),
+            ok = emit_resume_result(Emitter, PendingId, Kind, Decision, Payload),
             with_agent(Input, Factory, Emitter,
                        fun(Agent) ->
                            %% stream_resume 而非 resume：人回完话之后的那段答案
@@ -154,19 +156,92 @@ resume_run(Input, Factory, Emitter, Snapshot) ->
                        end)
     end.
 
+%% @private 这次暂停在等的是**审批**还是**前端工具的执行结果**
+%%
+%% 判据只有一条：被中断的那个工具是不是 `RunAgentInput.tools` 里声明的。
+%% 客户端每次请求都重发 `tools`，所以续跑那一轮照样算得出来。
+pending_kind(Input, Snapshot) ->
+    case beamai_agui_thread:pending_tool_call(Snapshot) of
+        TC when is_map(TC) ->
+            {_Id, Name, _Args} = beamai_tool:parse_tool_call(TC),
+            case lists:member(Name, beamai_agui_types:frontend_tool_names(Input)) of
+                true -> frontend_tool;
+                false -> approval
+            end;
+        _ ->
+            approval
+    end.
+
+%% @private 把客户端的答复翻成上游 `resume/3` 认的 {Decision, Payload}
+%%
+%% **前端工具没有"批准"这回事**：服务端没有实现，批准了也没人去执行。它要的是
+%% 这次调用**返回了什么** —— 所以 `payload.result` 一出现就走 `reply`
+%% （上游的 `reply` 语义正是"载荷即被中断工具的结果"）。
+%%
+%% 客户端只回了个决定、没给结果时**不伪造成功**：如实告诉模型这次调用没拿到结果。
+%% 曾经这里把协议字段 `status:"resolved"` 当成自由文本发成了工具结果，模型据此
+%% 宣布"已经打过招呼啦" —— 而客户端从头到尾没被调用过。
+settle(frontend_tool, Decision, Payload) ->
+    case frontend_result(Decision, Payload) of
+        undefined when Decision =:= <<"rejected">> ->
+            %% 人按了取消：如实告诉模型这一步没做成
+            {<<"rejected">>, Payload};
+        undefined ->
+            {<<"reply">>, Payload#{message => no_result_text()}};
+        Result ->
+            {<<"reply">>, Payload#{message => Result}}
+    end;
+settle(approval, Decision, Payload) ->
+    {Decision, Payload}.
+
+%% @private 客户端把这次调用的结果放哪儿了
+%%
+%% 三条来路，都是「这次调用返回了什么」的写法：
+%%
+%% - `payload.result` —— 我们在 `responseSchema` 里要求的那个字段；
+%% - `payload.message` —— **AG-UI 的原生路径**：客户端执行完，把结果作为一条
+%%   `role=tool` 消息回传，`beamai_agui_types` 把它归一成了 `message`；
+%% - 决策位上的一段自由文本 —— 人直接打了一句话（聊天式 HITL 的回落）。
+frontend_result(Decision, Payload) ->
+    case maps:get(result, Payload, undefined) of
+        undefined ->
+            first_text([maps:get(message, Payload, undefined), free_text(Decision)]);
+        Result ->
+            to_text(Result)
+    end.
+
+%% @private 决策位上不是关键词的那种，是人打的一句话
+free_text(D) when is_binary(D) ->
+    case lists:member(D, [<<"approved">>, <<"rejected">>, <<"reject">>, <<"reply">>]) of
+        true -> undefined;
+        false -> D
+    end;
+free_text(_) ->
+    undefined.
+
+first_text(Values) ->
+    case [V || V <- Values, is_binary(V), V =/= <<>>] of
+        [V | _] -> V;
+        [] -> undefined
+    end.
+
+no_result_text() ->
+    <<"[客户端没有回传这次调用的结果 —— 前端工具的答复应当放在 "
+      "resume[].payload.result 里]"/utf8>>.
+
 %% @private 把人给的答复补成被中断那次调用的 TOOL_CALL_RESULT
 %%
 %% 前端在暂停时看到的是一个**没有结果**的 TOOL_CALL_START/ARGS/END —— 那正是
 %% 「等你回话」的表示。续跑时得把这个坑填上，否则前端那次调用永远悬着。
 %%
-%% 只有结果**由人给出**时才在这里发（reply / 拒绝 / 自由文本）。approved 是让
-%% 服务端真去执行那个工具，结果得等执行完才知道——那一条由上游 resume 执行时
-%% 触发的 on_tool_result 经 emitter 发出，**不能在这里也发一遍**，否则前端会
-%% 看到同一次调用的两条结果。
-emit_resume_result(_Emitter, undefined, _Decision, _Payload) ->
+%% 只有结果**已经确定**时才在这里发（前端回传的结果 / 拒绝语 / 人打的一句话）。
+%% `approved` 是让服务端真去执行那个工具，结果得等执行完才知道 —— 那一条由上游
+%% resume 执行时触发的 on_tool_result 经 emitter 发出，**不能在这里也发一遍**，
+%% 否则前端会看到同一次调用的两条结果。
+emit_resume_result(_Emitter, undefined, _Kind, _Decision, _Payload) ->
     ok;
-emit_resume_result(Emitter, ToolCallId, Decision, Payload) ->
-    case human_result(Decision, Payload) of
+emit_resume_result(Emitter, ToolCallId, Kind, Decision, Payload) ->
+    case human_result(Kind, Decision, Payload) of
         undefined ->
             ok;
         Content ->
@@ -176,17 +251,27 @@ emit_resume_result(Emitter, ToolCallId, Decision, Payload) ->
     end.
 
 %% 与上游 beamai_agent_interrupt:resume_action/3 的决策关键词保持一致
-human_result(<<"approved">>, _Payload) -> undefined;
-human_result(<<"rejected">>, Payload) -> reject_text(Payload);
-human_result(<<"reject">>, Payload) -> reject_text(Payload);
-human_result(<<"reply">>, Payload) -> maps:get(message, Payload, <<>>);
-human_result(Text, _Payload) when is_binary(Text) -> Text;
-human_result(_Decision, _Payload) -> undefined.
+%%
+%% `settle/3` 已经把前端工具那条路归一成了 `reply`，所以这里两类走同一张表。
+human_result(_Kind, <<"approved">>, _Payload) -> undefined;
+human_result(_Kind, <<"rejected">>, Payload) -> reject_text(Payload);
+human_result(_Kind, <<"reject">>, Payload) -> reject_text(Payload);
+human_result(_Kind, <<"reply">>, Payload) -> to_text(maps:get(message, Payload, <<>>));
+human_result(_Kind, Text, _Payload) when is_binary(Text) -> Text;
+human_result(_Kind, _Decision, _Payload) -> undefined.
 
 reject_text(#{message := R}) when is_binary(R), R =/= <<>> ->
     <<"已拒绝执行："/utf8, R/binary>>;
 reject_text(_) ->
     <<"已拒绝执行"/utf8>>.
+
+%% @private 结果可以是任意 JSON 值（前端工具返回一个对象完全正常）
+to_text(V) when is_binary(V) -> V;
+to_text(V) when is_number(V) -> beamai_utils:encode_json(V);
+to_text(V) when is_boolean(V) -> beamai_utils:encode_json(V);
+to_text(null) -> <<"null">>;
+to_text(V) when is_map(V); is_list(V) -> beamai_utils:encode_json(V);
+to_text(V) -> iolist_to_binary(io_lib:format("~p", [V])).
 
 %%====================================================================
 %% 内部 - 建 agent 与收尾
@@ -197,7 +282,7 @@ with_agent(Input, Factory, Emitter, Go) ->
     case Factory(Input, runtime_config(Input, Emitter)) of
         {ok, Agent} ->
             Ready = with_context(with_frontend_tools(Agent, Input), Input),
-            finish(Emitter, Go(Ready));
+            finish(Input, Emitter, Go(Ready));
         {error, Reason} ->
             beamai_agui_emitter:run_error(Emitter, Reason)
     end.
@@ -304,22 +389,23 @@ runtime_config(Input, Emitter) ->
         false -> WithStore
     end.
 
-finish(Emitter, {ok, Result, _State}) ->
+finish(_Input, Emitter, {ok, Result, _State}) ->
     beamai_agui_emitter:run_finished(Emitter, result_of(Result),
                                      beamai_agui_event:usage(usage_of(Result)));
-finish(Emitter, {interrupt, Info, _State}) ->
+finish(Input, Emitter, {interrupt, Info, _State}) ->
     %% 中断态此刻已由上游落进 pause_store（agent 配了 pause_store）：
     %% 这次 run 到此为止，下一个带答复的请求会从 store 里接着跑。
     %%
-    %% 发**两条**：`CUSTOM(interrupt)` 是我们先于协议实现的那条（老前端在用，
-    %% 不动它），`RUN_FINISHED + outcome:"interrupt"` 才是 AG-UI 的 interrupt
-    %% 协议 —— 通用客户端（`useInterrupt` / `useHumanInTheLoop`）认的是后者，
-    %% 而且它同时把流收口了（run 必须有终态，流才关得掉）。
-    ok = beamai_agui_emitter:emit(
-           Emitter, beamai_agui_event:custom(<<"interrupt">>, interrupt_of(Info))),
+    %% **只发 `RUN_FINISHED + outcome:"interrupt"`** —— 它是 AG-UI 的一等表达，
+    %% 通用客户端（`useInterrupt` / `useHumanInTheLoop`）认的就是它，而且它同时
+    %% 把流收口了（run 必须有终态，流才关得掉）。
+    %%
+    %% 曾经这里还并发一条 `CUSTOM(interrupt)` 作为"我们先于协议实现的那份"。
+    %% 已经去掉：同一件事发两遍，接入方看日志会以为是两件事，而且两份**总有一天
+    %% 会不同步** —— 两个真相店从来只是麻烦的来源。
     beamai_agui_emitter:run_interrupted(Emitter, [beamai_agui_event:interrupt(
-                                                    interrupt_spec(Emitter, Info))]);
-finish(Emitter, {error, Reason}) ->
+                                                    interrupt_spec(Input, Emitter, Info))]);
+finish(_Input, Emitter, {error, Reason}) ->
     beamai_agui_emitter:run_error(Emitter, Reason).
 
 %% RUN_FINISHED.result：只回答案文本；用量走协议自己的 `usage` 位，
@@ -329,35 +415,30 @@ result_of(Result) ->
 
 usage_of(Result) -> maps:get(usage, Result, undefined).
 
-%% CUSTOM(interrupt) 的载荷：前端要知道「在等哪次调用的回话」
-interrupt_of(Info) ->
-    Base = #{<<"type">> =>
-                 atom_to_binary(maps:get(interrupt_type, Info, unknown), utf8)},
-    case maps:get(interrupted_tool_call, Info, undefined) of
-        TC when is_map(TC) ->
-            {Id, Name, Args} = beamai_tool:parse_tool_call(TC),
-            Base#{<<"toolCallId">> => Id,
-                  <<"toolCallName">> => Name,
-                  <<"args">> => Args};
-        _ ->
-            Base
-    end.
-
 %% @private `RUN_FINISHED.outcome.interrupts[]` 那一条的原料
 %%
 %% `id` 取被中断调用的 tool-call id —— 它本来就唯一，客户端把它原样放回
 %% `resume[].interruptId`，服务端据此认得出「回的是不是当前这一条」
 %% （beamai_agui_types:resume_input/2）。纯 ask-user 式的暂停没有 tool call，
 %% 退回 run id 派生的一个稳定 id。
-interrupt_spec(Emitter, Info) ->
+%%
+%% `kind` 决定客户端该回**决定**还是**结果**，见 beamai_agui_event:interrupt/1。
+interrupt_spec(Input, Emitter, Info) ->
     Reason = atom_to_binary(maps:get(interrupt_type, Info, paused), utf8),
     case maps:get(interrupted_tool_call, Info, undefined) of
         TC when is_map(TC) ->
             {Id, Name, Args} = beamai_tool:parse_tool_call(TC),
             #{id => Id, reason => Reason, tool_call_id => Id,
-              tool_name => Name, args => Args};
+              tool_name => Name, args => Args, kind => kind_of(Input, Name)};
         _ ->
-            #{id => <<(run_id_of(Emitter))/binary, "-interrupt">>, reason => Reason}
+            #{id => <<(run_id_of(Emitter))/binary, "-interrupt">>, reason => Reason,
+              kind => approval}
+    end.
+
+kind_of(Input, Name) ->
+    case lists:member(Name, beamai_agui_types:frontend_tool_names(Input)) of
+        true -> frontend_tool;
+        false -> approval
     end.
 
 run_id_of(Emitter) ->

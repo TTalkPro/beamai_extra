@@ -144,7 +144,9 @@ round_trip(#{file := File}) ->
         %% 请求一：停在人身上，快照落到磁盘
         Ev1 = run(input(Thread, [#{<<"role">> => <<"user">>,
                                    <<"content">> => <<"go">>}])),
-        ?assert(lists:member(<<"CUSTOM">>, types(Ev1))),
+        %% 收口是 `RUN_FINISHED + outcome:"interrupt"` 那一条（不再另发 CUSTOM）
+    [Finished1] = [E || E <- Ev1, maps:get(<<"type">>, E) =:= <<"RUN_FINISHED">>],
+    ?assertMatch([_], maps:get(<<"interrupts">>, maps:get(<<"outcome">>, Finished1))),
         ?assertMatch({ok, _}, beamai_agui_thread:pending(Thread)),
 
         %% 制造断点：store 进程停掉，再从同一个文件开起来（≈ 节点重启）

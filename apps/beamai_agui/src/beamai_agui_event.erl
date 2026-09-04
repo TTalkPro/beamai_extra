@@ -384,25 +384,69 @@ tag(Event, _) ->
 %% `toolCallId` 同源 —— 前端把审批条挂回那张工具卡片不用二次关联，客户端把它原样
 %% 放在 `resume[].interruptId` 里送回来，服务端据此认得出「回的是不是当前这一条」。
 %%
-%% `responseSchema` 告诉通用客户端「这条该回什么」，它照着渲染审批控件。
-%% **只声明我们真认的两个决策** —— `approveWithEdits`（改参数再执行）没实现，不谎报。
+%% == 两类 interrupt 要的东西不一样 ==
+%%
+%% | `kind` | 谁触发 | 客户端该回什么 |
+%% |---|---|---|
+%% | `approval` | 服务端声明的中断工具（有实现，等人点头） | 一个**决定**：`{decision: approved\|rejected}` |
+%% | `frontend-tool` | `RunAgentInput.tools` 里的工具（服务端没实现） | 这次调用的**结果**：`{result: …}` |
+%%
+%% 曾经两类共用审批那张 schema，于是前端工具那条路上客户端照着填了个
+%% `{decision: "approved"}` —— 它**填不出结果来**，服务端只好瞎编一条，模型据此
+%% 宣布工具跑过了，而客户端从头到尾没被调用过。
+%%
+%% 三处都说同一件事，客户端认哪个都行：`reason` 的措辞、`responseSchema` 的字段、
+%% `metadata.kind`。**`responseSchema` 是最省事的那个** —— 客户端照它填就自然回对，
+%% 不用把「这是哪一类」编进自己的 if。
 -spec interrupt(map()) -> map().
 interrupt(Info) ->
+    Kind = maps:get(kind, Info, approval),
     Base = #{<<"id">> => maps:get(id, Info),
-             <<"reason">> => maps:get(reason, Info, <<"paused">>),
-             <<"responseSchema">> => response_schema()},
+             <<"reason">> => reason_of(Kind, Info),
+             <<"responseSchema">> => response_schema(Kind)},
     case maps:get(tool_call_id, Info, undefined) of
         undefined ->
             Base;
         ToolCallId ->
             Base#{<<"toolCallId">> => ToolCallId,
-                  <<"metadata">> => #{<<"pendingTool">> =>
+                  <<"metadata">> => #{<<"kind">> => kind_name(Kind),
+                                      %% 上游那个内部的中断类型（`tool_request` 等），
+                                      %% 排障时有用，但不该让客户端拿它做判别
+                                      <<"interruptType">> =>
+                                          maps:get(reason, Info, <<"paused">>),
+                                      <<"pendingTool">> =>
                                           #{<<"name">> => maps:get(tool_name, Info, null),
                                             <<"args">> => maps:get(args, Info, #{})}}}
     end.
 
-%% @private 审批控件的形状（见 interrupt/1）
-response_schema() ->
+kind_name(frontend_tool) -> <<"frontend-tool">>;
+kind_name(_) -> <<"approval">>.
+
+%% @private `Interrupt.reason` 是必填字符串，让它自己说清是哪一类
+reason_of(frontend_tool, Info) ->
+    <<"需要客户端执行并回传结果: "/utf8, (tool_label(Info))/binary>>;
+reason_of(_, Info) ->
+    <<"需要审批: "/utf8, (tool_label(Info))/binary>>.
+
+tool_label(Info) ->
+    case maps:get(tool_name, Info, undefined) of
+        Name when is_binary(Name), Name =/= <<>> -> Name;
+        _ -> maps:get(reason, Info, <<"paused">>)
+    end.
+
+%% @private 这一类该回什么（见 interrupt/1）
+%%
+%% 审批那张**只声明我们真认的两个决策** —— `approveWithEdits`（改参数再执行）
+%% 没实现，不谎报。
+response_schema(frontend_tool) ->
+    #{<<"type">> => <<"object">>,
+      <<"properties">> =>
+          #{<<"result">> =>
+                #{<<"description">> =>
+                      <<"The value this client-side tool returned. Execute the tool, "
+                        "then send its result back here.">>}},
+      <<"required">> => [<<"result">>]};
+response_schema(_) ->
     #{<<"type">> => <<"object">>,
       <<"properties">> => #{<<"decision">> =>
                                 #{<<"type">> => <<"string">>,

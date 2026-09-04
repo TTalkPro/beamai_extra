@@ -12,7 +12,7 @@
 -export([thread_id/1, run_id/1, parent_run_id/1, messages/1, tools/1, state/1]).
 -export([context/1, resume/1, forwarded_props/1]).
 -export([agent_name/1, last_user_message/1, resume_input/2]).
--export([context_prompt/1, content_to_text/1]).
+-export([context_prompt/1, content_to_text/1, frontend_tool_names/1]).
 
 -export_type([run_input/0]).
 
@@ -93,6 +93,22 @@ context(_) -> [].
 -spec resume(run_input()) -> [map()].
 resume(#{resume := V}) -> V;
 resume(_) -> [].
+
+%% @doc `RunAgentInput.tools` 里那些工具的名字
+%%
+%% 这些是**前端定义、前端执行**的工具（服务端没有实现）。认出它们要紧：模型调到
+%% 一个前端工具时，暂停之后该回来的是**这次调用的结果**，而不是一个 approve /
+%% reject 的决定 —— 两种 interrupt 要的东西不一样，`responseSchema` 也就不一样。
+%% 客户端每次请求都重发 `tools`，所以续跑那一轮照样算得出来。
+-spec frontend_tool_names(run_input()) -> [binary()].
+frontend_tool_names(Input) ->
+    [N || T <- tools(Input), is_map(T), (N = tool_name(T)) =/= undefined].
+
+tool_name(Tool) ->
+    case first_of(Tool, [<<"name">>, name]) of
+        Name when is_binary(Name), Name =/= <<>> -> Name;
+        _ -> undefined
+    end.
 
 %% @doc 要跑哪个 agent：约定放在 forwardedProps.agent（AG-UI 协议本身不带这个
 %% 字段——端点多以路径区分 agent；两条路都留着，路径优先由适配器给出）
@@ -228,20 +244,72 @@ resume_id(Entry) ->
 
 %% @private 一条 `resume[]` → `{ok, Decision, Payload}`
 %%
-%% `status` 是协议里的字段名，`decision` 是我们自己那条路的叫法 —— 两种都认，
-%% 再归一到上游 beamai_agent_interrupt 的决策关键词。
+%% == `status` 不是 `decision` ==
+%%
+%% 协议里 `status` 说的是「这条 interrupt 答完了」（`resolved` / `completed`），
+%% **不是**人做了什么决定。人的决定在 `payload.decision` 里 —— 那正是我们自己在
+%% `responseSchema` 里要求的字段。曾经这里图省事按
+%% `status > decision` 取第一个非空，于是客户端发
+%% `{status:"resolved", payload:{decision:"rejected"}}` 时，我们读到的是
+%% `"resolved"`，一路当成「自由文本作结果」发给模型 —— **批准与拒绝在这台上
+%% 变成了同义词，而且一个字都不报**。
+%%
+%% 所以取值顺序是：`payload.decision` → 条目自己的 `decision` → `status`
+%% **但只在它字面上就是一个决策词时**（有些客户端确实发
+%% `[{status:"approved"}]`）。`"resolved"` 这种协议层的措辞一律不当决策。
+%%
+%% `payload.result` 是**前端工具**那条路的答复（这次调用返回了什么），它一出现
+%% 就意味着 `reply` —— 载荷即工具结果，见 beamai_agui_runner 的收尾。
 resume_entry(Entry) ->
-    case first_of(Entry, [<<"status">>, <<"decision">>, <<"outcome">>]) of
-        undefined ->
-            none;
-        Raw ->
-            {ok, normalize_decision(Raw),
-             resume_payload(first_of(Entry, [<<"payload">>, <<"value">>]))}
+    Payload = resume_payload(first_of(Entry, [<<"payload">>, <<"value">>])),
+    case resume_decision(Entry, Payload) of
+        undefined -> none;
+        Decision -> {ok, Decision, Payload}
     end.
 
-%% 客户端的措辞五花八门，归一到上游认的三个关键词；认不出的原样透传
-%% （上游把不认识的 binary 当"自由文本作结果"处理，那是合理的回落）
-normalize_decision(D) when is_binary(D) ->
+resume_decision(Entry, Payload) ->
+    Explicit = first_of_decision(
+                 [maps:get(decision, Payload, undefined),
+                  maps:get(<<"decision">>, Entry, undefined),
+                  maps:get(<<"outcome">>, Entry, undefined)]),
+    case Explicit of
+        undefined -> implicit_decision(Entry, Payload);
+        Decision -> Decision
+    end.
+
+%% @private 没有显式决策时：有结果就是 reply，否则看 `status` 是不是决策词
+implicit_decision(Entry, Payload) ->
+    case maps:is_key(result, Payload) of
+        true ->
+            <<"reply">>;
+        false ->
+            case decision_word(maps:get(<<"status">>, Entry, undefined)) of
+                undefined ->
+                    %% `status: "resolved"` 且没有任何载荷 —— 客户端说"答完了"却
+                    %% 什么都没给。**不编一个决策出来**：交给 runner 按 interrupt
+                    %% 的类型决定怎么办（前端工具会如实报"没回传结果"）。
+                    case maps:get(<<"status">>, Entry, undefined) of
+                        S when is_binary(S), S =/= <<>> -> <<"reply">>;
+                        _ -> undefined
+                    end;
+                Word ->
+                    Word
+            end
+    end.
+
+first_of_decision(Values) ->
+    case [W || V <- Values, (W = decision_word(V)) =/= undefined] of
+        [W | _] -> W;
+        [] -> undefined
+    end.
+
+%% @private 客户端的措辞五花八门，归一到上游 beamai_agent_interrupt 认的三个关键词
+%%
+%% **认不出就返回 undefined**（而不是原样透传）：上游把不认识的 binary 当"自由文本
+%% 作结果"，那对聊天式 HITL 是对的，但对一个协议字段就是把 `"resolved"` 当成了
+%% 工具的返回值。要走自由文本那条路，得是**人真的打了一句话**（最后一条 user
+%% 消息），不是某个字段恰好是字符串。
+decision_word(D) when is_binary(D) ->
     case string:lowercase(D) of
         <<"approved">> -> <<"approved">>;
         <<"approve">> -> <<"approved">>;
@@ -251,12 +319,16 @@ normalize_decision(D) when is_binary(D) ->
         <<"reject">> -> <<"rejected">>;
         <<"denied">> -> <<"rejected">>;
         <<"deny">> -> <<"rejected">>;
+        <<"cancel">> -> <<"rejected">>;
+        <<"cancelled">> -> <<"rejected">>;
         <<"reply">> -> <<"reply">>;
         <<"respond">> -> <<"reply">>;
-        _ -> D
+        _ -> undefined
     end;
-normalize_decision(D) ->
-    D.
+decision_word(D) when is_atom(D), D =/= undefined ->
+    decision_word(atom_to_binary(D, utf8));
+decision_word(_) ->
+    undefined.
 
 first_of(Map, Keys) ->
     case [V || K <- Keys, (V = maps:get(K, Map, undefined)) =/= undefined] of
@@ -289,7 +361,11 @@ resume_payload(Payload) when is_map(Payload) ->
             undefined -> Acc;
             Value -> Acc#{Key => Value}
         end
-    end, #{}, [{<<"message">>, message}, {<<"args">>, args}]);
+    end, #{}, [{<<"message">>, message}, {<<"args">>, args},
+               %% 前端工具那条路的答复：这次调用**返回了什么**
+               {<<"result">>, result},
+               %% 审批那条路的答复：人做了什么**决定**
+               {<<"decision">>, decision}]);
 resume_payload(_) ->
     #{}.
 

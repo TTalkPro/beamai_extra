@@ -33,7 +33,11 @@ resume_test_() ->
       fun approved_decision_emits_real_tool_result/0,
       fun store_down_degrades_to_no_hitl/0,
       fun interrupt_uses_agui_outcome/0,
-      fun protocol_resume_round_trip/0]}.
+      fun protocol_resume_round_trip/0,
+      fun approved_and_rejected_differ/0,
+      fun status_is_not_a_decision/0,
+      fun frontend_tool_asks_for_a_result/0,
+      fun frontend_tool_result_is_not_fabricated/0]}.
 
 %%====================================================================
 %% 辅助
@@ -135,17 +139,19 @@ hitl_round_trip() ->
     try
         %% ---- 请求一：模型要求人类介入 ----
         Ev1 = run(input(Thread, [user_msg(<<"go">>)])),
+        %% 收口只有 `RUN_FINISHED + outcome:"interrupt"` 这一条 —— 曾经还并发一条
+        %% `CUSTOM(interrupt)`，同一件事两份迟早不同步，已经去掉
         ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>,
                       <<"STEP_STARTED">>, <<"STEP_FINISHED">>,
                       <<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
-                      <<"CUSTOM">>, <<"RUN_FINISHED">>], types(Ev1)),
+                      <<"RUN_FINISHED">>], types(Ev1)),
         %% 前端看到的是一个**没有结果**的工具调用——那就是"等你回话"
         ?assertEqual([], [E || E <- Ev1,
                               maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>]),
-        %% CUSTOM 告诉前端在等哪次调用
-        [Custom] = [E || E <- Ev1, maps:get(<<"type">>, E) =:= <<"CUSTOM">>],
-        ?assertEqual(<<"interrupt">>, maps:get(<<"name">>, Custom)),
-        ?assertEqual(<<"ask1">>, maps:get(<<"toolCallId">>, maps:get(<<"value">>, Custom))),
+        %% outcome 告诉前端在等哪次调用
+        [Finished1] = [E || E <- Ev1, maps:get(<<"type">>, E) =:= <<"RUN_FINISHED">>],
+        [Int1] = maps:get(<<"interrupts">>, maps:get(<<"outcome">>, Finished1)),
+        ?assertEqual(<<"ask1">>, maps:get(<<"toolCallId">>, Int1)),
 
         %% ---- 暂停确实落库了 ----
         {ok, Snapshot} = beamai_agui_thread:pending(Thread),
@@ -226,7 +232,7 @@ approved_decision_emits_real_tool_result() ->
     _CC = mock_llm(<<"dangerous">>, <<"call_1">>),
     try
         Ev1 = run(input(Thread, [user_msg(<<"go">>)]), approval_factory()),
-        ?assert(lists:member(<<"CUSTOM">>, types(Ev1))),
+        ?assertMatch([_], [E || E <- Ev1, maps:get(<<"type">>, E) =:= <<"RUN_FINISHED">>]),
         %% 暂停时那次调用还没有结果
         ?assertEqual([], [E || E <- Ev1,
                               maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>]),
@@ -263,7 +269,7 @@ store_down_degrades_to_no_hitl() ->
         ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>,
                       <<"STEP_STARTED">>, <<"STEP_FINISHED">>,
                       <<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
-                      <<"CUSTOM">>, <<"RUN_FINISHED">>], types(Ev)),
+                      <<"RUN_FINISHED">>], types(Ev)),
         ?assertEqual(none, beamai_agui_thread:pending(<<"t-nostore">>))
     after
         meck:unload(beamai_chat_model),
@@ -321,6 +327,154 @@ protocol_resume_round_trip() ->
         ?assertEqual(<<"yes">>, maps:get(<<"content">>, Result)),
         %% 跑到终态，暂停清掉
         ?assertEqual(none, beamai_agui_thread:pending(Thread))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%%====================================================================
+%% 决策：`approved` 与 `rejected` 必须**不一样**
+%%
+%% 这一族守的是下游报上来的那条账：只把 `decision` 换个词、其余逐字相同时，
+%% 两次的 `TOOL_CALL_RESULT` 曾经**一模一样**（都是 `"resolved"` —— 协议字段
+%% `status` 的值），于是界面上两颗钮点哪个都一样，而且一个字都不报。
+%%====================================================================
+
+resume_body(Thread, Entry) ->
+    #{<<"threadId">> => Thread,
+      <<"messages">> => [user_msg(<<"go">>)],
+      <<"resume">> => [Entry]}.
+
+%% @private 重新装一遍剧本 —— mock 的轮次计数器是**整个 mock 一份**的，
+%% 一个用例里跑两轮暂停就得从头来，否则第二轮拿到的是"最终答案"那一幕
+remock() ->
+    catch meck:unload(beamai_chat_model),
+    mock_llm().
+
+%% @private 跑一轮到暂停，返回那条 interrupt
+pause_at(Thread) ->
+    Ev = run(input(Thread, [user_msg(<<"go">>)])),
+    [Finished] = [E || E <- Ev, maps:get(<<"type">>, E) =:= <<"RUN_FINISHED">>],
+    [Interrupt] = maps:get(<<"interrupts">>, maps:get(<<"outcome">>, Finished)),
+    {Interrupt, Ev}.
+
+result_content(Events) ->
+    case [E || E <- Events, maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>] of
+        [R | _] -> maps:get(<<"content">>, R);
+        [] -> undefined
+    end.
+
+approved_and_rejected_differ() ->
+    _CC = mock_llm(),
+    try
+        %% 批准：服务端去执行那个工具，**这里不该有人造的结果**
+        {I1, _} = pause_at(<<"t-approved">>),
+        _ = remock(),
+        {ok, In1} = beamai_agui_types:parse_run_input(
+                      resume_body(<<"t-approved">>,
+                                  #{<<"interruptId">> => maps:get(<<"id">>, I1),
+                                    <<"status">> => <<"resolved">>,
+                                    <<"payload">> => #{<<"decision">> => <<"approved">>}})),
+        Approved = run(In1, factory()),
+        _ = remock(),
+
+        %% 拒绝：模型必须知道这一步**没做成**
+        {I2, _} = pause_at(<<"t-rejected">>),
+        _ = remock(),
+        {ok, In2} = beamai_agui_types:parse_run_input(
+                      resume_body(<<"t-rejected">>,
+                                  #{<<"interruptId">> => maps:get(<<"id">>, I2),
+                                    <<"status">> => <<"resolved">>,
+                                    <<"payload">> => #{<<"decision">> => <<"rejected">>}})),
+        Rejected = run(In2, factory()),
+
+        ?assertNotEqual(result_content(Approved), result_content(Rejected)),
+        ?assertMatch({_, _}, binary:match(result_content(Rejected), <<"拒绝"/utf8>>))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%% `status` 是**协议层**的「这条 interrupt 答完了」，不是人做的决定 ——
+%% 把它当成工具的返回值发给模型，是在编造一个没发生过的结果
+status_is_not_a_decision() ->
+    _CC = mock_llm(),
+    try
+        {I, _} = pause_at(<<"t-status">>),
+        {ok, In} = beamai_agui_types:parse_run_input(
+                     resume_body(<<"t-status">>,
+                                 #{<<"interruptId">> => maps:get(<<"id">>, I),
+                                   <<"status">> => <<"resolved">>,
+                                   <<"payload">> => #{<<"decision">> => <<"rejected">>}})),
+        Content = result_content(run(In, factory())),
+        ?assertNotEqual(<<"resolved">>, Content)
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%%====================================================================
+%% 前端工具：要的是**结果**，不是决定
+%%====================================================================
+
+%% @private 前端声明的工具（服务端没有实现），随 `RunAgentInput.tools` 上来
+frontend_input(Thread, Extra) ->
+    {ok, Input} = beamai_agui_types:parse_run_input(
+                    maps:merge(#{<<"threadId">> => Thread,
+                                 <<"messages">> => [user_msg(<<"go">>)],
+                                 <<"tools">> => [#{<<"name">> => <<"ask_human">>,
+                                                   <<"description">> => <<"say hi">>,
+                                                   <<"parameters">> => #{}}]},
+                               Extra)),
+    Input.
+
+%% 前端工具的 interrupt 要的是这次调用**返回了什么** —— 拿审批那张 schema 给它，
+%% 客户端照着填只能填出个 `{decision}`，填不出结果来
+frontend_tool_asks_for_a_result() ->
+    _CC = mock_llm(),
+    try
+        Ev = run(frontend_input(<<"t-fe-schema">>, #{})),
+        [Finished] = [E || E <- Ev, maps:get(<<"type">>, E) =:= <<"RUN_FINISHED">>],
+        [Interrupt] = maps:get(<<"interrupts">>, maps:get(<<"outcome">>, Finished)),
+        ?assertEqual([<<"result">>], maps:get(<<"required">>,
+                                              maps:get(<<"responseSchema">>, Interrupt))),
+        Meta = maps:get(<<"metadata">>, Interrupt),
+        ?assertEqual(<<"frontend-tool">>, maps:get(<<"kind">>, Meta)),
+        ?assertMatch({_, _}, binary:match(maps:get(<<"reason">>, Interrupt),
+                                          <<"回传结果"/utf8>>))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%% 客户端回传了结果就用它；**没回传就如实说没拿到** —— 服务端替客户端工具伪造
+%% 一条成功的结果，模型据此宣布"干完了"，而客户端从头到尾没被调用过
+frontend_tool_result_is_not_fabricated() ->
+    _CC = mock_llm(),
+    try
+        %% ① 有结果：原样进 TOOL_CALL_RESULT
+        Ev1 = run(frontend_input(<<"t-fe-ok">>, #{})),
+        [F1] = [E || E <- Ev1, maps:get(<<"type">>, E) =:= <<"RUN_FINISHED">>],
+        [I1] = maps:get(<<"interrupts">>, maps:get(<<"outcome">>, F1)),
+        In1 = frontend_input(<<"t-fe-ok">>,
+                             #{<<"resume">> =>
+                                   [#{<<"interruptId">> => maps:get(<<"id">>, I1),
+                                      <<"status">> => <<"resolved">>,
+                                      <<"payload">> =>
+                                          #{<<"result">> => <<"已经打过招呼了"/utf8>>}}]}),
+        _ = remock(),
+        ?assertEqual(<<"已经打过招呼了"/utf8>>, result_content(run(In1, factory()))),
+        _ = remock(),
+
+        %% ② 只回了个决定、没给结果：不编造成功
+        Ev2 = run(frontend_input(<<"t-fe-missing">>, #{})),
+        _ = remock(),
+        [F2] = [E || E <- Ev2, maps:get(<<"type">>, E) =:= <<"RUN_FINISHED">>],
+        [I2] = maps:get(<<"interrupts">>, maps:get(<<"outcome">>, F2)),
+        In2 = frontend_input(<<"t-fe-missing">>,
+                             #{<<"resume">> =>
+                                   [#{<<"interruptId">> => maps:get(<<"id">>, I2),
+                                      <<"status">> => <<"resolved">>,
+                                      <<"payload">> =>
+                                          #{<<"decision">> => <<"approved">>}}]}),
+        Content = result_content(run(In2, factory())),
+        ?assertMatch({_, _}, binary:match(Content, <<"没有回传"/utf8>>))
     after
         meck:unload(beamai_chat_model)
     end.

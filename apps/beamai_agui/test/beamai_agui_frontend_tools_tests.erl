@@ -145,13 +145,21 @@ full_round_trip() ->
         ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>,
                       <<"STEP_STARTED">>, <<"STEP_FINISHED">>,
                       <<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
-                      <<"CUSTOM">>, <<"RUN_FINISHED">>], types(Ev1)),
+                      <<"RUN_FINISHED">>], types(Ev1)),
         %% 服务端没有实现，当然也就没有结果——等前端给
         ?assertEqual([], [E || E <- Ev1,
                               maps:get(<<"type">>, E) =:= <<"TOOL_CALL_RESULT">>]),
-        [Custom] = [E || E <- Ev1, maps:get(<<"type">>, E) =:= <<"CUSTOM">>],
+        %% 收口那条 `RUN_FINISHED` 说清了在等哪次调用；**前端工具那一支要的是
+        %% 「结果」而不是「决定」** —— 拿审批那张 schema 给它，客户端照着填只能
+        %% 填出个 {decision}，填不出结果来
+        [Finished] = [E || E <- Ev1, maps:get(<<"type">>, E) =:= <<"RUN_FINISHED">>],
+        [Interrupt] = maps:get(<<"interrupts">>, maps:get(<<"outcome">>, Finished)),
+        Meta = maps:get(<<"metadata">>, Interrupt),
+        ?assertEqual(<<"frontend-tool">>, maps:get(<<"kind">>, Meta)),
         ?assertEqual(<<"pick_file">>,
-                     maps:get(<<"toolCallName">>, maps:get(<<"value">>, Custom))),
+                     maps:get(<<"name">>, maps:get(<<"pendingTool">>, Meta))),
+        ?assertEqual([<<"result">>],
+                     maps:get(<<"required">>, maps:get(<<"responseSchema">>, Interrupt))),
 
         %% 前端执行完，把结果当 tool 消息送回来
         Reply = #{<<"role">> => <<"tool">>, <<"toolCallId">> => <<"fc1">>,
