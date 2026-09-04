@@ -150,6 +150,11 @@ boot() ->
 
 shutdown() ->
     _ = example_agui_scripted:uninstall(),
+    %% **先收会话再停 listener**：`reconnect` 那个场景故意留了一个还在跑的 run
+    %% （断线之后 run 照跑，那正是它要演的事）。不收就带进下一个场景 —— 上一轮的
+    %% run 还在往一条已经没人的流里写，下一个场景起 listener 时撞见它，
+    %% 客户端拿到的是 `{stream_error, closed}`。每个场景自己收干净。
+    _ = [catch beamai_agui_sessions:forget(T) || T <- beamai_agui_sessions:list()],
     _ = catch cowboy:stop_listener(?LISTENER),
     _ = application:unset_env(beamai_agui, subagent_events),
     ok.
@@ -202,9 +207,13 @@ factory(Opts) ->
         beamai_agent:new(maps:merge(maps:merge(Base, Interrupt), RuntimeCfg))
     end.
 
+%% @private 这个场景的工具表
+%%
+%% **只给这个场景要演的那把** —— 实机联调时发现，工具表里多一把不相干的
+%% `get_weather`，模型就会拿它去应付「画个面板」这种请求，插件那条路根本没走到。
+%% 演示要演得成，就别在台上放无关的道具。
 tools(Opts, RuntimeCfg) ->
-    Base = [weather_tool()],
-    Base
+    [weather_tool() || maps:get(weather, Opts, false)]
     ++ [chart_tool() || maps:get(mcp_app_tool, Opts, false)]
     ++ [delegate_tool(RuntimeCfg) || maps:get(delegate, Opts, false)].
 
@@ -243,10 +252,14 @@ delegate_tool(RuntimeCfg) ->
 llm() ->
     case mode() of
         scripted -> beamai_chat_model:create(mock, #{});
+        %% max_tokens 给足：缺省 2048 装不下一棵组件树 / 一段 HTML，
+        %% 截断的 JSON 解不出来 —— 插件只会拿到空参数，症状是"调了但什么都没画"
         {live, minimax} -> example_llm_config:minimax(#{api_key => env("MINIMAX_API_KEY"),
-                                                       model => <<"m2.7">>});
+                                                       model => <<"m2.7">>,
+                                                       max_tokens => 8192});
         {live, zhipu} -> example_llm_config:anthropic(#{api_key => env("ZHIPU_API_KEY"),
-                                                        model => <<"glm-5.3-flash">>})
+                                                        model => <<"glm-5.3-flash">>,
+                                                        max_tokens => 8192})
     end.
 
 env(Name) ->
@@ -279,8 +292,10 @@ do_run(basic) ->
                                                  <<"{\"city\":\"北京\"}"/utf8>>),
                  example_agui_scripted:reasoning_then_text(<<"查到了"/utf8>>,
                                                            <<"北京今天晴。"/utf8>>)]),
-    Port = serve(#{factory => factory()}),
-    {200, Headers, Data} = post(Port, "/agui/run", body(<<"t-basic">>, <<"北京天气？"/utf8>>)),
+    Port = serve(#{factory => factory(#{weather => true})}),
+    {200, Headers, Data} = post(Port, "/agui/run",
+                                body(<<"t-basic">>,
+                                     <<"用 get_weather 查一下北京天气，然后一句话告诉我。"/utf8>>)),
     Frames = frames(Data),
     print_frames(Frames),
     io:format("  run id 回在头上：~ts~n", [header(<<"x-agui-run-id">>, Headers)]),
@@ -290,11 +305,13 @@ do_run(basic) ->
     expect(lists:seq(0, length(Frames) - 1), [binary_to_integer(I) || I <- Ids],
            "SSE 帧的 id: 连续无洞"),
     %% 工具参数是**逐字**流出来的（不是一次性发完整 JSON）
+    %% 逐字与否**取决于 provider**：MiniMax 的 anthropic 口一两片就把参数给完了，
+    %% 那不是我们的问题（增量路照样成立，只是没有打字机效果）
     expect_model(true, length(pick(<<"TOOL_CALL_ARGS">>, Frames)) > 3,
-                 "TOOL_CALL_ARGS 逐字增量"),
+                 "TOOL_CALL_ARGS 逐字增量（provider 一口给完时会跳过）"),
     %% 思考走 REASONING_* 一族，不是已弃用的 THINKING_*
     expect_model(true, length(pick(<<"REASONING_MESSAGE_CONTENT">>, Frames)) > 0,
-                 "REASONING_* 出来了"),
+                 "REASONING_* 出来了（模型这轮没思考就会跳过）"),
     %% 文本三件套必须成对 —— 这条与模型说什么无关
     expect(length(pick(<<"TEXT_MESSAGE_START">>, Frames)),
            length(pick(<<"TEXT_MESSAGE_END">>, Frames)), "文本消息开合成对"),
@@ -422,12 +439,20 @@ do_run(hitl) ->
                                                  <<"{\"question\":\"要继续吗\"}"/utf8>>),
                  example_agui_scripted:text(<<"好的，继续。"/utf8>>)]),
     Port = serve(#{factory => factory(
-                     #{interrupt_tools => [#{name => <<"ask_human">>,
-                                             description => <<"问人一句"/utf8>>,
-                                             parameters => #{}}]})}),
+                     #{interrupt_tools =>
+                           [#{name => <<"ask_human">>,
+                              description => <<"在动手之前向用户确认一句"/utf8>>,
+                              parameters =>
+                                  #{<<"question">> =>
+                                        #{type => string, required => true,
+                                          description => <<"要问的问题"/utf8>>}}}]})}),
 
     io:format("  --- 请求一：跑到一半停下来等人 ---~n"),
-    {200, _, D1} = post(Port, "/agui/run", body(<<"t-hitl">>, <<"帮我办件事"/utf8>>)),
+    {200, _, D1} = post(
+      Port, "/agui/run",
+      body(<<"t-hitl">>,
+           <<"我要删掉生产库里的一张表。动手之前**必须**先调用 ask_human "
+             "问我确认一次。"/utf8>>)),
     F1 = frames(D1),
     print_frames(F1),
     Finished = json(lists:last(F1)),
@@ -456,7 +481,12 @@ do_run(a2ui) ->
                    input_transform => beamai_agui_a2ui:input_transform(),
                    a2ui => true}),
 
-    {200, _, Data} = post(Port, "/agui/run", body(<<"t-a2ui">>, <<"画个面板"/utf8>>)),
+    {200, _, Data} = post(
+      Port, "/agui/run",
+      body(<<"t-a2ui">>,
+           <<"调用 render_a2ui 画一个销售看板：一个 Column 作 root，里面放一个 "
+             "h2 标题 Text 和一个 Row，Row 里两个 Text 分别显示"
+             "「用户 1,248」和「收入 ¥52,300」。组件不要超过 6 个。"/utf8>>)),
     Frames = frames(Data),
     print_frames(Frames),
     case pick(<<"ACTIVITY_SNAPSHOT">>, Frames) of
@@ -489,7 +519,12 @@ do_run(genui) ->
                    event_transform => example_agui_genui:event_transform(),
                    open_generative_ui => true}),
 
-    {200, _, Data} = post(Port, "/agui/run", body(<<"t-genui">>, <<"画个卡片"/utf8>>)),
+    {200, _, Data} = post(
+      Port, "/agui/run",
+      body(<<"t-genui">>,
+           <<"调用 generateSandboxedUi 生成一个**很小**的计数器卡片："
+             "initialHeight 200，css 十行以内，html 一个 div 加一个按钮，"
+             "jsExpressions 一条。整体控制在 30 行以内。"/utf8>>)),
     Frames = frames(Data),
     print_frames(Frames),
     Types = [type(F) || F <- Frames],
@@ -530,7 +565,9 @@ do_run(mcp_apps) ->
     Port = serve(#{factory => factory(#{mcp_app_tool => true}),
                    event_transform => beamai_agui_mcp_apps:event_transform(#{apps => Apps})}),
 
-    {200, _, Data} = post(Port, "/agui/run", body(<<"t-mcp">>, <<"画销售图"/utf8>>)),
+    {200, _, Data} = post(Port, "/agui/run",
+                          body(<<"t-mcp">>,
+                               <<"调用 render_chart 画一张 series 为 sales 的图。"/utf8>>)),
     Frames = frames(Data),
     print_frames(Frames),
     %% 只认带 UI 的工具 —— 普通工具就是普通工具（与模型无关，装配期就定了）
@@ -565,7 +602,11 @@ do_run(subagent) ->
                  example_agui_scripted:text(<<"子 agent 说完了。"/utf8>>)]),
     Port = serve(#{factory => factory(#{delegate => true})}),
 
-    {200, _, Data} = post(Port, "/agui/run", body(<<"t-sub">>, <<"帮我调研"/utf8>>)),
+    {200, _, Data} = post(
+      Port, "/agui/run",
+      body(<<"t-sub">>,
+           <<"调用 research 工具，把「介绍一下 Erlang 的进程模型」这个子任务"
+             "交给子 agent，然后把它的结论转述给我。"/utf8>>)),
     Frames = frames(Data),
     print_frames(Frames),
     case pick(<<"SUBAGENT_STARTED">>, Frames) of
