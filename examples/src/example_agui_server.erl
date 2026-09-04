@@ -34,8 +34,11 @@
 %%% | 方法与路径 | 干什么 |
 %%% |---|---|
 %%% | `POST /agui/run` | RunAgentInput → SSE 事件流 |
+%%% | `POST /agui/agent/:agent/run` | 同上，**按 agent 寻址**（标准客户端拼的就是这条） |
 %%% | `GET  /agui/info` | 运行时能力声明（前端第一枪打这儿） |
 %%% | `GET  /agui/threads` | 会话列表 |
+%%% | `GET  /agui/threads/:id` | 一条线程的元信息（不存在回 404） |
+%%% | `GET  /agui/threads/:id/messages` | 该线程的消息 |
 %%% | `GET  /agui/threads/:id/stream` | **断线重连**（认 `Last-Event-ID` / `?since=`） |
 %%% | `GET  /agui/threads/:id/events` | 环形缓冲里现存的事件 |
 %%% | `GET  /agui/threads/:id/state` | 该 thread 当前的共享状态 |
@@ -142,13 +145,21 @@ dispatch(Origins) ->
     cowboy_router:compile([
         {'_', [
             {"/agui/run", beamai_agui_cowboy_handler, RunConfig},
+            %% **按 agent 寻址**：`/info` 报的是一张 agents 字典，标准 AG-UI 客户端
+            %% 据此拼 `{base}/agent/{id}/run` —— 这条不挂，它们连不上
+            {"/agui/agent/:agent/run", beamai_agui_cowboy_handler,
+             maps:remove(agent, RunConfig)},
             {"/agui/info", beamai_agui_cowboy_handler, RunConfig#{mode => info}},
             {"/agui/threads", beamai_agui_cowboy_handler,
              #{mode => threads, cors_origins => Origins}},
             {"/agui/threads/:thread", beamai_agui_cowboy_handler,
              #{mode => thread, cors_origins => Origins}},
             {"/agui/threads/:thread/:sub", beamai_agui_cowboy_handler,
-             #{mode => thread, cors_origins => Origins}}
+             #{mode => thread, cors_origins => Origins}},
+            %% **兜底放最后**：没匹配上的回一个带 CORS 头的 404。不挂它，浏览器会
+            %% 把「没这条路」显示成「跨源被拒」，把人指去查 CORS
+            {"/agui/[...]", beamai_agui_cowboy_handler,
+             #{mode => fallback, cors_origins => Origins}}
         ]}
     ]).
 
@@ -284,8 +295,11 @@ banner(Port, Provider, Opts, Origins) ->
                end]),
     io:format("~n  端点~n", []),
     io:format("    POST   ~s/agui/run~n", [B]),
+    io:format("    POST   ~s/agui/agent/beamai-demo/run   (标准客户端拼的那条)~n", [B]),
     io:format("    GET    ~s/agui/info~n", [B]),
     io:format("    GET    ~s/agui/threads~n", [B]),
+    io:format("    GET    ~s/agui/threads/:id~n", [B]),
+    io:format("    GET    ~s/agui/threads/:id/messages~n", [B]),
     io:format("    GET    ~s/agui/threads/:id/stream   (Last-Event-ID / ?since=)~n", [B]),
     io:format("    GET    ~s/agui/threads/:id/events~n", [B]),
     io:format("    GET    ~s/agui/threads/:id/state~n", [B]),

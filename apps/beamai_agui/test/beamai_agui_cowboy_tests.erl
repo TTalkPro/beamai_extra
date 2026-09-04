@@ -24,7 +24,11 @@ setup() ->
         {'_', [
             {"/agui/run", beamai_agui_cowboy_handler, #{agent => <<"echo">>}},
             {"/agui/open", beamai_agui_cowboy_handler, #{}},
-            {"/agui/info", beamai_agui_cowboy_handler, #{mode => info}}
+            {"/agui/info", beamai_agui_cowboy_handler, #{mode => info}},
+            %% 允许列表模式（缺省是 `*`，见 cors_* 用例）
+            {"/agui/scoped", beamai_agui_cowboy_handler,
+             #{agent => <<"echo">>,
+               cors_origins => [<<"http://localhost:3002">>, <<"http://localhost:3100">>]}}
         ]}
     ]),
     %% 端口 0：由内核挑一个空闲端口，避免测试之间抢端口
@@ -49,7 +53,10 @@ cowboy_test_() ->
          {"未知 agent → 404", fun() -> unknown_agent(Ctx) end},
          {"畸形请求体 → 400", fun() -> bad_body(Ctx) end},
          {"方法不允许 → 405", fun() -> method_not_allowed(Ctx) end},
-         {"OPTIONS 预检 → 204 + CORS", fun() -> options_preflight(Ctx) end}]
+         {"OPTIONS 预检 → 204 + CORS", fun() -> options_preflight(Ctx) end},
+         {"缺省 CORS 是 `*`，不带凭据位", fun() -> cors_wildcard(Ctx) end},
+         {"允许列表命中 → 回显 Origin + 凭据位", fun() -> cors_allowlist_hit(Ctx) end},
+         {"允许列表没命中 → 不发 allow-origin", fun() -> cors_allowlist_miss(Ctx) end}]
      end}.
 
 %%====================================================================
@@ -94,8 +101,9 @@ sse_stream(#{port := Port}) ->
         Events = parse_sse(Data),
         ?assertEqual([<<"RUN_STARTED">>, <<"STATE_SNAPSHOT">>, <<"STEP_STARTED">>,
                       <<"TEXT_MESSAGE_START">>, <<"TEXT_MESSAGE_CONTENT">>,
-                      <<"TEXT_MESSAGE_CONTENT">>, <<"STEP_FINISHED">>,
-                      <<"TEXT_MESSAGE_END">>, <<"RUN_FINISHED">>],
+                      <<"TEXT_MESSAGE_CONTENT">>,
+                      <<"TEXT_MESSAGE_END">>, <<"STEP_FINISHED">>,
+                      <<"RUN_FINISHED">>],
                      [maps:get(<<"type">>, E) || E <- Events]),
         %% threadId 原样带回，前端据此续上后续请求
         [Started | _] = Events,
@@ -156,7 +164,46 @@ method_not_allowed(#{port := Port}) ->
 options_preflight(#{port := Port}) ->
     {Status, Headers, _Data} = request(Port, <<"OPTIONS">>, "/agui/run", [], <<>>),
     ?assertEqual(204, Status),
-    ?assertEqual(<<"*">>, header(<<"access-control-allow-origin">>, Headers)).
+    ?assertEqual(<<"*">>, header(<<"access-control-allow-origin">>, Headers)),
+    %% 断线重连靠 `Last-Event-ID` 把水位带回来 —— 不放行它，重连就只能从头来
+    ?assertMatch({_, _}, binary:match(header(<<"access-control-allow-headers">>, Headers),
+                                      <<"last-event-id">>)),
+    %% 不缓存预检的话，每个 POST 前面都多一次 OPTIONS 往返
+    ?assertEqual(<<"600">>, header(<<"access-control-max-age">>, Headers)).
+
+%%====================================================================
+%% CORS
+%%
+%% 浏览器**不允许 `*` 与凭据并存**：前端一旦 `credentials: 'include'`，请求当场被
+%% 浏览器拦掉，而且错误只在控制台，服务端日志干干净净 —— 这类问题最难查，所以两种
+%% 模式各有用例守着。
+%%====================================================================
+
+cors_wildcard(#{port := Port}) ->
+    {200, Headers, _} = get_with(Port, "/agui/info",
+                                 [{<<"origin">>, <<"http://localhost:3002">>}]),
+    ?assertEqual(<<"*">>, header(<<"access-control-allow-origin">>, Headers)),
+    %% `*` 模式下**不能**发凭据位：两者并存浏览器直接拒
+    ?assertEqual(undefined, header(<<"access-control-allow-credentials">>, Headers)).
+
+cors_allowlist_hit(#{port := Port}) ->
+    Origin = <<"http://localhost:3100">>,
+    {Status, Headers, _} = request(Port, <<"OPTIONS">>, "/agui/scoped",
+                                   [{<<"origin">>, Origin}], <<>>),
+    ?assertEqual(204, Status),
+    %% 命中就**原样回显**（不是 `*`），并带上凭据位
+    ?assertEqual(Origin, header(<<"access-control-allow-origin">>, Headers)),
+    ?assertEqual(<<"true">>, header(<<"access-control-allow-credentials">>, Headers)),
+    %% 响应随 Origin 而变，不告诉缓存这件事，CDN 会把 A 源的响应喂给 B 源
+    ?assertEqual(<<"origin">>, header(<<"vary">>, Headers)).
+
+cors_allowlist_miss(#{port := Port}) ->
+    {Status, Headers, _} = request(Port, <<"OPTIONS">>, "/agui/scoped",
+                                   [{<<"origin">>, <<"http://evil.example">>}], <<>>),
+    ?assertEqual(204, Status),
+    %% 没命中就**一个字都不发** —— 让浏览器如实拦掉，而不是回个 `*` 假装放行
+    ?assertEqual(undefined, header(<<"access-control-allow-origin">>, Headers)),
+    ?assertEqual(undefined, header(<<"access-control-allow-credentials">>, Headers)).
 
 %%====================================================================
 %% 迷你 HTTP 客户端（gun）
@@ -164,6 +211,9 @@ options_preflight(#{port := Port}) ->
 
 get(Port, Path) ->
     request(Port, <<"GET">>, Path, [], <<>>).
+
+get_with(Port, Path, Headers) ->
+    request(Port, <<"GET">>, Path, Headers, <<>>).
 
 post(Port, Path, Body) ->
     request(Port, <<"POST">>, Path, [{<<"content-type">>, <<"application/json">>}], Body).

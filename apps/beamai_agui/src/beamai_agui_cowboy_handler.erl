@@ -83,7 +83,8 @@
 init(Req, Config0) ->
     %% `Origin` 只有这一层拿得到（框架无关层是框架无关的），取一次塞进 Config，
     %% 后面每个回复点都用同一份算 CORS
-    Config = Config0#{%% `{base}/agent/:agent/run` —— 路径里的那个优先于路由钉死的
+    Config = Config0#{origin => cowboy_req:header(<<"origin">>, Req),
+                      %% `{base}/agent/:agent/run` —— 路径里的那个优先于路由钉死的
                       path_agent => cowboy_req:binding(agent, Req)},
     Method = cowboy_req:method(Req),
     Mode = maps:get(mode, Config, run),
@@ -99,22 +100,21 @@ dispatch(<<"GET">>, info, Req, Config) ->
     handle_info(Req, Config);
 dispatch(<<"GET">>, threads, Req, Config) ->
     reply_result(beamai_agui_http_handler:handle_threads(
-                   beamai_agui_http_handler:init(Config)), Req);
+                   beamai_agui_http_handler:init(Config)), Req, Config);
 dispatch(Method, thread, Req, Config) ->
     handle_thread(Method, Req, Config);
 dispatch(_Method, fallback, Req, Config) ->
     not_found(Req, Config);
-dispatch(<<"OPTIONS">>, _Mode, Req, _Config) ->
-    Req2 = cowboy_req:reply(204, headers_map(
-                              beamai_agui_http_handler:cors_headers()), <<>>, Req),
+dispatch(<<"OPTIONS">>, _Mode, Req, Config) ->
+    Req2 = cowboy_req:reply(204, headers_map([], Config), <<>>, Req),
     {ok, Req2, undefined};
-dispatch(Method, Mode, Req, _Config) ->
+dispatch(Method, Mode, Req, Config) ->
     Body = beamai_utils:encode_json(#{
         <<"error">> => <<"method_not_allowed">>,
         <<"method">> => Method,
         <<"allowed">> => allowed(Mode)
     }),
-    Headers = headers_map(beamai_agui_http_handler:json_headers()),
+    Headers = headers_map(beamai_agui_http_handler:json_headers(), Config),
     Req2 = cowboy_req:reply(405, Headers#{<<"allow">> => allowed(Mode)}, Body, Req),
     {ok, Req2, undefined}.
 
@@ -134,7 +134,7 @@ handle_run(Req0, Config0) ->
     Headers = maps:to_list(cowboy_req:headers(Req1)),
     case beamai_agui_http_handler:handle_run(Body, Headers, Config) of
         {error, Status, Json, RespHeaders} ->
-            Req2 = cowboy_req:reply(Status, headers_map(RespHeaders), Json, Req1),
+            Req2 = cowboy_req:reply(Status, headers_map(RespHeaders, Config), Json, Req1),
             {ok, Req2, undefined};
         {stream, Input, Factory, RespHeaders} ->
             start_run(Input, Factory, RespHeaders,
@@ -148,7 +148,7 @@ start_run(Input, Factory, RespHeaders, RunOpts, Config, Req) ->
         {ok, Session} ->
             session_run(Session, Input, Factory, RunOpts, RespHeaders, Config, Req);
         {error, _} ->
-            Req2 = cowboy_req:stream_reply(200, headers_map(RespHeaders), Req),
+            Req2 = cowboy_req:stream_reply(200, headers_map(RespHeaders, Config), Req),
             Req3 = local_run(Input, Factory, RunOpts, Req2),
             {ok, Req3, undefined}
     end.
@@ -163,7 +163,7 @@ session_run(Session, Input, Factory, RunOpts, RespHeaders, Config, Req) ->
            Session, Input, Factory,
            #{run_opts => RunOpts, agent => resolved_agent(Config)}) of
         {started, RunId, Since} ->
-            Headers = headers_map(RespHeaders ++ [{<<"x-agui-run-id">>, RunId}]),
+            Headers = headers_map(RespHeaders ++ [{<<"x-agui-run-id">>, RunId}], Config),
             Req2 = cowboy_req:stream_reply(200, Headers, Req),
             {ok, stream_from(Session, Since, Req2), undefined};
         {busy, RunId} ->
@@ -172,14 +172,14 @@ session_run(Session, Input, Factory, RunOpts, RespHeaders, Config, Req) ->
             Body = beamai_utils:encode_json(#{<<"error">> => <<"run_in_progress">>,
                                               <<"runId">> => RunId}),
             Req2 = cowboy_req:reply(409, headers_map(
-                                      beamai_agui_http_handler:json_headers()), Body, Req),
+                                      beamai_agui_http_handler:json_headers(), Config), Body, Req),
             {ok, Req2, undefined};
         {error, Reason} ->
             Body = beamai_utils:encode_json(
                      #{<<"error">> => <<"session_error">>,
                        <<"detail">> => iolist_to_binary(io_lib:format("~p", [Reason]))}),
             Req2 = cowboy_req:reply(500, headers_map(
-                                      beamai_agui_http_handler:json_headers()), Body, Req),
+                                      beamai_agui_http_handler:json_headers(), Config), Body, Req),
             {ok, Req2, undefined}
     end.
 
@@ -324,7 +324,7 @@ format_reason(Reason) ->
 
 handle_info(Req, Config0) ->
     Config = beamai_agui_http_handler:init(Config0),
-    reply_result(beamai_agui_http_handler:handle_info(Config), Req).
+    reply_result(beamai_agui_http_handler:handle_info(Config), Req, Config).
 
 %%====================================================================
 %% threads 只读面 + 运维面
@@ -336,22 +336,22 @@ handle_thread(Method, Req, Config) ->
     Query = query_map(Req),
     case {Method, Sub} of
         {<<"GET">>, <<"stream">>} ->
-            handle_thread_stream(ThreadId, Query, Req);
+            handle_thread_stream(ThreadId, Query, Req, Config);
         {<<"GET">>, <<"messages">>} ->
             reply_result(beamai_agui_http_handler:handle_thread_messages(ThreadId, Query),
-                         Req);
+                         Req, Config);
         {<<"GET">>, <<"events">>} ->
-            reply_result(beamai_agui_http_handler:handle_thread_events(ThreadId, Query), Req);
+            reply_result(beamai_agui_http_handler:handle_thread_events(ThreadId, Query), Req, Config);
         {<<"GET">>, <<"state">>} ->
-            reply_result(beamai_agui_http_handler:handle_thread_state(ThreadId, Query), Req);
+            reply_result(beamai_agui_http_handler:handle_thread_state(ThreadId, Query), Req, Config);
         {<<"POST">>, <<"stop">>} ->
-            reply_result(beamai_agui_http_handler:handle_thread_stop(ThreadId, Query), Req);
+            reply_result(beamai_agui_http_handler:handle_thread_stop(ThreadId, Query), Req, Config);
         {<<"DELETE">>, undefined} ->
-            reply_result(beamai_agui_http_handler:handle_thread_delete(ThreadId, Query), Req);
+            reply_result(beamai_agui_http_handler:handle_thread_delete(ThreadId, Query), Req, Config);
         {<<"GET">>, undefined} ->
             %% **认路径参数**：这一条的元信息，不是整张表（不存在回 404）
             reply_result(beamai_agui_http_handler:handle_thread(ThreadId, Query),
-                         Req);
+                         Req, Config);
         _ ->
             not_found(Req, Config)
     end.
@@ -365,54 +365,60 @@ handle_thread(Method, Req, Config) ->
 %% 「No 'Access-Control-Allow-Origin' header is present」—— 于是拿到报文的人第一
 %% 反应是去查 CORS，而 CORS 是好的，真正的原因是**那条路不存在**。让 404 自己
 %% 说清楚，比事后解释便宜得多。
-not_found(Req, _Config) ->
+not_found(Req, Config) ->
     Body = beamai_utils:encode_json(
              #{<<"error">> => <<"not_found">>,
                <<"path">> => cowboy_req:path(Req),
                <<"method">> => cowboy_req:method(Req),
                <<"hint">> => <<"这台运行时的端点见 GET /agui/info；按 agent 寻址的 "
                                "run 路径是 {base}/agent/{agentId}/run"/utf8>>}),
-    reply_result({error, 404, Body, beamai_agui_http_handler:json_headers()}, Req).
+    reply_result({error, 404, Body, beamai_agui_http_handler:json_headers()},
+                 Req, Config).
 
 %% @private 断线重连：只订阅，不起新 run
 %%
 %% 水位三种写法都认：`?since=` / `?lastEventId=` / `Last-Event-ID` 头。头是浏览器
 %% `EventSource` **自己**加的，前端一行代码都不用写；查询参数留给自己拼 SSE 的
 %% 客户端（以及测试），显式给了就以它为准。
-handle_thread_stream(ThreadId, Query, Req) ->
+handle_thread_stream(ThreadId, Query, Req, Config) ->
     case beamai_agui_sessions:whereis_session(ThreadId) of
         {ok, Session} ->
             Since = beamai_agui_http_handler:since_of(
                       Query#{<<"last-event-id">> =>
                                  cowboy_req:header(<<"last-event-id">>, Req)},
                       undefined),
-            Headers = headers_map(beamai_agui_http_handler:sse_headers()),
+            Headers = headers_map(beamai_agui_http_handler:sse_headers(), Config),
             Req2 = cowboy_req:stream_reply(200, Headers, Req),
             {ok, stream_from(Session, Since, Req2), undefined};
         {error, not_found} ->
             reply_result({error, 404, beamai_utils:encode_json(
                                         #{<<"error">> => <<"thread_not_found">>,
                                           <<"threadId">> => ThreadId}),
-                          beamai_agui_http_handler:json_headers()}, Req);
+                          beamai_agui_http_handler:json_headers()}, Req, Config);
         {error, unavailable} ->
             reply_result({error, 501, beamai_utils:encode_json(
                                         #{<<"error">> => <<"sessions_unavailable">>}),
-                          beamai_agui_http_handler:json_headers()}, Req)
+                          beamai_agui_http_handler:json_headers()}, Req, Config)
     end.
 
 %%====================================================================
 %% 内部
 %%====================================================================
 
-reply_result({ok, Body, RespHeaders}, Req) ->
-    Req2 = cowboy_req:reply(200, headers_map(RespHeaders), Body, Req),
+reply_result({ok, Body, RespHeaders}, Req, Config) ->
+    Req2 = cowboy_req:reply(200, headers_map(RespHeaders, Config), Body, Req),
     {ok, Req2, undefined};
-reply_result({error, Status, Body, RespHeaders}, Req) ->
-    Req2 = cowboy_req:reply(Status, headers_map(RespHeaders), Body, Req),
+reply_result({error, Status, Body, RespHeaders}, Req, Config) ->
+    Req2 = cowboy_req:reply(Status, headers_map(RespHeaders, Config), Body, Req),
     {ok, Req2, undefined}.
 
 query_map(Req) ->
     maps:from_list(cowboy_req:parse_qs(Req)).
 
-headers_map(Headers) ->
-    maps:from_list(Headers).
+%% @private 响应头 + **按这次请求的 Origin 重算的 CORS**
+%%
+%% 框架无关层给的是缺省那一份（`*`），它拿不到 `Origin`；这里盖一层才知道该回显
+%% 哪个源、要不要 `allow-credentials`。所有回复点都经过这儿，于是不会漏。
+headers_map(Headers, Config) ->
+    maps:merge(maps:from_list(Headers),
+               maps:from_list(beamai_agui_http_handler:cors_headers(Config))).

@@ -2,6 +2,10 @@
 %%% @doc AG-UI HTTP 请求处理（框架无关）
 %%%
 %%% 只负责：解析/校验请求、定位 agent 工厂、组装只读面的响应体、给出响应头。
+%%%
+%%% **CORS 的最后一道由适配器盖**：允许哪个源取决于这次请求的 `Origin` 头，而本层
+%%% 拿不到它（它是框架无关的）。这里给的是缺省那一份，适配器按 `cors_headers/1`
+%%% 重算一遍覆盖上去 —— 见 beamai_agui_cowboy_handler 的 headers_map/2。
 %%% 不负责：HTTP 服务器启动、路由、TLS、**SSE 帧怎么写出去**——最后这条是
 %%% 刻意的：流式写回各框架姿势不同（cowboy 的 stream_body、其他框架的
 %%% chunked writer），把它留给适配器，这一层才能真的框架无关。
@@ -47,7 +51,8 @@
 -export([handle_threads/1, handle_thread/2, handle_thread_messages/2,
          handle_thread_events/2, handle_thread_state/2,
          handle_thread_stop/2, handle_thread_delete/2]).
--export([sse_headers/0, json_headers/0, cors_headers/0]).
+-export([sse_headers/0, sse_headers/1, json_headers/0, json_headers/1]).
+-export([cors_headers/0, cors_headers/1, cors_origins/1]).
 -export([json_response/2, since_of/2, run_opts/1]).
 
 -type config() :: #{
@@ -62,6 +67,11 @@
     event_transform => beamai_agui_plugin:transform(),
     input_transform => fun((beamai_agui_types:run_input()) ->
                               beamai_agui_types:run_input()),
+    %% 允许哪些源跨域访问。`any`（缺省）= `*`；给列表就只放行列表里的，
+    %% 并回 `access-control-allow-credentials: true`（见 cors_headers/1）
+    cors_origins => any | [binary()],
+    %% 本次请求的 `Origin` 头，由适配器填（框架无关层自己拿不到）
+    origin => binary() | undefined,
     %% `/info` 里如实声明的可选能力位（都是**装配方**才知道的事，本层不猜）
     suggestions => boolean(),
     open_generative_ui => boolean(),
@@ -96,13 +106,13 @@ init(Config) when is_map(Config) ->
 handle_run(Body, _Headers, Config) ->
     case beamai_agui_types:parse_run_input(Body) of
         {error, Reason} ->
-            error_response(400, <<"invalid_request">>, Reason);
+            error_response(400, <<"invalid_request">>, Reason, Config);
         {ok, Input} ->
             case resolve_agent(Input, Config) of
                 {error, Reason} ->
-                    error_response(404, <<"agent_not_found">>, Reason);
+                    error_response(404, <<"agent_not_found">>, Reason, Config);
                 {ok, Factory} ->
-                    {stream, Input, Factory, sse_headers()}
+                    {stream, Input, Factory, sse_headers(Config)}
             end
     end.
 
@@ -147,7 +157,7 @@ handle_info(Config) ->
             <<"realtimeMetadata">> => false
         }
     }),
-    {ok, Body, json_headers()}.
+    {ok, Body, json_headers(Config)}.
 
 %%====================================================================
 %% 只读面 + 运维面
@@ -255,26 +265,89 @@ handle_thread_delete(ThreadId, _Query) ->
 %% `x-accel-buffering: no` 是给 nginx 的：默认它会缓冲上游响应，
 %% 一缓冲流式就变成了"最后一次性吐出来"，前端看不到任何增量。
 -spec sse_headers() -> [{binary(), binary()}].
-sse_headers() ->
+sse_headers() -> sse_headers(#{}).
+
+-spec sse_headers(config()) -> [{binary(), binary()}].
+sse_headers(Config) ->
     [{<<"content-type">>, <<"text/event-stream">>},
      {<<"cache-control">>, <<"no-cache">>},
      {<<"connection">>, <<"keep-alive">>},
-     {<<"x-accel-buffering">>, <<"no">>}] ++ cors_headers().
+     {<<"x-accel-buffering">>, <<"no">>}] ++ cors_headers(Config).
 
 %% @doc JSON 响应头
 -spec json_headers() -> [{binary(), binary()}].
-json_headers() ->
-    [{<<"content-type">>, <<"application/json">>}] ++ cors_headers().
+json_headers() -> json_headers(#{}).
+
+-spec json_headers(config()) -> [{binary(), binary()}].
+json_headers(Config) ->
+    [{<<"content-type">>, <<"application/json">>}] ++ cors_headers(Config).
 
 %% @doc CORS 头（AG-UI 前端通常与 runtime 不同源）
 -spec cors_headers() -> [{binary(), binary()}].
-cors_headers() ->
-    [{<<"access-control-allow-origin">>, <<"*">>},
-     {<<"access-control-allow-methods">>, <<"GET, POST, DELETE, OPTIONS">>},
-     %% `last-event-id` 必须放行：断线重连就靠这个头带着水位回来
-     {<<"access-control-allow-headers">>,
-      <<"content-type, authorization, last-event-id">>},
-     {<<"access-control-expose-headers">>, <<"x-agui-run-id, x-agui-since">>}].
+cors_headers() -> cors_headers(#{}).
+
+%% @doc 按配置算这次请求的 CORS 头
+%%
+%% == 两种模式，差别在能不能带凭据 ==
+%%
+%% - `any`（缺省）→ `access-control-allow-origin: *`。够开发用，但浏览器**不允许
+%%   `*` 与凭据并存**：前端一旦 `credentials: 'include'`（或 `EventSource` 带
+%%   `withCredentials`），请求当场被浏览器拦掉，而且错误只出现在浏览器控制台 ——
+%%   服务端日志里干干净净，这类问题最难查。
+%% - 给**允许列表** → 命中就把 `Origin` **原样回显**，并加
+%%   `access-control-allow-credentials: true`。这是带 cookie / session 时唯一可行的
+%%   写法。
+%%
+%% 没命中就**不发 `access-control-allow-origin`** —— 让浏览器如实拦掉，而不是回一个
+%% `*` 假装放行（那会在带凭据时变成一个更难查的错）。
+%%
+%% `vary: origin` 在给列表时必发：响应随 `Origin` 而变，不告诉缓存这件事，
+%% CDN / 浏览器缓存会把 A 源的响应喂给 B 源。
+%%
+%% `access-control-allow-headers` 里 **`last-event-id` 必须放行** —— 断线重连就靠
+%% 这个头把水位带回来；`expose-headers` 里的 `x-agui-run-id` 是跨源前端读得到
+%% run id 的唯一途径（它要拿这个 id 才停得掉这条 run）。
+-spec cors_headers(config()) -> [{binary(), binary()}].
+cors_headers(Config) ->
+    Base = [{<<"access-control-allow-methods">>, <<"GET, POST, DELETE, OPTIONS">>},
+            {<<"access-control-allow-headers">>,
+             <<"content-type, authorization, last-event-id">>},
+            {<<"access-control-expose-headers">>, <<"x-agui-run-id, x-agui-since">>},
+            %% 预检结果缓存 10 分钟：不缓存的话每个 POST 前面都多一次 OPTIONS 往返
+            {<<"access-control-max-age">>, <<"600">>}],
+    case cors_origins(Config) of
+        any ->
+            [{<<"access-control-allow-origin">>, <<"*">>} | Base];
+        Allowed ->
+            [{<<"vary">>, <<"origin">>} | allow_origin(Config, Allowed) ++ Base]
+    end.
+
+%% @doc 这个端点允许哪些源
+%%
+%% 端点配置 > 应用环境 > `any`。应用环境这一层是给「整台服务一个口径」用的：
+%% ```erlang
+%% {beamai_agui, [{cors_origins, [<<"http://localhost:3002">>]}]}
+%% ```
+-spec cors_origins(config()) -> any | [binary()].
+cors_origins(Config) ->
+    case maps:get(cors_origins, Config, undefined) of
+        undefined -> application:get_env(beamai_agui, cors_origins, any);
+        Value -> Value
+    end.
+
+%% @private 命中才回显；没命中一个字都不发（见 cors_headers/1）
+allow_origin(Config, Allowed) ->
+    case maps:get(origin, Config, undefined) of
+        Origin when is_binary(Origin) ->
+            case lists:member(Origin, Allowed) of
+                true -> [{<<"access-control-allow-origin">>, Origin},
+                         {<<"access-control-allow-credentials">>, <<"true">>}];
+                false -> []
+            end;
+        _ ->
+            %% 同源请求（浏览器不发 Origin）/ curl —— 本来就不需要 CORS 头
+            []
+    end.
 
 %%====================================================================
 %% 辅助（供适配器复用）
@@ -457,8 +530,11 @@ null_if_undefined(undefined) -> null;
 null_if_undefined(V) -> V.
 
 error_response(Status, Code, Reason) ->
+    error_response(Status, Code, Reason, #{}).
+
+error_response(Status, Code, Reason, Config) ->
     Body = beamai_utils:encode_json(#{
         <<"error">> => Code,
         <<"detail">> => iolist_to_binary(io_lib:format("~p", [Reason]))
     }),
-    {error, Status, Body, json_headers()}.
+    {error, Status, Body, json_headers(Config)}.
