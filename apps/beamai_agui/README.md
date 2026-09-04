@@ -124,6 +124,34 @@ Dispatch = cowboy_router:compile([
                              #{env => #{dispatch => Dispatch}}).
 ```
 
+## 协议覆盖：29 个事件类型
+
+AG-UI 的**非弃用**事件类型全部实现（`beamai_agui_event` 里各有一个构造器）：
+
+| 族 | 类型 | 谁发 |
+|---|---|---|
+| run | `RUN_STARTED` / `RUN_FINISHED` / `RUN_ERROR` | `beamai_agui_runner` + 会话层补终态 |
+| step | `STEP_STARTED` / `STEP_FINISHED` | 每轮 LLM 调用 |
+| 文本 | `TEXT_MESSAGE_START` / `CONTENT` / `END` | `on_token` + 消息边界回调 |
+| 推理 | `REASONING_START` / `END`、`REASONING_MESSAGE_START` / `CONTENT` / `END` | provider 的 thinking / reasoning 增量 |
+| 工具 | `TOOL_CALL_START` / `ARGS` / `END` / `RESULT` | 消息里的 tool_calls + `on_tool_result` |
+| 状态 | `STATE_SNAPSHOT` / `STATE_DELTA` | run 开头立基线 + `on_state_change` |
+| 消息 | `MESSAGES_SNAPSHOT` | 断线重连补不回缺口时（见会话层） |
+| activity | `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` | **插件**（A2UI / 生成式 UI / MCP Apps） |
+| 子 agent | `SUBAGENT_STARTED` / `FINISHED` / `ERROR` | `beamai_agui_subagent`（缺省关） |
+| 扩展 | `CUSTOM` / `RAW` | 宿主 |
+| chunk | `TEXT_MESSAGE_CHUNK` / `TOOL_CALL_CHUNK` | **缺省不发**，见下 |
+
+**`THINKING_*` 一族刻意不做**：AG-UI 0.0.59 起全部 deprecated、1.0 移除，思考走
+`REASONING_*`（前端有专门的折叠面板渲染它）。做一个要被移除的东西，只会让将来
+多一次清理。
+
+**`*_CHUNK` 两条缺省不发**：它们是协议留给「分不出消息边界的生产者」的便利事件，
+客户端收到后自己展开成 START/CONTENT/END 三件套。我们的边界分得出（上游
+`on_message_start` / `on_message_end` 恒成对），发显式三件套严格更好。构造器留着
+是给宿主用的 —— 有些代理层只能转发不带边界的 token 流。两种**不能混着发同一条
+消息**，客户端会把它当成两条。
+
 ## 事件映射
 
 | AG-UI 事件 | 由什么驱动 |
@@ -333,17 +361,135 @@ system prompt 是唯一的路。
 非文本部件跳过 —— 骨架阶段不往下传图片，**翻不动就别假装翻得动**。不做这一步的话
 下游拿到的是一坨结构体，内容全丢且不报错。
 
+## 可选插件：三种生成式 UI
+
+三个插件都住在 `event_transform` 这个通用挂点上 —— 不装就完全不存在，
+`/info` 也如实报 false。装配方式一样：往 agent 配置里加工具，往端点配置里加
+transform，再把 `/info` 的位报上。
+
+```erlang
+%% 工厂里（给模型看得见的工具 + 用法提示词）
+beamai_agent:new(maps:merge(beamai_agui_a2ui:with_tool(#{chat_client => K}), RuntimeCfg))
+
+%% 路由里
+{"/agui/run", beamai_agui_cowboy_handler,
+ #{agent => <<"my-agent">>,
+   event_transform => beamai_agui_a2ui:event_transform(),
+   input_transform => beamai_agui_a2ui:input_transform(),
+   a2ui => true}}                                  %% ← /info 的能力位
+```
+
+装两个以上用 `beamai_agui_plugin:compose([A, B])` 串起来。
+
+### `beamai_agui_a2ui` —— A2UI（声明式）
+
+模型生成的是**组件树**，只能用 catalog 里有的组件；前端按自己的组件库渲染。
+一条 `ACTIVITY_SNAPSHOT`（`replace: true`，所以不需要 delta），`content` 里装三条
+op：`createSurface` → `updateComponents` → `updateDataModel`。**顺序是协议要求的**，
+少一条或反了，前端要么空白要么报「surface 不存在」。
+
+缺省 catalog 是 A2UI v0.9 基础 catalog 的 18 个组件。**换成你前端真正注册的那份**
+（`with_tool/2` 的 `catalog`）—— catalog 是模型的词汇表，报了前端没有的组件，渲染
+就是空白。
+
+用户点了生成出来的按钮 → `forwardedProps.a2uiAction` → `input_transform/0` 把它
+合成一条 user 消息接回本轮（走的是与普通输入完全相同的路，没有新增机制）。
+
+### `beamai_agui_genui` —— Open Generative UI（沙箱）
+
+模型生成一整块 HTML/CSS/JS，前端在沙箱 iframe 里跑。一条 `ACTIVITY_SNAPSHOT`
+（`generating: true`）加一串 `ACTIVITY_DELTA`（JSON Patch）。三条**猜错了前端不
+报错、只会静默少渲染**的细节：
+
+1. **snapshot 必须在任何 delta 之前**，而且只一条 —— 消息还没建，delta 会被悄悄
+   丢弃；
+2. **`add` 必须带 `value`** —— 模型经常给 `"jsFunctions": null`，一条没有 value 的
+   patch 会让前端把**整批**判非法丢掉。所以 null 整条跳过，只留 `…Complete` 标记；
+3. **`html` 是数组不是字符串** —— `/html` 先建空数组，之后 `/html/-` 追加。
+
+工具卡片被**扣住**直到第一条 activity 发出去，否则前端先看见卡片再看见 UI，闪一下。
+
+### `beamai_agui_mcp_apps` —— MCP Apps（前端那半边）
+
+协议栈在 `beamai_mcp`；这里只剩**前端约定**：带 `_meta."ui/resourceUri"` 的工具出
+结果时补一条 `mcp-apps` activity 快照（带 `resourceUri` / `serverId` / `toolInput`
+/ `result`），以及那块 iframe 发起调用时的**代理白名单**（`proxy_request/2`，只放行
+`tools/call` / `resources/read` / `notifications/message` / `ping` —— 界面跑在浏览器
+里，不能让它随便调 server 的任何东西）。
+
+哪些工具带 UI 在**装配期**算一次（`app_tools/1`），不每轮再问 server。
+
+### 一处与上游的共同差异
+
+三个插件都在 `TOOL_CALL_END` 才翻译（攒齐参数片段再一次解析），而不是边流边贴。
+事件的**形状与顺序**与上游逐条一致，少的是中间态。理由在 `beamai_agui_plugin`
+模块头。
+
+## 子 agent lane
+
+没有这一层时，一次委派在前端看起来就是**一个跑了很久的工具调用**。开了之后
+（`{beamai_agui, subagent_events, true}`）委派出去那一段有自己的 lane：
+
+```erlang
+%% 工厂里 —— observer 由 runtime 交下来，关着时它是 undefined
+fun(_Input, RuntimeCfg) ->
+    Delegate = beamai_agui_subagent:delegate_tool(
+                 #{name => <<"research">>, subagent => fun(_A, _C) -> SubConfig end},
+                 maps:get(subagent_observer, RuntimeCfg, undefined)),
+    ...
+end
+```
+
+`SUBAGENT_STARTED` → lane 里子 agent 自己的事件（**每条都带 `subagentRunId`**）
+→ `SUBAGENT_FINISHED` / `SUBAGENT_ERROR`。
+
+**没有改上游**：`beamai_agent_delegate` 的 `subagent` 是个返回 agent 配置的函数，
+而配置里可以有 `callbacks` —— 包一层就够了。`fanout_tool` 同样成立（每个子任务一条
+lane）。
+
+**缺省关不是保守**：`@ag-ui/client` ≤ 0.0.57 在 HTTP transport 里拿 discriminated
+union 校验每一条事件，一条 `SUBAGENT_STARTED` 掐断整条流，客户端侧救不回来。相比
+之下给既有事件多一个 `subagentRunId` 字段是安全的（事件 schema 是 passthrough），
+所以只有三个新类型需要开关，字段不需要。
+
+两条边界：子 agent 走 `beamai_agent:run/2`（非流式），所以 lane 里的文本是**整条**
+发的；`management_tools` 那条异步委派**不支持**（子 agent 在工具进程死后还在跑，
+那时 lane 的状态表已经回收了）。
+
+## 全能力走查（离线可跑）
+
+`examples/src/example_agui_full.erl` 把上面每一样都跑一遍并下断言，**不需要
+API key**（LLM 由 `example_agui_scripted` 照剧本演）：
+
+```
+cd examples && make compile
+ERL_LIBS=../_build/default/lib:../_build/default/checkouts rebar3 shell
+1> example_agui_full:run().           %% 九个场景
+2> example_agui_full:run(reconnect).  %% 只跑一个
+```
+
+九个场景：`basic`（帧带 `id:`、逐字 `TOOL_CALL_ARGS`、`REASONING_*`）、
+`reconnect`（**真断开**再凭水位接回来）、`stop`（另一个请求停掉在跑的 run）、
+`threads`（`/info` 能力位 + 只读面）、`hitl`（`outcome:"interrupt"` → `resume[]`）、
+`a2ui` / `genui` / `mcp_apps`（三种 activity）、`subagent`（lane）。
+
+真模型下的样子看 `example_agui_live`（验的是真 provider 的 chunk 形状）与
+`example_agui_durable`（验跨 BEAM 进程的会话恢复）。
+
 ## 尚未覆盖的
 
 1. **认证与限流**。`beamai_a2a_auth` / `beamai_a2a_rate_limit` 是现成的样板。
 2. **未对真实 CopilotKit 前端验证过**。事件形状是照协议文档写的，还没被真客户端
    消费过（真 LLM 已经跑通，见下）。
-3. **A2UI / Open Generative UI / MCP Apps 插件**。挂点（`event_transform`）与
-   `/info` 的能力位都在了，插件本身还没写 —— 不装就如实报 false。
-4. **单进程**。会话在进程内，多实例部署要 sticky session（同一个 threadId 落到
+3. **单进程**。会话在进程内，多实例部署要 sticky session（同一个 threadId 落到
    同一个节点），否则重连会连到一个没有那份缓冲的节点上。
-5. **`/threads/:id/messages`**。对话历史归 chat memory，而那层协议没有「列出某个
-   会话的消息」的入口 —— 造一个就等于建第二个真相店。
+4. **`/threads/:id/messages`**。对话历史归 chat memory，而那层协议没有「列出某个
+   会话的消息」的入口 —— 造一个就等于建第二个真相店。会话里那份消息账本只是
+   **这条流自己的投影**（用来补缺口），不当历史用。
+5. **异步委派的 lane**（`management_tools`）。要让 `beamai_subagent_manager` 透出
+   观察钩子，那是上游的改动。
+6. **插件的中间态**。三个 activity 插件都在参数到齐时一次翻译，没有「边生成边
+   长出来」。
 
 ## 实机验证
 
