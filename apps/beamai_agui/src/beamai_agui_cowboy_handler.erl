@@ -23,7 +23,7 @@
 %%%                              #{env => #{dispatch => Dispatch}}).
 %%% ```
 %%%
-%%% `:sub` 认四个：`events` / `state` / `stop` / `stream`。
+%%% `:sub` 认五个：`events` / `messages` / `state` / `stop` / `stream`。
 %%%
 %%% == 为什么兜底路由值得挂 ==
 %%%
@@ -81,8 +81,10 @@
 %%====================================================================
 
 init(Req, Config0) ->
-    %% `{base}/agent/:agent/run` —— 路径里的那个优先于路由钉死的
-    Config = Config0#{path_agent => cowboy_req:binding(agent, Req)},
+    %% `Origin` 只有这一层拿得到（框架无关层是框架无关的），取一次塞进 Config，
+    %% 后面每个回复点都用同一份算 CORS
+    Config = Config0#{%% `{base}/agent/:agent/run` —— 路径里的那个优先于路由钉死的
+                      path_agent => cowboy_req:binding(agent, Req)},
     Method = cowboy_req:method(Req),
     Mode = maps:get(mode, Config, run),
     dispatch(Method, Mode, Req, Config).
@@ -136,15 +138,15 @@ handle_run(Req0, Config0) ->
             {ok, Req2, undefined};
         {stream, Input, Factory, RespHeaders} ->
             start_run(Input, Factory, RespHeaders,
-                      beamai_agui_http_handler:run_opts(Config), Req1)
+                      beamai_agui_http_handler:run_opts(Config), Config, Req1)
     end.
 
 %% @private 会话模式优先；会话层没起来就回落到请求模式
-start_run(Input, Factory, RespHeaders, RunOpts, Req) ->
+start_run(Input, Factory, RespHeaders, RunOpts, Config, Req) ->
     ThreadId = beamai_agui_types:thread_id(Input),
     case beamai_agui_sessions:ensure(ThreadId) of
         {ok, Session} ->
-            session_run(Session, Input, Factory, RunOpts, RespHeaders, Req);
+            session_run(Session, Input, Factory, RunOpts, RespHeaders, Config, Req);
         {error, _} ->
             Req2 = cowboy_req:stream_reply(200, headers_map(RespHeaders), Req),
             Req3 = local_run(Input, Factory, RunOpts, Req2),
@@ -156,8 +158,10 @@ start_run(Input, Factory, RespHeaders, RunOpts, Req) ->
 %% 水位不能传 undefined：run 一进来就发了 `RUN_STARTED`，而我们要等 start_run
 %% 返回才轮到订阅 —— 中间那一段是真空。AG-UI 客户端第一件事就是校验
 %% "第一条必须是 RUN_STARTED"，漏了它整条流当场作废。
-session_run(Session, Input, Factory, RunOpts, RespHeaders, Req) ->
-    case beamai_agui_session:start_run(Session, Input, Factory, #{run_opts => RunOpts}) of
+session_run(Session, Input, Factory, RunOpts, RespHeaders, Config, Req) ->
+    case beamai_agui_session:start_run(
+           Session, Input, Factory,
+           #{run_opts => RunOpts, agent => resolved_agent(Config)}) of
         {started, RunId, Since} ->
             Headers = headers_map(RespHeaders ++ [{<<"x-agui-run-id">>, RunId}]),
             Req2 = cowboy_req:stream_reply(200, Headers, Req),
@@ -177,6 +181,13 @@ session_run(Session, Input, Factory, RunOpts, RespHeaders, Req) ->
             Req2 = cowboy_req:reply(500, headers_map(
                                       beamai_agui_http_handler:json_headers()), Body, Req),
             {ok, Req2, undefined}
+    end.
+
+%% @private 这次路由到了哪个 agent（记进会话，`/threads` 的 `agentId` 要它）
+resolved_agent(Config) ->
+    case maps:get(path_agent, Config, undefined) of
+        Name when is_binary(Name), Name =/= <<>> -> Name;
+        _ -> maps:get(agent, Config, undefined)
     end.
 
 %%====================================================================
@@ -326,6 +337,9 @@ handle_thread(Method, Req, Config) ->
     case {Method, Sub} of
         {<<"GET">>, <<"stream">>} ->
             handle_thread_stream(ThreadId, Query, Req);
+        {<<"GET">>, <<"messages">>} ->
+            reply_result(beamai_agui_http_handler:handle_thread_messages(ThreadId, Query),
+                         Req);
         {<<"GET">>, <<"events">>} ->
             reply_result(beamai_agui_http_handler:handle_thread_events(ThreadId, Query), Req);
         {<<"GET">>, <<"state">>} ->
@@ -335,12 +349,30 @@ handle_thread(Method, Req, Config) ->
         {<<"DELETE">>, undefined} ->
             reply_result(beamai_agui_http_handler:handle_thread_delete(ThreadId, Query), Req);
         {<<"GET">>, undefined} ->
-            reply_result(beamai_agui_http_handler:handle_threads(Config), Req);
+            %% **认路径参数**：这一条的元信息，不是整张表（不存在回 404）
+            reply_result(beamai_agui_http_handler:handle_thread(ThreadId, Query),
+                         Req);
         _ ->
-            reply_result({error, 404, beamai_utils:encode_json(
-                                        #{<<"error">> => <<"not_found">>}),
-                          beamai_agui_http_handler:json_headers()}, Req)
+            not_found(Req, Config)
     end.
+
+%% @private 404 —— **带 CORS 头**
+%%
+%% cowboy 自己那条「没有路由匹配」的 404 走不到这个 handler，所以宿主要挂一条
+%% 兜底路由（`{"/agui/[...]", ..., #{mode => fallback}}`，放在最后）。
+%%
+%% 为什么值得专门做这件事：不带 CORS 的 404 在浏览器里显示成
+%% 「No 'Access-Control-Allow-Origin' header is present」—— 于是拿到报文的人第一
+%% 反应是去查 CORS，而 CORS 是好的，真正的原因是**那条路不存在**。让 404 自己
+%% 说清楚，比事后解释便宜得多。
+not_found(Req, _Config) ->
+    Body = beamai_utils:encode_json(
+             #{<<"error">> => <<"not_found">>,
+               <<"path">> => cowboy_req:path(Req),
+               <<"method">> => cowboy_req:method(Req),
+               <<"hint">> => <<"这台运行时的端点见 GET /agui/info；按 agent 寻址的 "
+                               "run 路径是 {base}/agent/{agentId}/run"/utf8>>}),
+    reply_result({error, 404, Body, beamai_agui_http_handler:json_headers()}, Req).
 
 %% @private 断线重连：只订阅，不起新 run
 %%
@@ -378,24 +410,6 @@ reply_result({ok, Body, RespHeaders}, Req) ->
 reply_result({error, Status, Body, RespHeaders}, Req) ->
     Req2 = cowboy_req:reply(Status, headers_map(RespHeaders), Body, Req),
     {ok, Req2, undefined}.
-
-%% @private 404 —— **带 CORS 头**
-%%
-%% cowboy 自己那条「没有路由匹配」的 404 走不到这个 handler，所以宿主要挂一条
-%% 兜底路由（`{"/agui/[...]", ..., #{mode => fallback}}`，放在最后）。
-%%
-%% 为什么值得专门做这件事：不带 CORS 的 404 在浏览器里显示成
-%% 「No 'Access-Control-Allow-Origin' header is present」—— 于是拿到报文的人第一
-%% 反应是去查 CORS，而 CORS 是好的，真正的原因是**那条路不存在**。让 404 自己
-%% 说清楚，比事后解释便宜得多。
-not_found(Req, _Config) ->
-    Body = beamai_utils:encode_json(
-             #{<<"error">> => <<"not_found">>,
-               <<"path">> => cowboy_req:path(Req),
-               <<"method">> => cowboy_req:method(Req),
-               <<"hint">> => <<"这台运行时的端点见 GET /agui/info；按 agent 寻址的 "
-                               "run 路径是 {base}/agent/{agentId}/run"/utf8>>}),
-    reply_result({error, 404, Body, beamai_agui_http_handler:json_headers()}, Req).
 
 query_map(Req) ->
     maps:from_list(cowboy_req:parse_qs(Req)).

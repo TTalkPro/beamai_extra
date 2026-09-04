@@ -13,6 +13,8 @@
 %%% | `POST /agui/run` | RunAgentInput → SSE 事件流 |
 %%% | `GET  /agui/info` | 运行时能力声明（对标 getRuntimeInfo） |
 %%% | `GET  /agui/threads` | 会话列表（只读） |
+%%% | `GET  /agui/threads/:id` | 一条线程的元信息（不存在回 404） |
+%%% | `GET  /agui/threads/:id/messages` | 该线程的消息（从事件流折出来的账本） |
 %%% | `GET  /agui/threads/:id/events` | 环形缓冲里现存的事件（只读） |
 %%% | `GET  /agui/threads/:id/state` | 该 thread 当前的共享状态（只读） |
 %%% | `POST /agui/threads/:id/stop` | 停掉这个 thread 上在跑的 run |
@@ -42,7 +44,8 @@
 
 -export([init/1]).
 -export([handle_run/3, handle_info/1]).
--export([handle_threads/1, handle_thread_events/2, handle_thread_state/2,
+-export([handle_threads/1, handle_thread/2, handle_thread_messages/2,
+         handle_thread_events/2, handle_thread_state/2,
          handle_thread_stop/2, handle_thread_delete/2]).
 -export([sse_headers/0, json_headers/0, cors_headers/0]).
 -export([json_response/2, since_of/2, run_opts/1]).
@@ -63,6 +66,9 @@
     suggestions => boolean(),
     open_generative_ui => boolean(),
     a2ui => boolean(),
+    %% 收不收得了附件。**装配方才知道**（取决于 wire 认不认部件**且模型有视觉**），
+    %% 本层不猜；不给就如实报一份全 false，见 agent_info/2
+    multimodal => map(),
     descriptions => #{binary() => binary()}
 }.
 
@@ -167,10 +173,41 @@ handle_threads(_Config) ->
 handle_thread_events(ThreadId, Query) ->
     with_session(ThreadId, fun(Session) ->
         Since = since_of(Query, undefined),
-        Events = [#{<<"seq">> => Seq, <<"event">> => Event}
+        %% `events` 里是**事件本身**，不是 `{event, seq}` 那样包一层 —— 包了之后
+        %% 客户端拿到的每一条都没有 `type`，事件表与时间线全部落空。
+        %% `seq` 挪进事件对象里当一个字段：AG-UI 的事件 schema 是 passthrough 的，
+        %% 老客户端原样忽略，而要续传的客户端拿得到。
+        Events = [Event#{<<"seq">> => Seq}
                   || {Seq, Event} <- beamai_agui_session:events(Session),
                      Since =:= undefined orelse Seq > Since],
-        json_response(200, #{<<"threadId">> => ThreadId, <<"events">> => Events})
+        json_response(200, #{<<"id">> => ThreadId, <<"threadId">> => ThreadId,
+                             <<"events">> => Events})
+    end).
+
+%% @doc 一条线程的元信息
+%%
+%% `GET /threads/:id` 曾经忽略路径参数、恒回整张表 —— 连不存在的 id 也回 200，
+%% 客户端没法据此判断「这条主题没了」。
+-spec handle_thread(binary(), map()) ->
+    {ok, binary(), [{binary(), binary()}]} | {error, pos_integer(), binary(),
+                                              [{binary(), binary()}]}.
+handle_thread(ThreadId, _Query) ->
+    with_session(ThreadId, fun(_Session) ->
+        json_response(200, thread_summary(ThreadId))
+    end).
+
+%% @doc 一条线程的消息列表
+%%
+%% 用的是会话从事件流折出来的**消息账本** —— 它是这条流自己的投影，不是第二个
+%% 对话历史（那在 chat memory 里）。`/info` 报了 `inspect: true`，这条路由就必须
+%% 在：报了能力却没有路由，客户端那一枪必然落空，而**能力位说谎比没有能力更贵**。
+-spec handle_thread_messages(binary(), map()) ->
+    {ok, binary(), [{binary(), binary()}]} | {error, pos_integer(), binary(),
+                                              [{binary(), binary()}]}.
+handle_thread_messages(ThreadId, _Query) ->
+    with_session(ThreadId, fun(Session) ->
+        json_response(200, #{<<"id">> => ThreadId, <<"threadId">> => ThreadId,
+                             <<"messages">> => beamai_agui_session:messages(Session)})
     end).
 
 %% @doc 该 thread 当前的共享状态
@@ -217,9 +254,6 @@ handle_thread_delete(ThreadId, _Query) ->
 %%
 %% `x-accel-buffering: no` 是给 nginx 的：默认它会缓冲上游响应，
 %% 一缓冲流式就变成了"最后一次性吐出来"，前端看不到任何增量。
-%%
-%% `access-control-expose-headers` 让跨源的前端读得到 `x-agui-run-id` ——
-%% 它要拿这个 id 才停得掉这条 run（`POST /threads/:id/stop` 之外的另一条路）。
 -spec sse_headers() -> [{binary(), binary()}].
 sse_headers() ->
     [{<<"content-type">>, <<"text/event-stream">>},
@@ -347,21 +381,52 @@ agent_info(Id, Config) ->
                            <<"clientProvided">> => true,
                            <<"parallelCalls">> => true},
           <<"reasoning">> => #{<<"supported">> => true, <<"streaming">> => true},
-          <<"state">> => #{<<"snapshots">> => true, <<"deltas">> => true}
+          <<"state">> => #{<<"snapshots">> => true, <<"deltas">> => true},
+          <<"multimodal">> => maps:get(multimodal, Config, no_multimodal())
       }}.
 
+%% @private 缺省：如实报「都收不了」
+%%
+%% **缺席与明确报 false 不是一回事**：缺席在客户端那儿只能读成「不知道」，而按
+%% 「不知道就是 false」的惯例，附件入口同样不会出现 —— 但那是猜的。报一份全 false
+%% 是**确定的信息**，下游据此把入口收起来。
+%%
+%% ⚠️ 反过来更贵：报了 `image: true` 而模型没有视觉，用户传了图、模型说看不见。
+%% 能不能收附件取决于两件事 —— wire 认不认部件**且模型本身有视觉** —— 后一条本层
+%% 判不了，所以要开这一格得由装配方传 `multimodal`。
+no_multimodal() ->
+    #{<<"input">> => #{<<"image">> => false, <<"pdf">> => false,
+                       <<"audio">> => false, <<"video">> => false},
+      <<"output">> => #{<<"image">> => false, <<"audio">> => false}}.
+
 %% @private 只读面的一条
+%%
+%% **主键叫 `id`**：协议里是 `id`，客户端（以及上游 inspector）按它归一化 ——
+%% 只给 `threadId` 的话每一条都被判成「没有 id 的坏记录」丢掉，于是列表 200 却
+%% 一行都渲染不出来。`threadId` 一并留着，老代码不用改。
+%%
+%% `name` / `createdAt` / `updatedAt` / `agentId` 是列表页要的那几格；没有名字就
+%% 给 `null`（客户端会显示成「未命名」，那是对的）。
+%%
+%% 运行时内部字段（`seq` / `subscribers` / `stopping`）留着 —— 排障有用，只是不该
+%% 顶替协议字段的位置。
 thread_summary(ThreadId) ->
-    Base = #{<<"threadId">> => ThreadId},
+    Base = #{<<"id">> => ThreadId, <<"threadId">> => ThreadId},
     case beamai_agui_session:status(ThreadId) of
         undefined ->
-            Base;
+            Base#{<<"name">> => null, <<"agentId">> => null,
+                  <<"createdAt">> => null, <<"updatedAt">> => null};
         Status ->
-            Base#{<<"state">> => atom_to_binary(maps:get(state, Status), utf8),
+            Base#{<<"name">> => null_if_undefined(maps:get(name, Status, undefined)),
+                  <<"agentId">> => null_if_undefined(maps:get(agent, Status, undefined)),
+                  <<"createdAt">> => maps:get(created_at, Status, null),
+                  <<"updatedAt">> => maps:get(last_active, Status),
+                  <<"state">> => atom_to_binary(maps:get(state, Status), utf8),
                   <<"runId">> => null_if_undefined(maps:get(run_id, Status)),
                   <<"stopping">> => maps:get(stopping, Status),
                   <<"seq">> => maps:get(seq, Status),
                   <<"subscribers">> => maps:get(subscribers, Status),
+                  %% 旧名字，留着不动
                   <<"lastActive">> => maps:get(last_active, Status)}
     end.
 

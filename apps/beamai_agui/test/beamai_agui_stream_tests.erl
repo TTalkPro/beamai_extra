@@ -69,7 +69,8 @@ stream_test_() ->
           fun() -> info_reports_threads(Ctx) end},
          {"未知 thread → 404", fun() -> unknown_thread(Ctx) end},
          {"按 agent 寻址的 run 路径", fun() -> per_agent_run(Ctx) end},
-         {"没匹配上的路由 → 404 **带 CORS**", fun() -> fallback_has_cors(Ctx) end}]
+         {"没匹配上的路由 → 404 **带 CORS**", fun() -> fallback_has_cors(Ctx) end},
+         {"线程只读面是 AG-UI 的形状", fun() -> thread_shape(Ctx) end}]
      end}.
 
 %%====================================================================
@@ -195,7 +196,11 @@ stop_endpoint(#{port := Port}) ->
         %% 缓冲里那条终态如实说了"是取消，不是跑完了"
         {200, _, EvBody} = get(Port, "/agui/threads/t-stop/events"),
         Events = maps:get(<<"events">>, beamai_utils:parse_json(EvBody)),
-        #{<<"event">> := LastEv} = lists:last(Events),
+        LastEv = lists:last(Events),
+        %% 元素是**事件本身**（有 `type`），`seq` 是它里面的一个字段 —— 包成
+        %% `{event, seq}` 的话客户端拿到的每一条都没有 type，事件表全部落空
+        ?assertEqual(<<"RUN_FINISHED">>, maps:get(<<"type">>, LastEv)),
+        ?assert(is_integer(maps:get(<<"seq">>, LastEv))),
         ?assertEqual(#{<<"status">> => <<"cancelled">>}, maps:get(<<"result">>, LastEv))
     after
         meck:unload(beamai_chat_model)
@@ -362,3 +367,32 @@ fallback_has_cors(#{port := Port}) ->
     ?assertEqual(<<"not_found">>, maps:get(<<"error">>, Json)),
     %% 404 自己说清楚该往哪走
     ?assertMatch({_, _}, binary:match(maps:get(<<"hint">>, Json), <<"/agui/info">>)).
+
+%% 主键是 **`id`**：客户端按它归一化，只给 `threadId` 的话每一条都被判成
+%% 「没有 id 的坏记录」丢掉 —— 列表 200 却一行都渲染不出来
+thread_shape(#{port := Port}) ->
+    ok = mock_fast(),
+    try
+        {200, _, _} = post(Port, "/agui/agent/echo/run", run_body(<<"t-shape">>)),
+
+        {200, _, ListBody} = get(Port, "/agui/threads"),
+        [T] = [T || T <- maps:get(<<"threads">>, beamai_utils:parse_json(ListBody)),
+                    maps:get(<<"id">>, T, undefined) =:= <<"t-shape">>],
+        ?assertEqual(<<"t-shape">>, maps:get(<<"threadId">>, T)),
+        ?assertEqual(<<"echo">>, maps:get(<<"agentId">>, T)),
+        ?assertEqual(null, maps:get(<<"name">>, T)),
+        ?assert(is_integer(maps:get(<<"createdAt">>, T))),
+        ?assert(is_integer(maps:get(<<"updatedAt">>, T))),
+
+        %% `GET /threads/:id` 认路径参数：回**这一条**，不存在回 404
+        {200, _, One} = get(Port, "/agui/threads/t-shape"),
+        ?assertEqual(<<"t-shape">>, maps:get(<<"id">>, beamai_utils:parse_json(One))),
+        {404, _, _} = get(Port, "/agui/threads/no-such-thread"),
+
+        %% `/info` 报了 `inspect: true`，这条路由就必须在 —— 能力位说谎比没有能力更贵
+        {200, _, MsgBody} = get(Port, "/agui/threads/t-shape/messages"),
+        Messages = maps:get(<<"messages">>, beamai_utils:parse_json(MsgBody)),
+        ?assertMatch([#{<<"role">> := <<"assistant">>} | _], Messages)
+    after
+        meck:unload(beamai_chat_model)
+    end.

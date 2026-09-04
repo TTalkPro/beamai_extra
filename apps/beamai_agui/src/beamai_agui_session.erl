@@ -83,9 +83,10 @@ start_link(ThreadId) ->
 
 %% @doc 起一次 run。**立刻返回**，run 在会话下的独立进程里跑。
 %%
-%% `Opts` 认两个键：`on_concurrent`（覆盖本次的并发策略）与 `run_opts`
+%% `Opts` 认三个键：`on_concurrent`（覆盖本次的并发策略）、`run_opts`
 %% （原样交给 `beamai_agui_runner:run/4` —— 插件的 `event_transform` /
-%% `input_transform` 走这条路进来）。
+%% `input_transform` 走这条路进来）、`agent`（这次路由到了哪个 agent，
+%% 记下来给 `/threads` 的 `agentId` 用）。
 %%
 %% 返回的 `Since` 是**起跑前的 seq 水位**：run 一进来就发 `RUN_STARTED`，而调用方
 %% 要等本函数返回才轮到 `subscribe/2`，中间那一段是真空。拿这个水位去订阅，缺口
@@ -199,10 +200,18 @@ init([ThreadId]) ->
            messages => [],
            open_message => undefined,
            tool_calls => #{},
+           %% `/threads` 列表页要的两格：建于何时、跑的是哪个 agent
+           created_at => now_ms(),
+           agent => undefined,
            last_active => now_ms()}}.
 
 handle_call({start_run, Input, Factory, Opts}, From, State) ->
-    do_start_run(Input, Factory, Opts, From, touch(State));
+    %% agent 名由调用方给（它才知道这次路由到了谁），记下来给 `/threads` 用
+    State1 = case maps:get(agent, Opts, undefined) of
+                 undefined -> State;
+                 Agent -> State#{agent => Agent}
+             end,
+    do_start_run(Input, Factory, Opts, From, touch(State1));
 
 handle_call({subscribe, Pid, Since}, _From, State) ->
     #{buffer := Buffer} = State,
@@ -606,6 +615,8 @@ do_status(State) ->
     Run = maps:get(run, State),
     Awaiting = maps:get(awaiting, State),
     #{thread_id => maps:get(thread_id, State),
+      agent => maps:get(agent, State),
+      created_at => maps:get(created_at, State),
       %% run 在跑 > 停在等人 > 闲着
       state => if Run =/= undefined -> running;
                   Awaiting =/= undefined -> awaiting_resume;
