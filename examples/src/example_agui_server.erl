@@ -45,6 +45,9 @@
 %%% | `POST /agui/threads/:id/stop` | 停掉在跑的 run |
 %%% | `DELETE /agui/threads/:id` | 摘掉会话 |
 %%%
+%%% agent 有**两个名字**：`beamai-demo` 与 `default`，同一台。后者是客户端在用户
+%%% 还没挑之前拼出来的那个 id —— 真注册一份，插上就能连。
+%%%
 %%% `Last-Event-ID` 已在 `access-control-allow-headers` 里放行（断线重连靠它把水位
 %%% 带回来），`x-agui-run-id` 已 expose（跨源前端读得到 run id 才停得掉那条 run），
 %%% 预检结果缓存 10 分钟。
@@ -71,6 +74,10 @@
 
 -define(LISTENER, example_agui_server_listener).
 -define(AGENT, <<"beamai-demo">>).
+%% 同一个 agent 的第二个名字：客户端在用户还没从 `/info` 挑之前（或者压根没读
+%% `/info`）拼出来的就是 `{base}/agent/default/run`。demo 是拿来「插上就能连」的，
+%% 所以这个名字**真注册一份**，不让人先去读文档才知道该填哪个 id。
+-define(ALIAS, <<"default">>).
 -define(DEFAULT_PORT, 8080).
 
 %%====================================================================
@@ -90,7 +97,10 @@ start(Port, Opts) ->
     {ok, _} = application:ensure_all_started(cowboy),
     Provider = maps:get(provider, Opts, minimax),
     Origins = maps:get(cors_origins, Opts, default_origins()),
-    ok = beamai_agui_registry:register(?AGENT, factory(Provider)),
+    %% 两个名字共用**同一个**工厂：换个 id 进来的是同一台 agent，不是两台
+    Factory = factory(Provider),
+    ok = beamai_agui_registry:register(?AGENT, Factory),
+    ok = beamai_agui_registry:register(?ALIAS, Factory),
     {ok, _} = cowboy:start_clear(?LISTENER, [{port, Port}],
                                  #{env => #{dispatch => dispatch(Origins)}}),
     Actual = ranch:get_port(?LISTENER),
@@ -140,7 +150,8 @@ dispatch(Origins) ->
         input_transform => beamai_agui_a2ui:input_transform(),
         a2ui => true,
         open_generative_ui => true,
-        descriptions => #{?AGENT => <<"BeamAI AG-UI 演示 agent"/utf8>>}
+        descriptions => #{?AGENT => <<"BeamAI AG-UI 演示 agent"/utf8>>,
+                          ?ALIAS => <<"同 beamai-demo，给硬编码 default 的客户端"/utf8>>}
     },
     cowboy_router:compile([
         {'_', [
@@ -282,7 +293,7 @@ banner(Port, Provider, Opts, Origins) ->
     io:format("  BeamAI AG-UI 服务已启动~n", []),
     io:format("~s~n", [lists:duplicate(66, $=)]),
     io:format("  模型          ~ts~n", [Provider]),
-    io:format("  agent         ~ts~n", [?AGENT]),
+    io:format("  agent         ~ts（别名 ~ts）~n", [?AGENT, ?ALIAS]),
     io:format("  子 agent 事件  ~ts~n",
               [case maps:get(subagent_events, Opts, false) of
                    true -> "开（前端要 @ag-ui/client ≥ 0.0.58）";
@@ -296,6 +307,7 @@ banner(Port, Provider, Opts, Origins) ->
     io:format("~n  端点~n", []),
     io:format("    POST   ~s/agui/run~n", [B]),
     io:format("    POST   ~s/agui/agent/beamai-demo/run   (标准客户端拼的那条)~n", [B]),
+    io:format("    POST   ~s/agui/agent/default/run       (同上，别名)~n", [B]),
     io:format("    GET    ~s/agui/info~n", [B]),
     io:format("    GET    ~s/agui/threads~n", [B]),
     io:format("    GET    ~s/agui/threads/:id~n", [B]),
