@@ -331,8 +331,91 @@ xref 无非 unused-export 警告。
   unicode}])`，`~s` 直接 badarg；而**格式串是普通字符串，不能写 `/utf8`**
   （那是 binary 的语法）。
 
-验证：`rebar3 eunit` **739 tests 0 failures**（此前 708）；编译零警告；dialyzer 只剩
-既有的 `beamai_mcp_server.erl:442`；`example_agui_full:run()` 九个场景全过。
+### 已做·实机验证（MiniMax m2.7）与它照出来的三个 bug
+
+`example_agui_full` 加了实机模式（`live/0,1,2`）：同样九个场景换真模型跑。
+**离线与实机验的不是同一件事** —— 离线验协议形状（硬断言），实机验假设成不成立
+（那一半取决于模型这轮的选择，所以降级成 `[skip]` 而不是 `[FAIL]`）。
+
+离线九个场景全绿，却照出三个只有实机才暴露的 bug：
+
+- [x] **插件的工具压根没挂上**（最要命的一个）。`beamai_agent:new/1` **没有 `tools`
+  这一位**（只有 `interrupt_tools`），工具挂在 chat client 上。三个插件的 `with_tool`
+  原来写成 `Config#{tools => ...}` —— 编译得过、跑得动、单测也过（测的是那个键），
+  模型却**永远看不见那个工具**。实机症状：模型拿 `get_weather` 去应付「画个面板」，
+  还说"我目前没有可用的 render_a2ui 工具"。
+  修法：`beamai_agui_plugin:add_tool/2` 改成往 `chat_client` 里加；配置里没有
+  `chat_client` 就**直接报错** —— 装不上的插件应当在装配期炸，不是等线上发现模型
+  行为不对。测试同步改成查 chat client，另加 `with_tool_requires_chat_client_test`。
+- [x] **提示词里的破折号被按字节截断**。Erlang 的 `<<"...">>` 把非 ASCII 码点截成
+  一个字节 —— `—` 到模型那儿是控制字符（JSON 里 `\u0014`）。a2ui 5 处、genui 4 处。
+  插件提示词是英文散文，改回 ASCII 最省事；另加 `plugin_prompts_are_ascii_test`
+  盯着（断言纯 ASCII 且无控制字符）。
+- [x] **`max_tokens` 缺省 2048 装不下 A2UI 的组件树 / genui 的 HTML**。截断的 JSON
+  解不出来，插件只拿到空参数 —— 症状是"模型调了工具但什么都没画"。实机配置提到 8192。
+
+另修两处**演示本身**的问题（不是产品 bug，但会让走查失去意义）：
+
+- [x] **工具表里的无关道具**。a2ui / genui / mcp_apps 三个场景原来也挂着
+  `get_weather`，模型就拿它去应付。改成每个场景只给它要演的那把，提示词也说清楚
+  要调哪个工具。
+- [x] **场景之间没收干净**。`reconnect` 故意留了一个还在跑的 run（那正是它要演的
+  事），不收就带进下一个场景 —— 上一轮的 run 还在往一条没人的流里写，下一个场景
+  起 listener 时撞见它，客户端拿到 `{stream_error, closed}`。`shutdown/0` 现在
+  先 forget 所有会话再停 listener。
+
+顺带一条工程陷阱（写进 examples/Makefile 了）：`rebar3 eunit` 只更新 `_build/test`，
+而 examples 经 `ERL_LIBS` 加载 `_build/default` —— 只跑过测试就来跑例子，加载的是
+**上一次 compile 留下的旧 beam**，代码明明改了行为却是旧的。`make compile` 现在先
+编上层。
+
+实机结果（MiniMax m2.7）：九个场景全过。真跑通的有 —— 断线重连补回 204 帧一条不漏、
+跨请求 stop、`outcome:"interrupt"` → `resume[]` 往返、A2UI 组件树（模型只用了
+catalog 里的 `Column` / `Row` / `Text`）、genui 的完整 patch 序列
+（`/css` → `/html` → `/html/-` → `/jsExpressions` → `/generating`）、MCP Apps
+activity、子 agent lane。跳过的两条是模型的选择（这轮没思考、参数一口给完）。
+
+验证：`rebar3 eunit` **741 tests 0 failures**（此前 708）；编译零警告；dialyzer 只剩
+既有的 `beamai_mcp_server.erl:442`；`example_agui_full:run()` 与
+`example_agui_full:live()` 九个场景各自全过。
+
+### 已做·genui 挪进 examples + CORS 允许列表 + 联调服务器（2026-09-04 第三批）
+
+- [x] **`beamai_agui_genui` → `examples/src/example_agui_genui.erl`**。判据是「协议
+  认不认」：AG-UI 协议层只认 `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` 这对**通用**
+  事件，而 `generateSandboxedUi` 这个工具名、`open-generative-ui` 这个活动类型、
+  那套 patch 形状，全是 CopilotKit Runtime 一个**可选中间件**自己的约定 —— 上游
+  自己的分层也是这么切的。**通用的那半留在库里**（事件构造器、
+  `beamai_agui_plugin` 的 `tool_watcher` / `compose`、`/info` 的
+  `openGenerativeUIEnabled` 位），**约定的那半是一份可照抄改写的示例**。
+  A2UI 留在库里，同一条判据：它有自己的外部规范（a2ui.org），不绑某一个前端 runtime。
+  单测跟着代码走到 `examples/test/example_agui_genui_tests.erl`，`make test` 跑它。
+- [x] **CORS 允许列表**（`cors_origins`：端点配置 > 应用环境 > `any`）。缺省仍是
+  `*`；给列表就**回显命中的 Origin** 并加 `access-control-allow-credentials: true`。
+  理由不是洁癖：**浏览器不允许 `*` 与凭据并存** —— 前端一旦
+  `credentials: 'include'`（或 `EventSource` 带 `withCredentials`）请求当场被拦，
+  而且错误只在浏览器控制台，服务端日志干干净净。没命中就**不发**
+  `allow-origin`（让浏览器如实拦掉，而不是回个 `*` 假装放行）；给列表时必发
+  `vary: origin`（否则 CDN 会把 A 源的响应喂给 B 源）。顺带补上
+  `access-control-max-age: 600`（不缓存预检，每个 POST 前面都多一次 OPTIONS 往返）。
+  **CORS 的最后一道由适配器盖** —— 允许哪个源要看这次请求的 `Origin`，而框架无关层
+  拿不到它；所有回复点都经过同一个 `headers_map/2`，不会漏。3 个新用例。
+- [x] **`examples/src/example_agui_server.erl`：联调服务器**。所有能力接齐停在那儿
+  等前端连：两个 activity 插件（a2ui + genui，`compose` 串起来）、A2UI 的用户动作
+  回流、服务端中断工具（`ask_human`）、共享状态槽（todos）、子 agent 委派、
+  `/info` 的能力位。缺省放行 `localhost` / `127.0.0.1` 的 3000/3001/3002/3100/5173
+  —— **两个 host 都放**，浏览器不认为它们是同一个源。开机横幅把端点、curl 例子、
+  可以试的几句话都打出来。
+
+实机验过（MiniMax m2.7，端口 8080）：`/info` 报 `a2uiEnabled` /
+`openGenerativeUIEnabled` / `threadEndpoints` 全 true；「把买牛奶加进待办」跑出
+`STATE_DELTA: [{"op":"replace","path":"/todos","value":["买牛奶"]}]`，
+`/threads/:id/state` 读回一致；3002 / 3100 的预检回显 Origin + 凭据位，
+未列入的源不发 `allow-origin`。
+
+验证：`rebar3 eunit` **735 tests 0 failures**；examples **9 tests 0 failures**；
+编译零警告；dialyzer 只剩既有的 `beamai_mcp_server.erl:442`；
+`example_agui_full:run()` 9/9。
 
 ### 待办·功能
 
