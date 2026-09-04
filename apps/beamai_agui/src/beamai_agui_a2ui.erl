@@ -134,7 +134,7 @@ with_tool(Config, Opts) ->
     Name = maps:get(tool_name, Opts, ?TOOL_NAME),
     Catalog = maps:get(catalog, Opts, basic_catalog()),
     Context = <<(guidelines(Name))/binary,
-                "\n\n### Available Components — the A2UI catalog you may use. "
+                "\n\n### Available Components -- the A2UI catalog you may use. "
                 "Only these component names exist.\n\n```json\n",
                 (beamai_utils:encode_json(Catalog))/binary, "\n```">>,
     beamai_agui_plugin:append_system_prompt(
@@ -270,7 +270,7 @@ guidelines(Tool) ->
       "- **data** (object, optional): Initial data model for path-bound component values.\n\n"
       "Note: the catalog id is set by the host, not by you. Do not include a catalogId argument.\n\n"
       "### Component format (v0.9 flat)\n\n"
-      "Components are a flat array — children are referenced by ID, not nested:\n"
+      "Components are a flat array -- children are referenced by ID, not nested:\n"
       "- Every component has `id` (unique) and `component` (type name from the catalog).\n"
       "- The root component MUST have `id: \"root\"`.\n"
       "- Properties go directly on the component object.\n"
@@ -289,15 +289,15 @@ guidelines(Tool) ->
       "}\n"
       "```\n\n"
       "### Key rules\n\n"
-      "1. NEVER call ", Tool/binary, " without the `components` array — the UI will be empty.\n"
-      "2. Root must be a layout component (Column, Row, Card) — not Text or Button.\n"
+      "1. NEVER call ", Tool/binary, " without the `components` array -- the UI will be empty.\n"
+      "2. Root must be a layout component (Column, Row, Card) -- not Text or Button.\n"
       "3. Component IDs must be unique. A component must NOT reference itself as child.\n"
       "4. Only use component names from the Available Components schema in context.\n"
       "5. For data binding use `{ \"path\": \"/key\" }` (absolute) or `{ \"path\": \"key\" }` "
       "(relative inside templates).\n"
       "6. For repeating content: `children: { componentId: \"card-id\", path: \"/items\" }`.\n"
       "7. Button actions: `\"action\": { \"event\": { \"name\": \"...\", \"context\": { ... } } }`.\n"
-      "8. No placeholder images — only use real URLs or Icon components.">>.
+      "8. No placeholder images -- only use real URLs or Icon components.">>.
 
 %%====================================================================
 %% A2UI v0.9 基础 catalog
