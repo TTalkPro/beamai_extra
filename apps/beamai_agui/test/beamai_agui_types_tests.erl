@@ -121,3 +121,133 @@ no_resume_input_test() ->
     {ok, Input} = beamai_agui_types:parse_run_input(
                     #{<<"threadId">> => <<"t1">>, <<"messages">> => []}),
     ?assertEqual(none, beamai_agui_types:resume_input(Input, <<"c1">>)).
+
+%%====================================================================
+%% `resume[]`：AG-UI interrupt 协议的答复数组
+%%
+%% 上一条 run 以 `RUN_FINISHED + outcome:"interrupt"` 收口，客户端把人的决定
+%% 放在**下一次 run 的请求体**里带回来 —— 协议里没有单独的审批端点。
+%%====================================================================
+
+resume_body_with(Resume) ->
+    #{<<"threadId">> => <<"t1">>,
+      <<"resume">> => Resume,
+      <<"messages">> => [#{<<"role">> => <<"user">>, <<"content">> => <<"yes please">>}]}.
+
+%% interruptId 对得上被中断的调用 → 采纳
+protocol_resume_matches_interrupt_id_test() ->
+    {ok, Input} = beamai_agui_types:parse_run_input(
+                    resume_body_with([#{<<"interruptId">> => <<"c1">>,
+                                        <<"status">> => <<"approved">>}])),
+    ?assertEqual({ok, <<"approved">>, #{}},
+                 beamai_agui_types:resume_input(Input, <<"c1">>)).
+
+%% 措辞归一到上游认的关键词（accept/deny/respond 都是客户端的写法）
+protocol_resume_normalizes_decision_test() ->
+    Decide = fun(Status) ->
+        {ok, Input} = beamai_agui_types:parse_run_input(
+                        resume_body_with([#{<<"interruptId">> => <<"c1">>,
+                                            <<"status">> => Status}])),
+        {ok, D, _} = beamai_agui_types:resume_input(Input, <<"c1">>),
+        D
+    end,
+    ?assertEqual(<<"approved">>, Decide(<<"accept">>)),
+    ?assertEqual(<<"approved">>, Decide(<<"Approved">>)),
+    ?assertEqual(<<"rejected">>, Decide(<<"deny">>)),
+    ?assertEqual(<<"reply">>, Decide(<<"respond">>)).
+
+%% 只有一条且不带 id 时宽容采纳（不少客户端只发 `[{status: "approved"}]`）
+protocol_resume_single_entry_without_id_test() ->
+    {ok, Input} = beamai_agui_types:parse_run_input(
+                    resume_body_with([#{<<"status">> => <<"rejected">>}])),
+    ?assertEqual({ok, <<"rejected">>, #{}},
+                 beamai_agui_types:resume_input(Input, <<"c1">>)).
+
+%% **id 对不上就不认**：拿别的 interrupt 的答复去恢复这一个，是把人的意思安到别处
+protocol_resume_stale_id_falls_through_test() ->
+    {ok, Input} = beamai_agui_types:parse_run_input(
+                    resume_body_with([#{<<"interruptId">> => <<"old">>,
+                                        <<"status">> => <<"approved">>}])),
+    %% 退到"人直接回了一句话"那条路，而不是误采纳
+    ?assertEqual({ok, <<"yes please">>, #{}},
+                 beamai_agui_types:resume_input(Input, <<"c1">>)).
+
+%% payload 是字符串时当作 message（`payload: "ok"`）
+protocol_resume_string_payload_test() ->
+    {ok, Input} = beamai_agui_types:parse_run_input(
+                    resume_body_with([#{<<"interruptId">> => <<"c1">>,
+                                        <<"status">> => <<"reply">>,
+                                        <<"payload">> => <<"done">>}])),
+    ?assertEqual({ok, <<"reply">>, #{message => <<"done">>}},
+                 beamai_agui_types:resume_input(Input, <<"c1">>)).
+
+%%====================================================================
+%% `context`：前端每轮重发的页面状态
+%%====================================================================
+
+context_prompt_renders_lines_test() ->
+    {ok, Input} = beamai_agui_types:parse_run_input(
+                    #{<<"threadId">> => <<"t1">>,
+                      <<"context">> => [#{<<"description">> => <<"当前用户"/utf8>>,
+                                          <<"value">> => <<"张三"/utf8>>},
+                                        #{<<"value">> => <<"页面：设置"/utf8>>}]}),
+    Prompt = beamai_agui_types:context_prompt(Input),
+    ?assert(is_binary(Prompt)),
+    %% 抬头是给模型的**出处说明**：不写这几行会被当成用户指令
+    ?assertMatch({_, _}, binary:match(Prompt, <<"AG-UI context">>)),
+    ?assertMatch({_, _}, binary:match(Prompt, <<"- 当前用户 张三"/utf8>>)),
+    ?assertMatch({_, _}, binary:match(Prompt, <<"- 页面：设置"/utf8>>)).
+
+%% 非字符串的 value 按 JSON 打平（路上谁 stringify 由客户端版本决定）
+context_prompt_json_value_test() ->
+    {ok, Input} = beamai_agui_types:parse_run_input(
+                    #{<<"threadId">> => <<"t1">>,
+                      <<"context">> => [#{<<"description">> => <<"选中"/utf8>>,
+                                          <<"value">> => #{<<"id">> => 7}}]}),
+    ?assertMatch({_, _}, binary:match(beamai_agui_types:context_prompt(Input),
+                                      <<"{\"id\":7}">>)).
+
+%% 这轮没上下文 → undefined（不发一段空抬头去占 system prompt）
+context_prompt_empty_test() ->
+    {ok, Input} = beamai_agui_types:parse_run_input(#{<<"threadId">> => <<"t1">>}),
+    ?assertEqual(undefined, beamai_agui_types:context_prompt(Input)),
+    {ok, Blank} = beamai_agui_types:parse_run_input(
+                    #{<<"threadId">> => <<"t1">>,
+                      <<"context">> => [#{<<"description">> => <<"空"/utf8>>,
+                                          <<"value">> => <<>>}]}),
+    ?assertEqual(undefined, beamai_agui_types:context_prompt(Blank)).
+
+%%====================================================================
+%% 多模态 content：客户端可能发一个部件数组
+%%====================================================================
+
+%% 不翻的话下游拿到的是一坨结构体，内容全丢**且不报错**
+multimodal_content_is_flattened_test() ->
+    {ok, Input} = beamai_agui_types:parse_run_input(
+                    #{<<"threadId">> => <<"t1">>,
+                      <<"messages">> => [#{<<"role">> => <<"user">>,
+                                           <<"content">> =>
+                                               [#{<<"type">> => <<"text">>,
+                                                  <<"text">> => <<"看这张图："/utf8>>},
+                                                #{<<"type">> => <<"image">>,
+                                                  <<"url">> => <<"http://x/y.png">>},
+                                                #{<<"type">> => <<"text">>,
+                                                  <<"text">> => <<"是什么？"/utf8>>}]}]}),
+    ?assertEqual({ok, <<"看这张图：是什么？"/utf8>>},
+                 beamai_agui_types:last_user_message(Input)).
+
+content_to_text_shapes_test() ->
+    ?assertEqual(<<"plain">>, beamai_agui_types:content_to_text(<<"plain">>)),
+    ?assertEqual(<<>>, beamai_agui_types:content_to_text(null)),
+    ?assertEqual(<<"ab">>, beamai_agui_types:content_to_text([<<"a">>, <<"b">>])).
+
+%%====================================================================
+%% parentRunId：原样带着走，我们不解释它
+%%====================================================================
+
+parent_run_id_test() ->
+    {ok, With} = beamai_agui_types:parse_run_input(
+                   #{<<"threadId">> => <<"t1">>, <<"parentRunId">> => <<"p1">>}),
+    ?assertEqual(<<"p1">>, beamai_agui_types:parent_run_id(With)),
+    {ok, Without} = beamai_agui_types:parse_run_input(#{<<"threadId">> => <<"t1">>}),
+    ?assertEqual(undefined, beamai_agui_types:parent_run_id(Without)).

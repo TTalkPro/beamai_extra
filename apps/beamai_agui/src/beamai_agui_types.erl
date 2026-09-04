@@ -9,8 +9,10 @@
 -module(beamai_agui_types).
 
 -export([parse_run_input/1]).
--export([thread_id/1, run_id/1, messages/1, tools/1, state/1, forwarded_props/1]).
+-export([thread_id/1, run_id/1, parent_run_id/1, messages/1, tools/1, state/1]).
+-export([context/1, resume/1, forwarded_props/1]).
 -export([agent_name/1, last_user_message/1, resume_input/2]).
+-export([context_prompt/1, content_to_text/1]).
 
 -export_type([run_input/0]).
 
@@ -21,6 +23,7 @@
     messages := [map()],
     tools := [map()],
     context := [map()],
+    resume := [map()],
     state := term(),
     forwarded_props := map()
 }.
@@ -46,6 +49,7 @@ parse_run_input(Body) ->
                 messages => get_list(Map, <<"messages">>),
                 tools => get_list(Map, <<"tools">>),
                 context => get_list(Map, <<"context">>),
+                resume => get_list(Map, <<"resume">>),
                 state => maps:get(<<"state">>, Map, #{}),
                 forwarded_props => get_map(Map, <<"forwardedProps">>)
             }}
@@ -61,6 +65,13 @@ thread_id(#{thread_id := V}) -> V.
 -spec run_id(run_input()) -> binary().
 run_id(#{run_id := V}) -> V.
 
+%% @doc 调用方声明的父 run（嵌套 run）。**我们不解释它** —— 不建父子索引、
+%% 不做级联停止，只让它出现在 `RUN_STARTED.parentRunId` 上，客户端据此把这条
+%% run 挂回父链。协议里它是可选的，没有就没有。
+-spec parent_run_id(run_input()) -> binary() | undefined.
+parent_run_id(#{parent_run_id := V}) when is_binary(V) -> V;
+parent_run_id(_) -> undefined.
+
 -spec messages(run_input()) -> [map()].
 messages(#{messages := V}) -> V.
 
@@ -72,6 +83,16 @@ state(#{state := V}) -> V.
 
 -spec forwarded_props(run_input()) -> map().
 forwarded_props(#{forwarded_props := V}) -> V.
+
+%% @doc 前端注册的本轮环境说明（`useAgentContext`）
+-spec context(run_input()) -> [map()].
+context(#{context := V}) -> V;
+context(_) -> [].
+
+%% @doc interrupt 协议的答复数组（`RunAgentInput.resume[]`）
+-spec resume(run_input()) -> [map()].
+resume(#{resume := V}) -> V;
+resume(_) -> [].
 
 %% @doc 要跑哪个 agent：约定放在 forwardedProps.agent（AG-UI 协议本身不带这个
 %% 字段——端点多以路径区分 agent；两条路都留着，路径优先由适配器给出）
@@ -100,28 +121,148 @@ last_user_message(Input) ->
 
 %% @doc 从请求里解出「恢复一次暂停」的决策
 %%
-%% 三条来路，按优先级：
+%% 四条来路，按优先级：
 %%
-%% 1. `forwardedProps.resume` = `#{"decision" => D, "payload" => P}` —— 显式，
-%%    能表达 approved / rejected / reply 全部语义，还能带 `args` 改参数。
-%% 2. 最后一条 `role=tool` 且 `toolCallId` 对得上被中断调用的消息 —— 这是
-%%    AG-UI 的**原生**路径：前端工具执行完，结果作为 tool 消息回传。
-%%    映射成 `reply` 语义（工具不再由服务端执行，这条内容即结果）。
-%% 3. 最后一条 user 消息 —— 聊天式 HITL：agent 停下来问，人直接回一句话。
+%% 1. `resume[]` —— **AG-UI interrupt 协议的正路**：上一条 run 以
+%%    `RUN_FINISHED + outcome:"interrupt"` 收口，客户端把人的决定放在下一次 run 的
+%%    请求体里带回来（`{interruptId, status|decision, payload}`）。协议里没有单独的
+%%    审批端点，就是这一条。
+%% 2. `forwardedProps.resume` = `#{"decision" => D, "payload" => P}` —— 我们自己的
+%%    扩展位，先于协议实现，留着不动（老前端还在用）。
+%% 3. 最后一条 `role=tool` 且 `toolCallId` 对得上被中断调用的消息 —— 前端工具
+%%    执行完，结果作为 tool 消息回传。映射成 `reply` 语义（工具不再由服务端执行，
+%%    这条内容即结果）。
+%% 4. 最后一条 user 消息 —— 聊天式 HITL：agent 停下来问，人直接回一句话。
 %%    走上游的「自由文本作结果」回落。
 %%
-%% 三条都没有则 none —— 一个 thread 卡在暂停上时，不带任何输入的请求没法推进。
+%% 四条都没有则 none —— 一个 thread 卡在暂停上时，不带任何输入的请求没法推进。
 -spec resume_input(run_input(), binary() | undefined) ->
     {ok, term(), map()} | none.
 resume_input(Input, PendingToolCallId) ->
-    case explicit_resume(Input) of
-        {ok, _D, _P} = Explicit -> Explicit;
-        none -> implicit_resume(Input, PendingToolCallId)
+    case protocol_resume(Input, PendingToolCallId) of
+        {ok, _, _} = Protocol ->
+            Protocol;
+        none ->
+            case explicit_resume(Input) of
+                {ok, _D, _P} = Explicit -> Explicit;
+                none -> implicit_resume(Input, PendingToolCallId)
+            end
     end.
+
+%% @doc AG-UI `RunAgentInput.context` → 一段 system 文本；这轮没有上下文则 undefined
+%%
+%% 条目是 `#{description, value}`。前端 `useAgentContext` 注册，客户端**每次 run
+%% 都重发全量** —— 所以它天然是 turn 级的：这一轮带就有，下一轮不带就没了。
+%%
+%% 开头那句抬头是给模型的**出处说明**：不写的话这几行会被当成用户指令，而它们
+%% 其实是页面状态。
+%%
+%% `value` 按 schema 是字符串，但前端收的是任意可序列化值，路上谁 stringify 由
+%% 客户端版本决定 —— 两种都认，非字符串按 JSON 打平。
+-spec context_prompt(run_input() | [map()]) -> binary() | undefined.
+context_prompt(Input) when is_map(Input) ->
+    context_prompt(context(Input));
+context_prompt(Items) when is_list(Items) ->
+    case [L || I <- Items, (L = context_line(I)) =/= undefined] of
+        [] -> undefined;
+        Lines -> iolist_to_binary(
+                   %% 必须写 /utf8：不写的话它是个码点列表，iolist_to_binary 直接 badarg
+                   [<<"以下是前端在本轮提供的上下文（AG-UI context，非用户输入）：\n"/utf8>>,
+                    lists:join(<<"\n">>, Lines)])
+    end;
+context_prompt(_) ->
+    undefined.
+
+%% @doc AG-UI 消息的 `content` → 纯文本
+%%
+%% 客户端可能发一个 `InputContent` 数组（多模态）。不翻的话下游拿到的是一坨
+%% 结构体，内容全丢且不报错 —— 这里把其中的文本部件拼起来，非文本部件跳过
+%% （骨架阶段不往下传图片，翻不动就别假装翻得动）。
+-spec content_to_text(term()) -> binary().
+content_to_text(C) when is_binary(C) ->
+    C;
+content_to_text(Parts) when is_list(Parts) ->
+    iolist_to_binary([P || Part <- Parts, (P = part_text(Part)) =/= undefined]);
+content_to_text(_) ->
+    <<>>.
 
 %%====================================================================
 %% 内部
 %%====================================================================
+
+%% @private `resume[]`：interrupt 协议的答复数组
+%%
+%% 优先取 `interruptId` 与当前 pending 调用对得上的那条 —— 客户端可能一次带回
+%% 多条（多路暂停），也可能带着一条**过期的**（上一轮的审批点了两次）。对不上就
+%% 不认：拿别的 interrupt 的答复去恢复这一个，是把人的意思安到别处。
+%%
+%% 只有一条且不带 id 时宽容采纳：不少客户端只发 `[{status: "approved"}]`。
+protocol_resume(Input, PendingToolCallId) ->
+    case [E || E <- resume(Input), is_map(E)] of
+        [] ->
+            none;
+        Entries ->
+            case matching_resume(Entries, PendingToolCallId) of
+                undefined -> none;
+                Entry -> resume_entry(Entry)
+            end
+    end.
+
+matching_resume(Entries, PendingToolCallId) ->
+    case [E || E <- Entries, resume_id(E) =:= PendingToolCallId,
+               PendingToolCallId =/= undefined] of
+        [Match | _] ->
+            Match;
+        [] ->
+            case [E || E <- Entries, resume_id(E) =:= undefined] of
+                [Only] -> Only;
+                _ -> undefined
+            end
+    end.
+
+resume_id(Entry) ->
+    case first_of(Entry, [<<"interruptId">>, <<"id">>]) of
+        Id when is_binary(Id), Id =/= <<>> -> Id;
+        _ -> undefined
+    end.
+
+%% @private 一条 `resume[]` → `{ok, Decision, Payload}`
+%%
+%% `status` 是协议里的字段名，`decision` 是我们自己那条路的叫法 —— 两种都认，
+%% 再归一到上游 beamai_agent_interrupt 的决策关键词。
+resume_entry(Entry) ->
+    case first_of(Entry, [<<"status">>, <<"decision">>, <<"outcome">>]) of
+        undefined ->
+            none;
+        Raw ->
+            {ok, normalize_decision(Raw),
+             resume_payload(first_of(Entry, [<<"payload">>, <<"value">>]))}
+    end.
+
+%% 客户端的措辞五花八门，归一到上游认的三个关键词；认不出的原样透传
+%% （上游把不认识的 binary 当"自由文本作结果"处理，那是合理的回落）
+normalize_decision(D) when is_binary(D) ->
+    case string:lowercase(D) of
+        <<"approved">> -> <<"approved">>;
+        <<"approve">> -> <<"approved">>;
+        <<"accept">> -> <<"approved">>;
+        <<"accepted">> -> <<"approved">>;
+        <<"rejected">> -> <<"rejected">>;
+        <<"reject">> -> <<"rejected">>;
+        <<"denied">> -> <<"rejected">>;
+        <<"deny">> -> <<"rejected">>;
+        <<"reply">> -> <<"reply">>;
+        <<"respond">> -> <<"reply">>;
+        _ -> D
+    end;
+normalize_decision(D) ->
+    D.
+
+first_of(Map, Keys) ->
+    case [V || K <- Keys, (V = maps:get(K, Map, undefined)) =/= undefined] of
+        [V | _] -> V;
+        [] -> undefined
+    end.
 
 %% @private forwardedProps.resume
 explicit_resume(Input) ->
@@ -139,6 +280,9 @@ explicit_resume(Input) ->
 %%
 %% 只认这两个键：其余原样丢弃，不做 binary_to_atom —— 请求体是外部输入，
 %% 拿它造原子等于给人一个撑爆原子表的口子。
+resume_payload(Text) when is_binary(Text) ->
+    %% 客户端把答复直接放成一个字符串（`payload: "ok"`），当作 message
+    #{message => Text};
 resume_payload(Payload) when is_map(Payload) ->
     lists:foldl(fun({Wire, Key}, Acc) ->
         case maps:get(Wire, Payload, undefined) of
@@ -177,8 +321,33 @@ is_tool_reply(_, _) -> false.
 is_user(#{<<"role">> := <<"user">>}) -> true;
 is_user(_) -> false.
 
-content_of(#{<<"content">> := C}) when is_binary(C) -> C;
+content_of(#{<<"content">> := C}) -> content_to_text(C);
 content_of(_) -> <<>>.
+
+%% @private context 一条 → 一行；空值跳过
+context_line(Item) when is_map(Item) ->
+    case context_value(maps:get(<<"value">>, Item, undefined)) of
+        undefined ->
+            undefined;
+        Value ->
+            case maps:get(<<"description">>, Item, undefined) of
+                D when is_binary(D), D =/= <<>> -> <<"- ", D/binary, " ", Value/binary>>;
+                _ -> <<"- ", Value/binary>>
+            end
+    end;
+context_line(_) ->
+    undefined.
+
+context_value(undefined) -> undefined;
+context_value(<<>>) -> undefined;
+context_value(V) when is_binary(V) -> V;
+context_value(V) -> beamai_utils:encode_json(V).
+
+%% @private 一个 content 部件里的文本（认不出的形状跳过）
+part_text(P) when is_binary(P) -> P;
+part_text(#{<<"type">> := <<"text">>, <<"text">> := T}) when is_binary(T) -> T;
+part_text(#{<<"text">> := T}) when is_binary(T) -> T;
+part_text(_) -> undefined.
 
 get_id(Map, Key, Prefix) ->
     case maps:get(Key, Map, undefined) of
