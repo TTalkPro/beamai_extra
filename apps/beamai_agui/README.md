@@ -69,15 +69,26 @@ run 崩了、被杀了也一样（会话替它补一条），否则客户端的�
 Dispatch = cowboy_router:compile([
     {'_', [
         {"/agui/run",                  beamai_agui_cowboy_handler, #{agent => <<"my-agent">>}},
+        %% **按 agent 寻址** —— `/info` 报的是一张 agents 字典，标准 AG-UI 客户端
+        %% 据此拼 `{base}/agent/{id}/run`；这条不挂，它们连不上
+        {"/agui/agent/:agent/run",     beamai_agui_cowboy_handler, #{}},
         {"/agui/info",                 beamai_agui_cowboy_handler, #{mode => info}},
         {"/agui/threads",              beamai_agui_cowboy_handler, #{mode => threads}},
         {"/agui/threads/:thread",      beamai_agui_cowboy_handler, #{mode => thread}},
-        {"/agui/threads/:thread/:sub", beamai_agui_cowboy_handler, #{mode => thread}}
+        {"/agui/threads/:thread/:sub", beamai_agui_cowboy_handler, #{mode => thread}},
+        %% **兜底放最后**：没匹配上的回一个**带 CORS 头**的 404
+        {"/agui/[...]",                beamai_agui_cowboy_handler, #{mode => fallback}}
     ]}
 ]).
 ```
 
-`:sub` 认四个：`events` / `state` / `stop` / `stream`。
+`:sub` 认五个：`events` / `messages` / `state` / `stop` / `stream`。
+
+⚠️ **兜底那条值得挂**：cowboy 自己那条「没有路由匹配」的 404 走不到 handler，
+响应上就没有 CORS 头 —— 浏览器会把「没这条路」显示成
+`No 'Access-Control-Allow-Origin' header is present`，拿到报文的人第一反应是去查
+CORS，而 CORS 是好的。挂上它，走错路的情况就能自己说清（响应体里还带一句
+`hint` 指向 `/agui/info`）。
 
 ### 配置
 
@@ -157,7 +168,8 @@ AG-UI 的**非弃用**事件类型全部实现（`beamai_agui_event` 里各有�
 | AG-UI 事件 | 由什么驱动 |
 |---|---|
 | `RUN_STARTED` / `RUN_FINISHED` / `RUN_ERROR` | `beamai_agui_runner` 在 agent 前后发 |
-| `STEP_STARTED` / `STEP_FINISHED` | `on_llm_call` / `on_llm_result`（每轮迭代） |
+| `STEP_STARTED` | `on_llm_call`（每轮迭代） |
+| `STEP_FINISHED` | `on_llm_result` **记账**，等这一步的消息与工具都闭合了才发 —— **步骤是容器，容器最后关** |
 | `TEXT_MESSAGE_START` | 第一个 token 到达时**惰性**发出 |
 | `TEXT_MESSAGE_CONTENT` | `on_token`（`Meta.message_id` 决定归属） |
 | `TEXT_MESSAGE_END` | `on_message_end` |
@@ -200,6 +212,38 @@ AG-UI threadId  ==  beamai conversation_id  ==  pause_store 的键
 | `role=tool` 消息 | `toolCallId` 对得上被中断的调用 | 前端工具执行完回传结果 |
 | 最后一条 `user` 消息 | 纯文本 | 聊天式：agent 问、人直接回一句 |
 
+### 两类 interrupt：审批 vs 前端工具
+
+它们要的东西**不一样**，所以 schema 也不一样：
+
+| | 审批 | 前端工具 |
+|---|---|---|
+| 谁触发 | 工厂声明的中断工具（有实现，等人点头） | `RunAgentInput.tools` 里的（服务端没实现） |
+| 客户端该回 | 一个**决定** | 这次调用的**结果** |
+| `responseSchema.required` | `["decision"]` | `["result"]` |
+| `metadata.kind` | `"approval"` | `"frontend-tool"` |
+| `reason` | `需要审批: X` | `需要客户端执行并回传结果: X` |
+
+判据只有一条：被中断的那个工具在不在 `RunAgentInput.tools` 里。客户端每次请求都
+重发 `tools`，所以续跑那一轮照样算得出来。
+
+**前端工具没有「批准」这回事** —— 服务端没有实现，批准了也没人去执行。它的答复
+是结果，三条来路：`payload.result`（我们在 schema 里要的那个）、`role=tool` 消息
+（AG-UI 的原生路径）、或人直接打的一句话。**一条都没有时不编造成功**，而是如实
+发一条「客户端没有回传结果」的工具结果 —— 让模型知道这一步没拿到东西，比让它
+宣布「干完了」强。
+
+### `status` 不是 `decision`
+
+`resume[]` 条目里的 `status` 说的是「这条 interrupt 答完了」（`resolved` /
+`completed`），**不是**人做了什么决定。决定在 `payload.decision` 里。
+
+取值顺序：`payload.decision` → 条目的 `decision` → `status`**且仅在它字面上就是
+一个决策词时**（有客户端确实发 `[{status:"approved"}]`）。认不出的词**不往下传** ——
+上游把不认识的 binary 当「自由文本作结果」，那对聊天式 HITL 是对的，但对一个协议
+字段就是把 `"resolved"` 当成了工具的返回值。走自由文本那条路必须是**人真的打了
+一句话**（最后一条 user 消息）。
+
 ### 走 AG-UI 的 interrupt 协议
 
 暂停编码成 `RUN_FINISHED` + `outcome:{type:"interrupt", interrupts:[…]}` ——
@@ -216,8 +260,8 @@ interrupt 的 `toolCallId` 同源，前端把审批条挂回那张工具卡片�
 `responseSchema` 告诉通用客户端该渲染什么控件，只声明 `approved` / `rejected`
 两个决策 —— `approveWithEdits`（改参数再执行）没实现，不谎报。
 
-`CUSTOM(interrupt)` 那一条**也还在发**：它是我们先于协议实现的那条，自家前端在用，
-不动它。两条互不冲突（一条是 CUSTOM，一条是终态事件的一个字段）。
+曾经这里还并发一条 `CUSTOM(interrupt)` 作为「我们先于协议实现的那份」。**已经
+去掉**：同一件事发两遍，接入方看日志会以为是两件事，而且两份总有一天会不同步。
 
 **存的是纯数据**（中断态、被中断的 tool_call、已完成的结果、迭代计数），
 不存 ChatClient / tools / callbacks —— 那些由工厂在下个请求里重建。所以
