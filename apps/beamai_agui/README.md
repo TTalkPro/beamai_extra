@@ -334,6 +334,47 @@ state 算的，没有共同基线就对不上。
 > 要让模型能就当前状态推理（比如"现在共有几项"），得由工厂把 state 渲染进
 > system prompt —— 实机测试里模型正是因为看不见基线里已有的那项而数错了数。
 
+## CORS
+
+AG-UI 前端通常与 runtime 不同源，所以每个响应都带 CORS 头。两种模式：
+
+| `cors_origins` | `access-control-allow-origin` | 能带凭据吗 |
+|---|---|---|
+| `any`（缺省） | `*` | **不能** |
+| `[<<"http://localhost:3002">>, …]` | 命中就**原样回显** Origin | 能（`allow-credentials: true`） |
+
+**为什么要给列表**：浏览器不允许 `*` 与凭据并存。前端一旦
+`credentials: 'include'`（或 `EventSource` 带 `withCredentials`），请求当场被浏览器
+拦掉 —— 而且错误只出现在浏览器控制台，服务端日志里干干净净，这类问题最难查。
+
+没命中就**不发 `access-control-allow-origin`**，让浏览器如实拦掉，而不是回个 `*`
+假装放行（那会在带凭据时变成一个更难查的错）。给列表时必发 `vary: origin` ——
+响应随 `Origin` 而变，不告诉缓存这件事，CDN 会把 A 源的响应喂给 B 源。
+
+⚠️ `http://localhost:3002` 与 `http://127.0.0.1:3002` 是**两个不同的源**，
+浏览器不认为它们相同 —— 要用哪个就写哪个（或者两个都写）。
+
+```erlang
+%% 整台服务一个口径
+{beamai_agui, [{cors_origins, [<<"http://localhost:3002">>,
+                               <<"http://localhost:3100">>]}]}
+
+%% 或按端点（优先于应用环境）
+{"/agui/run", beamai_agui_cowboy_handler,
+ #{agent => <<"my-agent">>,
+   cors_origins => [<<"http://localhost:3002">>, <<"http://localhost:3100">>]}}
+```
+
+另有三个位是**协议要求的、不能省**：`access-control-allow-headers` 里的
+`last-event-id`（断线重连靠它把水位带回来）、`access-control-expose-headers` 里的
+`x-agui-run-id`（跨源前端读得到 run id 才停得掉那条 run）、以及
+`access-control-max-age: 600`（不缓存预检的话，每个 POST 前面都多一次 OPTIONS 往返）。
+
+**CORS 的最后一道由适配器盖**：允许哪个源取决于这次请求的 `Origin` 头，而
+`beamai_agui_http_handler` 是框架无关的，拿不到它 —— 所以它给缺省那一份，
+`beamai_agui_cowboy_handler` 按 `cors_headers/1` 重算一遍覆盖上去（所有回复点都
+经过同一个 `headers_map/2`，不会漏）。
+
 ## 前端上下文（`RunAgentInput.context`）
 
 `context` 是前端每轮重发的**页面状态**（`useAgentContext`）：当前选中了哪一行、
@@ -473,8 +514,39 @@ ERL_LIBS=../_build/default/lib:../_build/default/checkouts rebar3 shell
 `threads`（`/info` 能力位 + 只读面）、`hitl`（`outcome:"interrupt"` → `resume[]`）、
 `a2ui` / `genui` / `mcp_apps`（三种 activity）、`subagent`（lane）。
 
-真模型下的样子看 `example_agui_live`（验的是真 provider 的 chunk 形状）与
-`example_agui_durable`（验跨 BEAM 进程的会话恢复）。
+同样九个场景可以换成**真模型**跑：
+
+```
+1> example_agui_full:live().             %% MiniMax m2.7（需要 MINIMAX_API_KEY）
+2> example_agui_full:live(a2ui).         %% 只跑一个
+3> example_agui_full:live(zhipu, genui). %% 换一家
+```
+
+**离线与实机验的不是同一件事**。离线验协议的形状（谁先谁后、成不成对、带不带
+id），与模型说什么无关，所以断言全是硬的；实机验的是假设成不成立（真 provider 的
+chunk 形状认得出吗、模型看得懂插件的提示词吗、它真会去调那个工具吗），这一半
+**取决于模型这一轮的选择** —— 所以那类断言在实机模式下降级成 `[skip]`：模型没调
+工具是它的选择，不是我们的 bug；协议形状那一半照样是硬断言。
+
+另有 `example_agui_live`（共享状态的闭环）与 `example_agui_durable`（跨 BEAM 进程的
+会话恢复）。
+
+### 实机跑出来的三个 bug（离线全绿也照不出来）
+
+1. **插件的工具压根没挂上**。`beamai_agent:new/1` 没有 `tools` 这一位（只有
+   `interrupt_tools`），工具挂在 chat client 上。`with_tool` 原来写成
+   `Config#{tools => ...}` —— 编译得过、跑得动、模型**永远看不见那个工具**。
+   症状是模型反复去调别的工具，还振振有词地说"没有可用的 render_a2ui"。
+   现在配置里没有 `chat_client` 就**直接报错**：装不上的插件应当在装配期炸。
+2. **提示词里的破折号被按字节截断**。Erlang 的 `<<"...">>` 把非 ASCII 码点截成
+   一个字节，`—` 进模型就是个控制字符（JSON 里是 `\u0014`）。插件的提示词是英文
+   散文，现在全部改回 ASCII，并有一个测试盯着（`plugin_prompts_are_ascii_test`）。
+3. **`max_tokens` 不够**。A2UI 的组件树、genui 的 HTML 都不短，缺省 2048 装不下 ——
+   截断的 JSON 解不出来，插件只拿到空参数，症状是"调了但什么都没画"。
+
+顺带一条工程陷阱：`rebar3 eunit` 只更新 `_build/test`，而 examples 经 `ERL_LIBS`
+加载的是 `_build/default` —— 只跑过测试就来跑例子，加载的是**上一次 compile 留下
+的旧 beam**。`examples/Makefile` 的 `compile` 现在会先编上层。
 
 ## 尚未覆盖的
 
