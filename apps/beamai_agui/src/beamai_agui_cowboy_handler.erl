@@ -118,18 +118,19 @@ handle_run(Req0, Config0) ->
             Req2 = cowboy_req:reply(Status, headers_map(RespHeaders), Json, Req1),
             {ok, Req2, undefined};
         {stream, Input, Factory, RespHeaders} ->
-            start_run(Input, Factory, RespHeaders, Req1)
+            start_run(Input, Factory, RespHeaders,
+                      beamai_agui_http_handler:run_opts(Config), Req1)
     end.
 
 %% @private 会话模式优先；会话层没起来就回落到请求模式
-start_run(Input, Factory, RespHeaders, Req) ->
+start_run(Input, Factory, RespHeaders, RunOpts, Req) ->
     ThreadId = beamai_agui_types:thread_id(Input),
     case beamai_agui_sessions:ensure(ThreadId) of
         {ok, Session} ->
-            session_run(Session, Input, Factory, RespHeaders, Req);
+            session_run(Session, Input, Factory, RunOpts, RespHeaders, Req);
         {error, _} ->
             Req2 = cowboy_req:stream_reply(200, headers_map(RespHeaders), Req),
-            Req3 = local_run(Input, Factory, Req2),
+            Req3 = local_run(Input, Factory, RunOpts, Req2),
             {ok, Req3, undefined}
     end.
 
@@ -138,8 +139,8 @@ start_run(Input, Factory, RespHeaders, Req) ->
 %% 水位不能传 undefined：run 一进来就发了 `RUN_STARTED`，而我们要等 start_run
 %% 返回才轮到订阅 —— 中间那一段是真空。AG-UI 客户端第一件事就是校验
 %% "第一条必须是 RUN_STARTED"，漏了它整条流当场作废。
-session_run(Session, Input, Factory, RespHeaders, Req) ->
-    case beamai_agui_session:start_run(Session, Input, Factory) of
+session_run(Session, Input, Factory, RunOpts, RespHeaders, Req) ->
+    case beamai_agui_session:start_run(Session, Input, Factory, #{run_opts => RunOpts}) of
         {started, RunId, Since} ->
             Headers = headers_map(RespHeaders ++ [{<<"x-agui-run-id">>, RunId}]),
             Req2 = cowboy_req:stream_reply(200, Headers, Req),
@@ -168,8 +169,8 @@ session_run(Session, Input, Factory, RespHeaders, Req) ->
 %% @private 订阅一个会话，把事件写成带 `id:` 的 SSE 帧
 stream_from(Session, Since, Req) ->
     case beamai_agui_session:subscribe(Session, Since) of
-        {ok, Ref, Replay, Gap} ->
-            ok = maybe_resync(Gap, Req),
+        {ok, Ref, Replay, Resync} ->
+            ok = maybe_resync(Resync, Req),
             case write_replay(Replay, Req) of
                 terminal ->
                     %% 补发的历史里已经有终态了：这条 run 早跑完，没什么可等的
@@ -184,15 +185,16 @@ stream_from(Session, Since, Req) ->
             close_stream(Req)
     end.
 
-%% @private 缺口：中间那段永远补不回来了，如实告诉客户端「重新拉一次历史」
+%% @private 缺口：中间那段永远补不回来了 —— 给一份 `MESSAGES_SNAPSHOT` 让客户端
+%% 照它对齐
 %%
-%% 不假装流是连续的 —— 少几条事件的 UI 会静静地渲染错，而一条 resync 至少让
-%% 客户端有机会自己修。
-maybe_resync(false, _Req) ->
+%% 不假装流是连续的：少几条事件的 UI 会静静地渲染错。也不是只说一声「你漏了」——
+%% 客户端漏掉的是增量，增量对不上之后它手里那份就是错的，`MESSAGES_SNAPSHOT`
+%% 正是 AG-UI 里用来说「照这份对齐」的那条事件。
+maybe_resync(undefined, _Req) ->
     ok;
-maybe_resync(true, Req) ->
-    write_event(Req, beamai_agui_event:custom(
-                       <<"resync">>, #{<<"reason">> => <<"buffer_overrun">>})).
+maybe_resync(Messages, Req) when is_list(Messages) ->
+    write_event(Req, beamai_agui_event:messages_snapshot(Messages)).
 
 write_replay([], _Req) ->
     ok;
@@ -230,19 +232,20 @@ forward_session(Session, Ref, Req) ->
 %%====================================================================
 
 %% @private 起 run 进程，请求进程转发事件为 SSE 帧
-local_run(Input, Factory, Req) ->
+local_run(Input, Factory, RunOpts, Req) ->
     Parent = self(),
     Ref = make_ref(),
     Sink = fun(Event) -> Parent ! {?EVENT, Ref, Event}, ok end,
-    {Pid, MRef} = spawn_monitor(fun() -> run_process(Parent, Ref, Input, Factory, Sink) end),
+    {Pid, MRef} = spawn_monitor(
+                    fun() -> run_process(Parent, Ref, Input, Factory, Sink, RunOpts) end),
     forward(Ref, Pid, MRef, Req).
 
 %% @private run 进程主体：**永不异常退出**（见模块头「link 是双向的」）
-run_process(Parent, Ref, Input, Factory, Sink) ->
+run_process(Parent, Ref, Input, Factory, Sink, RunOpts) ->
     true = link(Parent),
     Outcome =
         try
-            ok = beamai_agui_runner:run(Input, Factory, Sink),
+            ok = beamai_agui_runner:run(Input, Factory, Sink, RunOpts),
             ok
         catch
             Class:Reason:Stack ->

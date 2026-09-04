@@ -48,6 +48,7 @@ session_test_() ->
       {"一会话一 run：reject 缺省", fun second_run_is_rejected/0},
       {"supersede：新的顶掉旧的", fun supersede_replaces_running/0},
       {"STATE_SNAPSHOT + DELTA 折出当前 state", fun state_is_folded/0},
+      {"消息账本：从事件流折出 AG-UI 消息", fun messages_are_folded/0},
       {"订阅者进程没了不影响 run", fun dead_subscriber_is_dropped/0}]}.
 
 %%====================================================================
@@ -128,7 +129,7 @@ started_run_streams_to_subscriber() ->
         ?assertEqual(<<"r1">>, RunId),
         %% run 一进来就发了 RUN_STARTED，我们是在那之后才订阅的 —— 水位补齐了它
         ?assertEqual(-1, Since),
-        {ok, Ref, Replay, false} = beamai_agui_session:subscribe(S, Since),
+        {ok, Ref, Replay, undefined} = beamai_agui_session:subscribe(S, Since),
         Events = Replay ++ collect_until_terminal(Ref),
         Types = types(Events),
         ?assertEqual(<<"RUN_STARTED">>, hd(Types)),
@@ -177,7 +178,7 @@ since_replays_only_the_gap() ->
         ok = beamai_agui_session:unsubscribe(S, Ref),
 
         %% 断线重连：手上最后收到的是第 2 号
-        {ok, Ref2, Gap, false} = beamai_agui_session:subscribe(S, 2),
+        {ok, Ref2, Gap, undefined} = beamai_agui_session:subscribe(S, 2),
         ok = beamai_agui_session:unsubscribe(S, Ref2),
         ?assertEqual([Seq || Seq <- seqs(All), Seq > 2], seqs(Gap)),
         %% 一条不重
@@ -198,9 +199,12 @@ buffer_overrun_reports_gap() ->
         _ = Replay ++ collect_until_terminal(Ref),
         ok = beamai_agui_session:unsubscribe(S, Ref),
         %% 缓冲只剩最后 3 条，从 0 号补起 → 中间那段永远补不回来了
-        {ok, Ref2, _, Gap} = beamai_agui_session:subscribe(S, 0),
+        {ok, Ref2, _, Resync} = beamai_agui_session:subscribe(S, 0),
         ok = beamai_agui_session:unsubscribe(S, Ref2),
-        ?assert(Gap)
+        %% 缺口给的是一份消息快照（`MESSAGES_SNAPSHOT` 的载荷），不是一声「你漏了」
+        ?assert(is_list(Resync)),
+        ?assertMatch([#{<<"role">> := <<"assistant">>, <<"content">> := <<"hello">>}],
+                     Resync)
     after
         meck:unload(beamai_chat_model),
         beamai_agui_sessions:forget(<<"s-overrun">>),
@@ -363,3 +367,22 @@ run_pid(Session) ->
     [Pid] = [P || P <- Links, P =/= self(),
                   erlang:process_info(P, registered_name) =:= []],
     Pid.
+
+%% 消息账本是**这条流自己的投影** —— 用来回答「你漏掉的那几条事件里说了什么」，
+%% 不是第二个对话历史（那在 chat memory 里）。
+messages_are_folded() ->
+    ok = mock_fast(),
+    try
+        {ok, S} = beamai_agui_sessions:ensure(<<"s-ledger">>),
+        {started, _, Since} =
+            beamai_agui_session:start_run(S, input(<<"s-ledger">>, <<"r1">>), factory()),
+        {ok, Ref, Replay, _} = beamai_agui_session:subscribe(S, Since),
+        _ = Replay ++ collect_until_terminal(Ref),
+        [Message] = beamai_agui_session:messages(S),
+        ?assertEqual(<<"assistant">>, maps:get(<<"role">>, Message)),
+        ?assertEqual(<<"hello">>, maps:get(<<"content">>, Message)),
+        ?assert(is_binary(maps:get(<<"id">>, Message)))
+    after
+        meck:unload(beamai_chat_model),
+        beamai_agui_sessions:forget(<<"s-ledger">>)
+    end.

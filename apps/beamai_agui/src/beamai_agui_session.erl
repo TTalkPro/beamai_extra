@@ -51,6 +51,7 @@
 -export([start_link/1]).
 -export([start_run/3, start_run/4, subscribe/2, unsubscribe/2]).
 -export([stop_run/1, stop_run/2, status/1, events/1, state/1, awaiting/1]).
+-export([messages/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
 
@@ -60,6 +61,9 @@
 -define(DEFAULT_IDLE_TTL, 1800000).       %% 30 分钟
 -define(DEFAULT_SUPERSEDE_WAIT, 5000).
 -define(IDLE_TICK, 60000).
+%% 消息账本的上限。它是**为补缺口服务的投影**，不是对话历史（那在 chat memory
+%% 里），所以有界 —— 一个长会话不该在会话进程里越攒越大。
+-define(DEFAULT_MESSAGE_LIMIT, 200).
 
 -type start_result() :: {started, binary(), integer()}
                       | {busy, binary()}
@@ -79,6 +83,10 @@ start_link(ThreadId) ->
 
 %% @doc 起一次 run。**立刻返回**，run 在会话下的独立进程里跑。
 %%
+%% `Opts` 认两个键：`on_concurrent`（覆盖本次的并发策略）与 `run_opts`
+%% （原样交给 `beamai_agui_runner:run/4` —— 插件的 `event_transform` /
+%% `input_transform` 走这条路进来）。
+%%
 %% 返回的 `Since` 是**起跑前的 seq 水位**：run 一进来就发 `RUN_STARTED`，而调用方
 %% 要等本函数返回才轮到 `subscribe/2`，中间那一段是真空。拿这个水位去订阅，缺口
 %% 就补齐了 —— 传 `undefined` 会漏掉 `RUN_STARTED`，AG-UI 客户端第一件事就是报
@@ -95,10 +103,15 @@ start_run(Session, Input, Factory, Opts) ->
 
 %% @doc 订阅这个会话的事件流。返回补发的历史（`Since` 之后的）与订阅句柄。
 %%
-%% `Gap` 为真表示环形缓冲的起点已经越过 `Since` —— 中间那段**永远补不回来了**，
-%% 调用方该告诉客户端重新拉一次历史，而不是假装流是连续的。
+%% 第四个返回值是**补缺口用的消息快照**：`undefined` 表示没有缺口；否则表示环形
+%% 缓冲的起点已经越过 `Since`，中间那段事件**永远补不回来了**，给的是一份到目前
+%% 为止的消息列表（调用方发成 `MESSAGES_SNAPSHOT`）。
+%%
+%% 为什么给消息而不是只说一声「你漏了」：客户端漏掉的是**增量**，增量对不上之后
+%% 它手里那份就是错的；`MESSAGES_SNAPSHOT` 是 AG-UI 里专门用来说「照这份对齐」的
+%% 那条事件，正好答这个问题。
 -spec subscribe(pid() | binary(), integer() | undefined) ->
-    {ok, subscription(), [{integer(), beamai_agui_event:event()}], boolean()}
+    {ok, subscription(), [{integer(), beamai_agui_event:event()}], [map()] | undefined}
     | {error, term()}.
 subscribe(Session, Since) ->
     call(Session, {subscribe, self(), Since}).
@@ -154,6 +167,17 @@ awaiting(Session) ->
         Awaiting -> Awaiting
     end.
 
+%% @doc 从事件流折出来的消息列表（AG-UI `Message` 形状）
+%%
+%% **不是第二个真相店**：它是这条流自己的投影，用来回答「你漏掉的那几条事件里
+%% 说了什么」。完整的对话历史在 chat memory 里，那才是权威。
+-spec messages(pid() | binary()) -> [map()].
+messages(Session) ->
+    case call(Session, messages) of
+        {error, _} -> [];
+        Messages -> Messages
+    end.
+
 %%====================================================================
 %% gen_server 回调
 %%====================================================================
@@ -171,6 +195,10 @@ init([ThreadId]) ->
            pending_start => undefined,
            awaiting => undefined,
            state => #{},
+           %% 消息账本：从事件流折出来的 AG-UI 消息（见 messages/1）
+           messages => [],
+           open_message => undefined,
+           tool_calls => #{},
            last_active => now_ms()}}.
 
 handle_call({start_run, Input, Factory, Opts}, From, State) ->
@@ -180,9 +208,12 @@ handle_call({subscribe, Pid, Since}, _From, State) ->
     #{buffer := Buffer} = State,
     Ref = erlang:monitor(process, Pid),
     Replay = [E || {Seq, _} = E <- queue:to_list(Buffer), after_since(Seq, Since)],
-    Gap = has_gap(Buffer, Since),
+    Resync = case has_gap(Buffer, Since) of
+        true -> ledger(State);
+        false -> undefined
+    end,
     Subs = maps:put(Ref, Pid, maps:get(subs, State)),
-    {reply, {ok, Ref, Replay, Gap}, touch(State#{subs => Subs})};
+    {reply, {ok, Ref, Replay, Resync}, touch(State#{subs => Subs})};
 
 handle_call({unsubscribe, Ref}, _From, State) ->
     {reply, ok, drop_sub(Ref, State)};
@@ -215,6 +246,9 @@ handle_call(state, _From, State) ->
 
 handle_call(awaiting, _From, State) ->
     {reply, maps:get(awaiting, State), State};
+
+handle_call(messages, _From, State) ->
+    {reply, ledger(State), State};
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_call}, State}.
@@ -271,7 +305,7 @@ code_change(_OldVsn, State, _Extra) ->
 do_start_run(Input, Factory, Opts, From, State) ->
     case maps:get(run, State) of
         undefined ->
-            launch_reply(Input, Factory, State);
+            launch_reply(Input, Factory, Opts, State);
         #{run_id := RunId} = Run ->
             case on_concurrent(Opts) of
                 supersede ->
@@ -287,25 +321,26 @@ do_start_run(Input, Factory, Opts, From, State) ->
             end
     end.
 
-launch_reply(Input, Factory, State) ->
-    {Result, State1} = launch(Input, Factory, State),
+launch_reply(Input, Factory, Opts, State) ->
+    {Result, State1} = launch(Input, Factory, Opts, State),
     {reply, Result, State1}.
 
 %% @private 起 run 进程（link + trap_exit，见模块头）
-launch(Input, Factory, State) ->
+launch(Input, Factory, Opts, State) ->
     Since = maps:get(seq, State),
     RunId = beamai_agui_types:run_id(Input),
     Session = self(),
-    Pid = spawn_link(fun() -> run_process(Session, RunId, Input, Factory) end),
+    RunOpts = maps:get(run_opts, Opts, #{}),
+    Pid = spawn_link(fun() -> run_process(Session, RunId, Input, Factory, RunOpts) end),
     {{started, RunId, Since},
      State#{run => #{run_id => RunId, pid => Pid,
                      stopping => false, terminal => false}}}.
 
 %% @private run 进程主体：事件经 cast 回会话（同一个发送者到同一个进程，保序）
-run_process(Session, RunId, Input, Factory) ->
+run_process(Session, RunId, Input, Factory, RunOpts) ->
     Sink = fun(Event) -> gen_server:cast(Session, {event, RunId, Event}), ok end,
     try
-        ok = beamai_agui_runner:run(Input, Factory, Sink)
+        ok = beamai_agui_runner:run(Input, Factory, Sink, RunOpts)
     catch
         Class:Reason:Stack ->
             %% runner 自己兜了绝大部分异常；能到这儿说明连 emitter 都出事了，
@@ -326,8 +361,9 @@ finish_run(Reason, #{run := Run} = State) ->
     case maps:get(pending_start, State2) of
         undefined ->
             State2;
-        {From, Input, Factory, _Opts} ->
-            {Result, State3} = launch(Input, Factory, State2#{pending_start => undefined}),
+        {From, Input, Factory, Opts} ->
+            {Result, State3} = launch(Input, Factory, Opts,
+                                      State2#{pending_start => undefined}),
             gen_server:reply(From, Result),
             State3
     end.
@@ -388,9 +424,9 @@ buffer_push(Seq, Event, #{buffer := Buffer, buffered := N, buffer_size := Cap} =
             State#{buffer => Buffer1, buffered => N + 1}
     end.
 
-%% @private 顺手记账：终态标记与共享状态
+%% @private 顺手记账：终态标记、共享状态、消息账本
 track(Event, RunId, State) ->
-    State1 = track_state(Event, State),
+    State1 = track_message(Event, track_state(Event, State)),
     case beamai_agui_event:is_terminal(Event) of
         true ->
             case maps:get(run, State1) of
@@ -413,6 +449,120 @@ track_state(Event, State) ->
         _ ->
             State
     end.
+
+%%====================================================================
+%% 内部 - 消息账本
+%%====================================================================
+
+%% @private 从事件流折出 AG-UI 消息
+%%
+%% 只认「构成一条消息」的那几种事件。子 agent lane 的事件带 `subagentRunId`，
+%% **不进账本** —— 账本是给「照这份对齐」用的，而那条 lane 的消息不在父会话的
+%% 消息列表里（它们以工具结果的形式回到父这边）。
+track_message(Event, State) ->
+    case {beamai_agui_event:type_of(Event), maps:is_key(<<"subagentRunId">>, Event)} of
+        {_, true} -> State;
+        {<<"TEXT_MESSAGE_START">>, _} -> open_message(Event, State);
+        {<<"TEXT_MESSAGE_CONTENT">>, _} -> append_content(Event, State);
+        {<<"TEXT_MESSAGE_END">>, _} -> close_message(State);
+        {<<"TOOL_CALL_START">>, _} -> open_tool_call(Event, State);
+        {<<"TOOL_CALL_ARGS">>, _} -> append_tool_args(Event, State);
+        {<<"TOOL_CALL_END">>, _} -> close_tool_call(Event, State);
+        {<<"TOOL_CALL_RESULT">>, _} -> tool_result_message(Event, State);
+        _ -> State
+    end.
+
+open_message(Event, State) ->
+    Id = maps:get(<<"messageId">>, Event, undefined),
+    push_message(#{<<"id">> => Id, <<"role">> => <<"assistant">>,
+                   <<"content">> => <<>>}, State#{open_message => Id}).
+
+append_content(Event, #{messages := Messages} = State) ->
+    Id = maps:get(<<"messageId">>, Event, undefined),
+    Delta = maps:get(<<"delta">>, Event, <<>>),
+    State#{messages => update_message(Id, Messages, fun(M) ->
+        M#{<<"content">> => <<(maps:get(<<"content">>, M, <<>>))/binary, Delta/binary>>}
+    end)}.
+
+close_message(State) ->
+    State#{open_message => undefined}.
+
+%% @private 工具调用挂在发起它的那条 assistant 消息下；没有那条（纯工具轮，模型
+%% 一个字都没说）就现建一条空的 —— AG-UI 的消息列表里工具调用必须有宿主消息，
+%% 否则前端把它当孤儿丢掉。
+open_tool_call(Event, #{tool_calls := Calls} = State) ->
+    Id = maps:get(<<"toolCallId">>, Event, undefined),
+    Name = maps:get(<<"toolCallName">>, Event, <<>>),
+    Parent = maps:get(<<"parentMessageId">>, Event, undefined),
+    State1 = ensure_message(Parent, State),
+    State1#{tool_calls => Calls#{Id => #{message_id => host_message(Parent, State1),
+                                         name => Name, args => []}}}.
+
+append_tool_args(Event, #{tool_calls := Calls} = State) ->
+    Id = maps:get(<<"toolCallId">>, Event, undefined),
+    case maps:get(Id, Calls, undefined) of
+        undefined -> State;
+        #{args := Args} = Call ->
+            State#{tool_calls => Calls#{Id => Call#{args => Args ++ [maps:get(<<"delta">>, Event, <<>>)]}}}
+    end.
+
+close_tool_call(Event, #{tool_calls := Calls, messages := Messages} = State) ->
+    Id = maps:get(<<"toolCallId">>, Event, undefined),
+    case maps:take(Id, Calls) of
+        error ->
+            State;
+        {#{message_id := HostId, name := Name, args := Args}, Rest} ->
+            Call = #{<<"id">> => Id, <<"type">> => <<"function">>,
+                     <<"function">> => #{<<"name">> => Name,
+                                         <<"arguments">> => iolist_to_binary(Args)}},
+            State#{tool_calls => Rest,
+                   messages => update_message(HostId, Messages, fun(M) ->
+                       M#{<<"toolCalls">> => maps:get(<<"toolCalls">>, M, []) ++ [Call]}
+                   end)}
+    end.
+
+tool_result_message(Event, State) ->
+    push_message(#{<<"id">> => maps:get(<<"messageId">>, Event, undefined),
+                   <<"role">> => <<"tool">>,
+                   <<"toolCallId">> => maps:get(<<"toolCallId">>, Event, undefined),
+                   <<"content">> => maps:get(<<"content">>, Event, <<>>)}, State).
+
+%% @private 纯工具轮没有 TEXT_MESSAGE_START，宿主消息得现建
+ensure_message(undefined, State) ->
+    State;
+ensure_message(Id, #{messages := Messages} = State) ->
+    case lists:any(fun(M) -> maps:get(<<"id">>, M, undefined) =:= Id end, Messages) of
+        true -> State;
+        false -> push_message(#{<<"id">> => Id, <<"role">> => <<"assistant">>,
+                                <<"content">> => <<>>}, State)
+    end.
+
+host_message(undefined, #{messages := []}) -> undefined;
+host_message(undefined, #{messages := Messages}) ->
+    maps:get(<<"id">>, lists:last(Messages), undefined);
+host_message(Id, _State) -> Id.
+
+push_message(Message, #{messages := Messages} = State) ->
+    State#{messages => trim(Messages ++ [Message])}.
+
+update_message(_Id, Messages, _Fun) when Messages =:= [] ->
+    Messages;
+update_message(Id, Messages, Fun) ->
+    [case maps:get(<<"id">>, M, undefined) of
+         Id -> Fun(M);
+         _ -> M
+     end || M <- Messages].
+
+trim(Messages) ->
+    Limit = env(message_limit, ?DEFAULT_MESSAGE_LIMIT),
+    case length(Messages) - Limit of
+        Drop when Drop > 0 -> lists:nthtail(Drop, Messages);
+        _ -> Messages
+    end.
+
+%% @private 账本对外的样子：没有 toolCalls 的消息不带这个键（AG-UI 里它是可选的）
+ledger(#{messages := Messages}) ->
+    Messages.
 
 %%====================================================================
 %% 内部 - 辅助
