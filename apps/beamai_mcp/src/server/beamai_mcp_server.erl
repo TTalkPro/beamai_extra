@@ -434,8 +434,10 @@ handle_tools_call(#{<<"name">> := Name} = Params, #state{tools = Tools} = State)
                             {ok, #{<<"content">> => ResultContent,
                                    <<"isError">> => false}, State};
                         {error, Error} ->
+                            %% 二进制错误按原文透出（handler 已经写好了给模型看的
+                            %% 句子），其余形状用 ~p——否则 <<"...">> 会一起进文本
                             ErrorContent = [beamai_mcp_types:text_content(
-                                iolist_to_binary(io_lib:format("~p", [Error]))
+                                format_error_text(Error)
                             )],
                             {ok, #{<<"content">> => ErrorContent,
                                    <<"isError">> => true}, State};
@@ -591,6 +593,11 @@ format_tool_result(Result) ->
     [beamai_mcp_types:text_content(
         iolist_to_binary(io_lib:format("~p", [Result]))
     )].
+
+%% @private 工具错误 → 文本
+format_error_text(Error) when is_binary(Error) -> Error;
+format_error_text(Error) ->
+    iolist_to_binary(io_lib:format("~p", [Error])).
 
 %% @private 默认 MIME 类型
 default_mime_type(undefined) -> <<"text/plain">>;
