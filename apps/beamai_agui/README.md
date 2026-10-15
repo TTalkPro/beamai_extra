@@ -54,6 +54,25 @@ BaseEvent 没这一位）。浏览器 `EventSource` 断线重连时把它放进 
 一条 `CUSTOM(resync)` 再接 live tail —— 中间那段**永远补不回来了**，如实说比假装流
 是连续的好：少几条事件的 UI 会静静地渲染错。
 
+### 多实例：owner 用 `global` 挑一个，而不是外层硬 sticky
+
+默认每台节点的会话注册表是独立的。接多实例时把节点连成一个 Erlang cluster，然后
+所有节点配：
+
+```erlang
+{beamai_agui, [{distributed_sessions, true}]}
+```
+
+同一 `threadId` 用 `global` 命名 + 加锁，所以**只会有一个 owner 会话**；请求落进
+哪台负载均衡后面的节点都没关系 —— `ensure/1` 拿到 owner 上的 pid，`start_run` /
+`subscribe` / `stop` / 只读面都跨节点工作。这避免了两个节点各自把同一个 thread
+跑成两条事件流，比配置 sticky session 少一个前端和 LB 的约定。
+
+这是 **owner 路由，不是共享缓冲**：事件环形缓冲仍在 owner 节点内存里，owner 崩了
+那段易失缓冲仍会丢（客户端靠 `MESSAGES_SNAPSHOT` 对齐）；pause store 与聊天历史
+也要用各自跨实例可见的存储。`global` 需要 Erlang 节点互相可见，脑裂期间创建新
+thread 会回 `ownership_unavailable`，宁可失败也不分叉。
+
 ### stop 是真停
 
 BEAM 有抢占，`stop` 就是把 run 进程杀掉 —— 不需要 JVM 那套「协作式取消 + 正在跑的

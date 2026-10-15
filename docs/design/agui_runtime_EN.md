@@ -309,6 +309,10 @@ authoritative.
    default and enabled explicitly by the host; key storage and fixed-window counters are
    still ETS. A multi-node deployment needs shared identity/counters or key-based session
    affinity.
+2. **Multi-node sessions use owner routing, not shared storage.** With
+   `distributed_sessions => true`, a `global` lock elects one owner per thread and every
+   node can call that owner transparently. The event buffer still lives only in the
+   owner's memory; shared event storage remains necessary to survive owner loss.
 
 ### Engineering side
 

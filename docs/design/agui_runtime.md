@@ -273,6 +273,9 @@ state 缺省仍只给**工具**读（`beamai_context:state_get/3`），模型看
 1. **安全门是进程内单机语义**。认证 / 限流（`beamai_agui_auth` /
    `beamai_agui_rate_limit`）已接入 Cowboy，默认关闭、由宿主显式打开；但 key 表和
    固定窗口桶仍在 ETS。多实例部署需要共享身份与计数，或按 key 粘住同一节点。
+2. **多实例会话是 owner 路由，不是共享存储**。`distributed_sessions => true` 时，
+   `global` 锁保证同一 thread 只有一个 owner，任意节点都能跨进程操作它。事件缓冲
+   仍只活在 owner 内存里；owner 崩溃后的不丢缓冲要靠共享事件存储。
 
 ### 工程侧
 

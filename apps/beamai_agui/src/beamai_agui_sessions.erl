@@ -6,6 +6,12 @@
 %%% 都要查一次），**建**走 gen_server —— 建立必须串行化，否则两个并发请求会给同
 %%% 一个 thread 起出两个会话，事件流当场分叉。
 %%%
+%%% 多实例部署时打开 `distributed_sessions`：threadId 的 owner 用 Erlang `global`
+%%% 命名，并用同一名字做创建锁。请求落在哪个节点都行 —— `ensure/1` 会拿到 owner
+%%% 节点上的会话 pid，后续 `start_run` / `subscribe` / `stop` 都是普通跨进程调用。
+%%% 这不是共享事件存储：owner 节点挂掉仍会丢易失缓冲；它消灭的是负载均衡把同一
+%%% thread 撒到两个节点后的事件流分叉。
+%%%
 %%% == 没起来就是没有会话层 ==
 %%%
 %%% `ensure/1` 在注册表没起来时返回 `{error, unavailable}`，**不崩**。宿主可能只
@@ -19,7 +25,8 @@
 -behaviour(gen_server).
 
 -export([start_link/0]).
--export([ensure/1, whereis_session/1, list/0, forget/1, count/0]).
+-export([ensure/1, whereis_session/1, list/0, forget/1, count/0,
+         distributed_sessions/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
 
@@ -51,28 +58,16 @@ ensure(_) ->
     {error, badarg}.
 
 %% @doc 查（不建）
+%%
+%% 分布式模式打开时，本地没有就问 `global` —— 返回的可能是另一台节点上的 pid。
 -spec whereis_session(binary()) -> {ok, pid()} | {error, not_found | unavailable}.
 whereis_session(ThreadId) ->
-    try ets:lookup(?TABLE, ThreadId) of
-        [{ThreadId, Pid}] ->
-            case is_process_alive(Pid) of
-                true -> {ok, Pid};
-                false -> {error, not_found}
-            end;
-        [] ->
-            {error, not_found}
-    catch
-        error:badarg -> {error, unavailable}
-    end.
+    local_whereis_session(ThreadId, global_whereis(ThreadId)).
 
 %% @doc 现有的会话（thread id）
 -spec list() -> [binary()].
 list() ->
-    try
-        lists:sort([T || {T, _} <- ets:tab2list(?TABLE)])
-    catch
-        error:badarg -> []
-    end.
+    lists:usort(lists:append(local_lists())).
 
 -spec count() -> non_neg_integer().
 count() ->
@@ -87,11 +82,19 @@ forget(ThreadId) ->
     case whereis_session(ThreadId) of
         {ok, Pid} ->
             _ = beamai_agui_session:stop_run(Pid),
-            _ = gen_server:call(?MODULE, {forget, ThreadId}, 5000),
+            _ = gen_server:call(registry_on(Pid), {forget, ThreadId}, 5000),
             ok;
         _ ->
             ok
     end.
+
+%% @doc Return whether cross-node thread ownership is enabled.
+%%
+%% Hosts opt in with `{beamai_agui, [{distributed_sessions, true}]}`. All nodes
+%% must form one Erlang cluster so `global` can serialize ownership.
+-spec distributed_sessions() -> boolean().
+distributed_sessions() ->
+    application:get_env(beamai_agui, distributed_sessions, false).
 
 %%====================================================================
 %% gen_server 回调
@@ -107,14 +110,20 @@ handle_call({ensure, ThreadId}, _From, State) ->
         {ok, Pid} ->
             {reply, {ok, Pid}, State};
         _ ->
-            case supervisor:start_child(beamai_agui_session_sup, [ThreadId]) of
-                {ok, Pid} ->
-                    true = ets:insert(?TABLE, {ThreadId, Pid}),
-                    MRef = erlang:monitor(process, Pid),
-                    Monitors = maps:put(MRef, ThreadId, maps:get(monitors, State)),
-                    {reply, {ok, Pid}, State#{monitors => Monitors}};
-                {error, Reason} ->
-                    {reply, {error, Reason}, State}
+            case distributed_sessions() of
+                false ->
+                    case start_local(ThreadId, State) of
+                        {ok, Pid, State1} ->
+                            {reply, {ok, Pid}, State1};
+                        {error, Reason, State1} ->
+                            {reply, {error, Reason}, State1}
+                    end;
+                true ->
+                    case ownership(ThreadId, State) of
+                        {ok, Pid, State1} -> {reply, {ok, Pid}, State1};
+                        {error, Reason, State1} ->
+                            {reply, {error, Reason}, State1}
+                    end
             end
     end;
 
@@ -123,6 +132,7 @@ handle_call({forget, ThreadId}, _From, State) ->
         {ok, Pid} ->
             true = ets:delete(?TABLE, ThreadId),
             _ = supervisor:terminate_child(beamai_agui_session_sup, Pid),
+            maybe_unregister(ThreadId),
             {reply, ok, State};
         _ ->
             {reply, ok, State}
@@ -139,6 +149,7 @@ handle_info({'DOWN', MRef, process, _Pid, _Reason}, #{monitors := Monitors} = St
     case maps:take(MRef, Monitors) of
         {ThreadId, Rest} ->
             true = ets:delete(?TABLE, ThreadId),
+            maybe_unregister(ThreadId),
             {noreply, State#{monitors => Rest}};
         error ->
             {noreply, State}
@@ -152,3 +163,107 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+%%====================================================================
+%% 内部
+%%====================================================================
+
+global_name(ThreadId) ->
+    {?MODULE, ThreadId}.
+
+global_whereis(ThreadId) ->
+    case distributed_sessions() of
+        true ->
+            try global:whereis_name(global_name(ThreadId)) of
+                Pid when is_pid(Pid) -> {ok, Pid};
+                _ -> {error, not_found}
+            catch
+                _:_ -> {error, not_found}
+            end;
+        false ->
+            {error, not_found}
+    end.
+
+local_whereis_session(ThreadId, Global) ->
+    try ets:lookup(?TABLE, ThreadId) of
+        [{ThreadId, Pid}] ->
+            case is_process_alive(Pid) of
+                true -> {ok, Pid};
+                false -> Global
+            end;
+        [] ->
+            Global
+    catch
+        error:badarg ->
+            case Global of
+                {ok, _} = Found -> Found;
+                {error, not_found} -> {error, unavailable}
+            end
+    end.
+
+local_lists() ->
+    try
+        [[T || {T, _} <- ets:tab2list(?TABLE)]]
+    catch
+        error:badarg -> []
+    end.
+
+registry_on(Pid) ->
+    OwnerNode = node(Pid),
+    case OwnerNode =:= node() of
+        true -> ?MODULE;
+        false -> {?MODULE, OwnerNode}
+    end.
+
+start_local(ThreadId, State) ->
+    case supervisor:start_child(beamai_agui_session_sup, [ThreadId]) of
+        {ok, Pid} ->
+            true = ets:insert(?TABLE, {ThreadId, Pid}),
+            monitor_session(ThreadId, Pid, State);
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
+
+ownership(ThreadId, State) ->
+    Name = global_name(ThreadId),
+    case global:trans(Name, fun() -> own_thread(ThreadId, State) end) of
+        {ok, Pid, State1} -> {ok, Pid, State1};
+        {error, Reason, State1} -> {error, Reason, State1};
+        aborted -> {error, ownership_unavailable, State}
+    end.
+
+own_thread(ThreadId, State) ->
+    case global:whereis_name(global_name(ThreadId)) of
+        Pid when is_pid(Pid) ->
+            {ok, Pid, State};
+        _ ->
+            case start_local(ThreadId, State) of
+                {ok, Pid, State1} ->
+                    case global:register_name(global_name(ThreadId), Pid) of
+                        yes ->
+                            {ok, Pid, State1};
+                        no ->
+                            _ = supervisor:terminate_child(
+                                  beamai_agui_session_sup, Pid),
+                            case global:whereis_name(global_name(ThreadId)) of
+                                Winner when is_pid(Winner) ->
+                                    {ok, Winner, State1};
+                                _ ->
+                                    {error, ownership_lost, State1}
+                            end
+                    end;
+                {error, Reason, State1} ->
+                    {error, Reason, State1}
+            end
+    end.
+
+monitor_session(ThreadId, Pid, State) ->
+    MRef = erlang:monitor(process, Pid),
+    Monitors = maps:put(MRef, ThreadId, maps:get(monitors, State)),
+    {ok, Pid, State#{monitors => Monitors}}.
+
+maybe_unregister(ThreadId) ->
+    case distributed_sessions() of
+        true -> catch global:unregister_name(global_name(ThreadId));
+        false -> ok
+    end.

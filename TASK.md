@@ -511,7 +511,11 @@ happy（ClojureScript + UIx 的 AG-UI 客户端）拿 `beamai_agui/1.1` 做联�
   限流，认证关闭时按 `X-Forwarded-For` 最左 IP。401 / 429 都带 CORS，429 带
   `retry-after`。9 个测试覆盖缺头、错 key、过期、两种 key 头、按 key 隔离、
   代理 IP、以及 Cowboy 的 401 / 200 集成。
-- [ ] **多实例部署**。会话在进程内，要么 sticky session，要么把缓冲挪到共享存储。
+- [x] **多实例部署**。新增 `distributed_sessions`（缺省 false）：节点组成 Erlang
+  cluster 后，threadId 用 `global` 命名 + 加锁，全集群只选一个 owner 会话；请求落
+  在任意节点都拿 owner 的远程 pid 起跑、订阅、stop，不再依赖外层 sticky session。
+  这是 **owner 路由，不是共享事件存储** —— owner 崩溃仍会丢易失缓冲，跨实例的
+  pause store / 聊天历史仍由宿主提供；共享事件存储保持为后续缺口。
 - [ ] **异步委派的 lane**（`management_tools`）。子 agent 在工具进程死后还在跑，
   那时 lane 的状态表已经回收 —— 要让 `beamai_subagent_manager` 透出观察钩子，
   那是上游的改动。
