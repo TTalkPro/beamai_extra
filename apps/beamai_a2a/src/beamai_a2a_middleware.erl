@@ -47,16 +47,10 @@
 -export([
     %% 认证和限流检查
     check_auth_and_rate_limit/1,
-    check_rate_limit_only/1,
 
     %% 错误响应构建
     make_auth_error_response/2,
-    make_rate_limit_error_response/2,
-
-    %% HTTP 头部工具
-    get_header/2,
-    get_rate_limit_key/1,
-    get_rate_limit_key_from_headers/1
+    make_rate_limit_error_response/2
 ]).
 
 %%====================================================================
@@ -95,7 +89,7 @@ check_auth_and_rate_limit(Headers) ->
             end
     end.
 
-%% @doc 仅检查限流（认证已禁用时使用）
+%% @private 仅检查限流（认证已禁用时使用）
 %%
 %% 当认证禁用时，使用 IP 地址或默认 Key 进行限流。
 %%
@@ -136,7 +130,7 @@ check_rate_limit(RateLimitKey, AuthInfo) ->
 %% 限流 Key 获取
 %%====================================================================
 
-%% @doc 从认证信息获取限流 Key
+%% @private 从认证信息获取限流 Key
 %%
 %% 优先使用 API Key，其次是匿名标识，最后是默认值。
 %%
@@ -150,7 +144,7 @@ get_rate_limit_key(#{anonymous := true}) ->
 get_rate_limit_key(_) ->
     <<"default">>.
 
-%% @doc 从请求头获取限流 Key
+%% @private 从请求头获取限流 Key
 %%
 %% 用于认证禁用时的限流。尝试获取客户端 IP 地址。
 %%
@@ -175,7 +169,7 @@ get_rate_limit_key_from_headers(Headers) ->
 %% HTTP 头部工具
 %%====================================================================
 
-%% @doc 从请求头列表获取指定头部值
+%% @private 从请求头列表获取指定头部值
 %%
 %% 支持大小写不敏感的匹配。
 %%

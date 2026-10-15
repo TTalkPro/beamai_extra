@@ -39,7 +39,6 @@
     generate/1,
     to_json/1,
     from_json/1,
-    to_map/1,
     from_map/1,
     tools_to_skills/1,
     validate/1
@@ -136,7 +135,7 @@ from_json(JsonBin) ->
             {error, {json_decode_error, Reason}}
     end.
 
-%% @doc 将内部 Agent Card 格式转换为 JSON 兼容格式
+%% @private 将内部 Agent Card 格式转换为 JSON 兼容格式
 %%
 %% 将 atom keys 转换为 binary keys，符合 A2A JSON 规范。
 -spec to_map(map()) -> map().

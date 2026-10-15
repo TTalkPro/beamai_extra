@@ -4,6 +4,12 @@
 %%% 管理 Task 进程的动态创建和监督。
 %%% 使用 simple_one_for_one 策略。
 %%%
+%%% ```
+%%% {ok, _Sup} = beamai_a2a_task_sup:start_link(),
+%%% {ok, TaskPid} = beamai_a2a_task_sup:start_task(TaskOpts),
+%%% {ok, Task} = beamai_a2a_task:get(TaskPid).
+%%% ```
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(beamai_a2a_task_sup).

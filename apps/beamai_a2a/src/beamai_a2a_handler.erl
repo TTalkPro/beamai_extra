@@ -33,16 +33,9 @@
     %% 请求分发
     dispatch/3,
 
-    %% 消息发送
-    handle_message_send/3,
 
-    %% 任务管理
-    handle_tasks_get/3,
-    handle_tasks_cancel/3,
 
     %% Push 通知配置
-    handle_push_config_set/3,
-    handle_push_config_get/3,
     handle_push_config_delete/3
 ]).
 
@@ -85,7 +78,7 @@ dispatch(Method, Params, Context) ->
 %% message/send 处理
 %%====================================================================
 
-%% @doc 处理 message/send 方法
+%% @private 处理 message/send 方法
 %%
 %% 根据参数决定：
 %% - 创建新任务（无 taskId 和 contextId）
@@ -267,7 +260,7 @@ do_continue_task(Id, TaskPid, Message, Context) ->
 %% tasks/get 处理
 %%====================================================================
 
-%% @doc 处理 tasks/get 方法
+%% @private 处理 tasks/get 方法
 %%
 %% @param Id JSON-RPC 请求 ID
 %% @param Params 请求参数（需要 taskId）
@@ -299,7 +292,7 @@ handle_tasks_get(Id, Params, Context) ->
 %% tasks/cancel 处理
 %%====================================================================
 
-%% @doc 处理 tasks/cancel 方法
+%% @private 处理 tasks/cancel 方法
 %%
 %% @param Id JSON-RPC 请求 ID
 %% @param Params 请求参数（需要 taskId）
@@ -338,7 +331,7 @@ handle_tasks_cancel(Id, Params, Context) ->
 %% Push 通知配置处理
 %%====================================================================
 
-%% @doc 处理 tasks/pushNotificationConfig/set 方法
+%% @private 处理 tasks/pushNotificationConfig/set 方法
 %%
 %% @param Id JSON-RPC 请求 ID
 %% @param Params 请求参数（需要 taskId 和 pushNotificationConfig）
@@ -379,7 +372,7 @@ handle_push_config_set(Id, Params, Context) ->
             end
     end.
 
-%% @doc 处理 tasks/pushNotificationConfig/get 方法
+%% @private 处理 tasks/pushNotificationConfig/get 方法
 %%
 %% @param Id JSON-RPC 请求 ID
 %% @param Params 请求参数（需要 taskId）
@@ -408,7 +401,7 @@ handle_push_config_get(Id, Params, Context) ->
             end
     end.
 
-%% @doc 处理 tasks/pushNotificationConfig/delete 方法
+%% @private 处理 tasks/pushNotificationConfig/delete 方法
 %%
 %% @param Id JSON-RPC 请求 ID
 %% @param Params 请求参数（需要 taskId）

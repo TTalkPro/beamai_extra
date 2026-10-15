@@ -41,21 +41,7 @@
     task_to_json/1,
 
     %% 消息转换
-    message_to_json/1,
     normalize_message/1,
-
-    %% Artifact 转换
-    artifact_to_json/1,
-
-    %% Part 转换
-    part_to_json/1,
-    normalize_part/1,
-
-    %% 状态转换
-    build_status_json/2,
-
-    %% 历史条目转换
-    history_entry_to_json/1,
 
     %% 消息 ID 生成
     generate_message_id/0
@@ -105,7 +91,7 @@ task_to_json(Task) when is_map(Task) ->
 %% 状态转换
 %%====================================================================
 
-%% @doc 构建状态 JSON
+%% @private 构建状态 JSON
 %%
 %% 根据状态和可选的状态消息构建 JSON 格式的状态对象。
 %%
@@ -131,7 +117,7 @@ build_status_json(State, _) ->
 %% 历史条目转换
 %%====================================================================
 
-%% @doc 将历史条目转换为 JSON 格式
+%% @private 将历史条目转换为 JSON 格式
 %%
 %% @param Entry 历史条目 map
 %% @returns JSON 格式的历史条目 map
@@ -149,7 +135,7 @@ history_entry_to_json(Entry) when is_map(Entry) ->
 %% 消息转换
 %%====================================================================
 
-%% @doc 将内部消息 map 转换为 JSON 格式
+%% @private 将内部消息 map 转换为 JSON 格式
 %%
 %% @param Msg 消息 map，包含 role 和 parts
 %% @returns JSON 格式的消息 map
@@ -198,7 +184,7 @@ normalize_message(Msg) when is_map(Msg) ->
 %% Artifact 转换
 %%====================================================================
 
-%% @doc 将 Artifact 转换为 JSON 格式
+%% @private 将 Artifact 转换为 JSON 格式
 %%
 %% @param Artifact Artifact map
 %% @returns JSON 格式的 Artifact map
@@ -214,7 +200,7 @@ artifact_to_json(Artifact) when is_map(Artifact) ->
 %% Part 转换
 %%====================================================================
 
-%% @doc 将 Part 转换为 JSON 格式
+%% @private 将 Part 转换为 JSON 格式
 %%
 %% 支持的 Part 类型：
 %% - text: 文本内容
@@ -234,7 +220,7 @@ part_to_json(Part) when is_map(Part) ->
     %% 未知类型，原样返回
     Part.
 
-%% @doc 规范化输入 Part 格式
+%% @private 规范化输入 Part 格式
 %%
 %% 将 JSON 格式的 Part 转换为内部格式（atom keys）。
 %%
