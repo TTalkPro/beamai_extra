@@ -8,6 +8,7 @@
 %%% │   └── beamai_agui_session (worker) ×N    %% 一个 thread 一个
 %%% ├── beamai_agui_sessions (worker)          %% threadId → 会话进程
 %%% ├── beamai_agui_auth / _rate_limit         %% 默认关闭的安全门
+%%% ├── beamai_agui_subagent_lanes (worker)    %% 异步委派的 lane 台账（ETS heir）
 %%% └── beamai_pause_store_ets|_dets (worker)  %% thread 的未决暂停快照
 %%% ```
 %%%
@@ -82,7 +83,15 @@ init([]) ->
         type => worker,
         modules => [beamai_agui_rate_limit]
     },
-    Children = [Registry, SessionSup, Sessions, Auth, RateLimit |
+    SubagentLanes = #{
+        id => beamai_agui_subagent_lanes,
+        start => {beamai_agui_subagent_lanes, start_link, []},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [beamai_agui_subagent_lanes]
+    },
+    Children = [Registry, SessionSup, Sessions, Auth, RateLimit, SubagentLanes |
                 pause_store_child()],
     {ok, {SupFlags, Children}}.
 

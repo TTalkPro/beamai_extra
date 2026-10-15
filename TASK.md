@@ -516,9 +516,13 @@ happy（ClojureScript + UIx 的 AG-UI 客户端）拿 `beamai_agui/1.1` 做联�
   在任意节点都拿 owner 的远程 pid 起跑、订阅、stop，不再依赖外层 sticky session。
   这是 **owner 路由，不是共享事件存储** —— owner 崩溃仍会丢易失缓冲，跨实例的
   pause store / 聊天历史仍由宿主提供；共享事件存储保持为后续缺口。
-- [ ] **异步委派的 lane**（`management_tools`）。子 agent 在工具进程死后还在跑，
-  那时 lane 的状态表已经回收 —— 要让 `beamai_subagent_manager` 透出观察钩子，
-  那是上游的改动。
+- [x] **异步委派的 lane**（`management_tools`）。新增 `management_tools/2` 与
+  `beamai_agui_subagent_lanes` 台账，**没改上游**：lane 的 ETS 表把台账设为 heir，
+  工具进程死后表活下来；收尾等 `beamai_subagent_manager` 的通知（带得上结果原文），
+  兜底是子 agent 自己的 `on_turn_end`/`on_turn_error`（晚 1 秒）与
+  `subagent_lane_timeout`（缺省 10 分钟）。代价：spawn 工具结果里要认出子 agent 的
+  id，认不出就退到兜底；`restart_subagent` 复用旧 spec，重跑事件静默丢弃。
+  两个用例覆盖「工具进程死后 lane 仍在」与「被 kill 也收口」。
 - [ ] **插件的中间态**。三个 activity 插件都在参数到齐时一次翻译；「边生成边长
   出来」要把 `TOOL_CALL_ARGS` 的片段做增量 JSON 扫描（clj 那边有一个现成的
   `scanner` 可照抄）。

@@ -20,14 +20,21 @@ subagent_test_() ->
     {setup, fun setup/0, fun cleanup/1,
      [{"开着：lane 开合 + 每条事件带 subagentRunId", fun lane_events/0},
       {"关着：一行事件都不多", fun disabled_emits_nothing/0},
-      {"委派失败 → SUBAGENT_ERROR，不是静静地没有收口", fun failure_closes_lane/0}]}.
+      {"委派失败 → SUBAGENT_ERROR，不是静静地没有收口", fun failure_closes_lane/0},
+      {"异步委派：工具进程死了 lane 还在，收尾带结果原文", fun async_lane_events/0},
+      {"异步委派：子 agent 被 kill → SUBAGENT_ERROR", fun async_killed_closes_lane/0}]}.
 
 setup() ->
     _ = beamai_subagent_manager:ensure_started(),
+    _ = beamai_agui_subagent_lanes:ensure_started(),
     ok.
 
 cleanup(_) ->
     application:unset_env(beamai_agui, subagent_events),
+    application:unset_env(beamai_agui, subagent_lane_timeout),
+    %% 子 agent 的条目默认不自动回收（TTL=infinity），留着会串到下一个用例
+    lists:foreach(fun(#{id := Id}) -> beamai_subagent_manager:drop(Id) end,
+                  beamai_subagent_manager:list()),
     ok.
 
 %%====================================================================
@@ -84,6 +91,25 @@ factory() ->
         beamai_agent:new(maps:merge(#{chat_client => K, memory => false}, RuntimeCfg))
     end.
 
+%% @private 工厂：异步管理工具（`spawn_subagent` 那条异步路）
+async_factory() ->
+    fun(_Input, RuntimeCfg) ->
+        Observer = maps:get(subagent_observer, RuntimeCfg, undefined),
+        Tools = beamai_agui_subagent:management_tools(
+                  #{name => <<"research">>,
+                    subagent => fun(_Args, _Ctx) ->
+                        K = beamai_chat_client:add_chat_model(
+                              beamai_chat_client:new(),
+                              beamai_chat_model:create(mock, #{})),
+                        #{chat_client => K, memory => false}
+                    end}, Observer),
+        K = beamai_chat_client:add_tools(
+              beamai_chat_client:add_chat_model(beamai_chat_client:new(),
+                                                beamai_chat_model:create(mock, #{})),
+              Tools),
+        beamai_agent:new(maps:merge(#{chat_client => K, memory => false}, RuntimeCfg))
+    end.
+
 input() ->
     {ok, Input} = beamai_agui_types:parse_run_input(
                     #{<<"threadId">> => <<"t-sub">>, <<"runId">> => <<"r1">>,
@@ -92,12 +118,28 @@ input() ->
     Input.
 
 run() ->
+    run_with(factory()).
+
+run_with(Factory) ->
     Self = self(),
-    ok = beamai_agui_runner:run(input(), factory(), fun(Ev) -> Self ! {ev, Ev}, ok end),
+    ok = beamai_agui_runner:run(input(), Factory, fun(Ev) -> Self ! {ev, Ev}, ok end),
     collect().
 
 collect() ->
     receive {ev, Ev} -> [Ev | collect()] after 0 -> [] end.
+
+%% @private 等 lane 的收尾事件（异步子 agent 的收尾在父 run 之后才到）
+await_close() ->
+    receive
+        {ev, Ev} ->
+            case lists:member(beamai_agui_event:type_of(Ev),
+                              [<<"SUBAGENT_FINISHED">>, <<"SUBAGENT_ERROR">>]) of
+                true -> [Ev];
+                false -> [Ev | await_close()]
+            end
+    after 2000 ->
+        []
+    end.
 
 types(Events) -> [beamai_agui_event:type_of(E) || E <- Events].
 
@@ -171,6 +213,101 @@ failure_closes_lane() ->
         ?assertEqual(1, length(pick(<<"SUBAGENT_STARTED">>, Events))),
         Closed = pick(<<"SUBAGENT_FINISHED">>, Events) ++ pick(<<"SUBAGENT_ERROR">>, Events),
         ?assertEqual(1, length(Closed))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%%====================================================================
+%% 异步委派（management_tools）
+%%====================================================================
+
+%% @private 父 agent：首轮 spawn_subagent，次轮给答案；子 agent 由 `chat` 应答
+mock_async_llm(SubChat) ->
+    CC = counters:new(1, []),
+    meck:new(beamai_chat_model, [passthrough]),
+    meck:expect(beamai_chat_model, stream_chat,
+                fun(_C, _Msgs, _R, _O) ->
+                    counters:add(CC, 1, 1),
+                    case counters:get(CC, 1) of
+                        1 ->
+                            {ok, beamai_chat_response:new(
+                                 #{content => null,
+                                   tool_calls => [tc(<<"d1">>, <<"spawn_subagent">>,
+                                                     <<"{\"task\":\"dig\"}">>)],
+                                   finish_reason => <<"tool_calls">>})};
+                        _ ->
+                            {ok, beamai_chat_response:new(
+                                 #{content => <<"done">>, finish_reason => <<"stop">>})}
+                    end
+                end),
+    meck:expect(beamai_chat_model, chat, SubChat),
+    ok.
+
+answer(Content) ->
+    fun(_C, _Msgs, _O) ->
+        {ok, beamai_chat_response:new(
+               #{content => Content, finish_reason => <<"stop">>})}
+    end.
+
+%% 子 agent 是异步的：**工具进程已经死了它才跑完** —— lane 的状态表得靠 ETS
+%% heir 活下来，收尾事件由 manager 的通知带回来（因此带得上结果原文）
+async_lane_events() ->
+    application:set_env(beamai_agui, subagent_events, true),
+    ok = mock_async_llm(answer(<<"sub-answer">>)),
+    try
+        Events = run_with(async_factory()),
+        [Started] = pick(<<"SUBAGENT_STARTED">>, Events),
+        LaneId = maps:get(<<"subagentRunId">>, Started),
+        ?assertEqual(<<"dig">>, maps:get(<<"description">>, Started)),
+
+        Later = await_close(),
+        All = Events ++ Later,
+        [Finished] = pick(<<"SUBAGENT_FINISHED">>, All),
+        ?assertEqual(LaneId, maps:get(<<"subagentRunId">>, Finished)),
+        ?assertEqual(#{<<"type">> => <<"success">>}, maps:get(<<"outcome">>, Finished)),
+        %% 结果原文跟同步 lane 同义：走的是 manager 那条通知
+        ?assertEqual(<<"sub-answer">>, maps:get(<<"result">>, Finished)),
+
+        %% lane 里子 agent 自己的事件照样全带 subagentRunId
+        ?assert(lists:member(<<"TEXT_MESSAGE_CONTENT">>,
+                             [beamai_agui_event:type_of(E)
+                              || E <- All, lane_of(E) =:= LaneId])),
+
+        %% 收口后台账与状态表都清掉，不留悬着的 lane
+        ?assertEqual(#{}, beamai_agui_subagent_lanes:lanes())
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+%% 被 kill 的子 agent 也要收口：manager 把它记成 killed 并通知等待者，
+%% lane 因此出 SUBAGENT_ERROR（而不是永远转圈）
+async_killed_closes_lane() ->
+    application:set_env(beamai_agui, subagent_events, true),
+    %% 子 agent 的 LLM 永远不返回 —— 只能靠 kill 收场
+    Stalled = fun(_C, _Msgs, _O) ->
+                  timer:sleep(30000),
+                  {ok, beamai_chat_response:new(
+                         #{content => <<"late">>, finish_reason => <<"stop">>})}
+          end,
+    ok = mock_async_llm(Stalled),
+    try
+        Events = run_with(async_factory()),
+        [Started] = pick(<<"SUBAGENT_STARTED">>, Events),
+        LaneId = maps:get(<<"subagentRunId">>, Started),
+        Running = [maps:get(id, E) || E <- beamai_subagent_manager:list(),
+                                    maps:get(status, E) =:= running],
+        ?assertMatch([_ | _], Running),
+        lists:foreach(fun(Id) -> ok = beamai_subagent_manager:kill(Id) end, Running),
+
+        Later = await_close(),
+        All = Events ++ Later,
+        [Error] = pick(<<"SUBAGENT_ERROR">>, All),
+        ?assertEqual(LaneId, maps:get(<<"subagentRunId">>, Error)),
+        ?assertEqual(<<"subagent_failed">>, maps:get(<<"code">>, Error)),
+        ?assertNotEqual(nomatch,
+                        binary:match(maps:get(<<"message">>, Error),
+                                     <<"sub_agent_killed">>)),
+        ?assertEqual(#{}, beamai_agui_subagent_lanes:lanes())
     after
         meck:unload(beamai_chat_model)
     end.

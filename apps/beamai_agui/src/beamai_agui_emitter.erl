@@ -82,6 +82,10 @@
     %% 表在**发起委派的那个工具进程**里建，回调却在 subagent manager 的 worker
     %% 进程里触发，跨进程读不到 private 表
     access => private | public,
+    %% 属主进程死掉时把表交给谁（ETS heir）。异步委派的 lane 用它：子 agent 在
+    %% 工具进程死后还在跑，表得跟着活下来（见 beamai_agui_subagent 模块头
+    %% 「异步 lane」）。缺省没有 heir —— 属主一死表就回收。
+    heir => pid(),
     raw_translator => fun((map(), emitter()) -> ok),
     %% 事件流插件的通用挂点，见 emit/2
     event_transform => fun((beamai_agui_event:event()) ->
@@ -96,7 +100,8 @@
 %% @doc 新建 emitter（表属主 = 调用进程，即跑 agent 的那个进程）
 -spec new(opts()) -> emitter().
 new(#{thread_id := ThreadId, run_id := RunId, sink := Sink} = Opts) ->
-    Tab = ets:new(beamai_agui_emitter, [set, maps:get(access, Opts, private)]),
+    Tab = ets:new(beamai_agui_emitter,
+                  [set, maps:get(access, Opts, private)] ++ heir_opt(Opts)),
     true = ets:insert(Tab, {config, #{thread_id => ThreadId,
                                       run_id => RunId,
                                       sink => Sink,
@@ -491,6 +496,12 @@ tool_calls_of(_) -> [].
 
 step_name(N) ->
     <<"step-", (integer_to_binary(N))/binary>>.
+
+%% @private 异步委派的 lane 要在工具进程死后继续活着（表转给 heir）
+heir_opt(#{heir := Pid}) when is_pid(Pid) ->
+    [{heir, Pid, #{lane => true}}];
+heir_opt(_Opts) ->
+    [].
 
 to_binary(B) when is_binary(B) -> B;
 to_binary(T) -> iolist_to_binary(io_lib:format("~p", [T])).

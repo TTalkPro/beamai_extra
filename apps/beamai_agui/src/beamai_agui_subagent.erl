@@ -43,9 +43,22 @@
 %%% transform 是有状态的（状态在**父 run 进程**的进程字典里），换个进程跑它本来
 %%% 就不成立。要让插件也认 lane 的事件，得给 lane 单独装一个 —— 那是宿主的决定。
 %%%
-%%% **`management_tools` 那条异步路不支持**：`spawn_subagent` 立刻返回、子 agent
-%%% 在工具进程死后还在跑，那时 lane 的状态表已经随属主进程回收了。异步委派要画
-%%% lane 得让 manager 透出观察钩子，那是上游的改动。
+%%% == 异步委派（`management_tools`）==
+%%%
+%%% `spawn_subagent` 立刻返回、子 agent 在工具进程死后还在跑 —— lane 那本记在
+%%% 进程字典里的账和那张状态表都随工具进程没了。所以异步路走另一套：
+%%%
+%%% ```
+%%% management_tools(Config, Observer)
+%%%   └── 包住 spawn_subagent 的 handler：lane 交给 beamai_agui_subagent_lanes
+%%%       台账（ETS heir + manager 通知 + 超时兜底），子 agent 的收尾事件由
+%%%       台账发，不再由这次工具调用发
+%%% ```
+%%%
+%%% 仍然**没改上游**：lane 的注入点还是那个返回 agent 配置的 `subagent` fn，
+%%% 收尾靠 `beamai_subagent_manager:await/2` 的通知（结果原文也顺带回来）。
+%%% 代价是 spawn 工具的结果得认出子 agent 的 id —— 上游那是给 LLM 看的 JSON，
+%%% 认不出来就退回回调兜底（收尾事件不带 `result`）与超时兜底。
 %%%
 %%% == 缺省关 ==
 %%%
@@ -67,7 +80,7 @@
 -module(beamai_agui_subagent).
 
 -export([enabled/0, observer/1]).
--export([delegate_tool/2, fanout_tool/2]).
+-export([delegate_tool/2, fanout_tool/2, management_tools/2]).
 
 %% 一次工具调用期间开出来的 lane（进程字典，见模块头）
 -define(LANES, {?MODULE, lanes}).
@@ -115,31 +128,110 @@ fanout_tool(Config, undefined) ->
 fanout_tool(Config, Observer) ->
     wrap(beamai_agent_delegate:fanout_tool(with_observer(Config, Observer)), Observer).
 
+%% @doc 包一组异步管理工具（`beamai_agent_delegate:management_tools/1`）
+%%
+%% 只有 `spawn_subagent` 那条会开 lane —— 它起的子 agent 活得比这次工具调用久，
+%% lane 的记账因此搬到 `beamai_agui_subagent_lanes`（ETS heir + manager 通知 +
+%% 超时兜底），收尾事件不再由这个 handler 发。
+-spec management_tools(beamai_agent_delegate:config(), observer()) -> [map()].
+management_tools(Config, undefined) ->
+    beamai_agent_delegate:management_tools(Config);
+management_tools(Config, Observer) ->
+    Tools = beamai_agent_delegate:management_tools(
+              with_observer(Config, Observer, async)),
+    [wrap_spawn(T) || T <- Tools].
+
 %% @private 只包 `subagent` fn（不包 handler）
 %%
 %% 给自己拼委派工具的宿主用：lane 开了、事件也发，只是没有 `SUBAGENT_FINISHED`
 %% （那要知道工具什么时候跑完，得由包住 handler 的那一层给）。
 -spec with_observer(beamai_agent_delegate:config(), observer()) ->
     beamai_agent_delegate:config().
-with_observer(Config, undefined) ->
-    Config;
 with_observer(Config, Observer) ->
+    with_observer(Config, Observer, sync).
+
+with_observer(Config, undefined, _Mode) ->
+    Config;
+with_observer(Config, Observer, Mode) ->
     Inner = maps:get(subagent, Config),
     Config#{subagent => fun(Args, Ctx) ->
         SubConfig = Inner(Args, Ctx),
         LaneId = beamai_id:gen_id(<<"subagent">>),
-        Lane = lane_emitter(Observer, LaneId),
+        Lane = open_lane(Observer, LaneId, Mode),
         ok = emit(Observer, beamai_agui_event:subagent_started(
                               #{subagent_run_id => LaneId,
                                 name => maps:get(name, Config, <<"subagent">>),
                                 task => task_of(Args)})),
         remember(LaneId, Lane),
-        SubConfig#{callbacks => beamai_agui_emitter:callbacks(Lane)}
+        SubConfig#{callbacks => lane_callbacks(Lane, LaneId, Mode)}
     end}.
 
 %%====================================================================
 %% 内部 - 包 handler
 %%====================================================================
+
+%% @private 异步路的 handler：**返回时不收口**（子 agent 还在跑）
+%%
+%% 起跑成功就把 lane 接到台账上（`adopt/1`），起跑失败就地按错误收口 ——
+%% 两种情况都不能让 lane 悬着，前端那张卡片会永远转圈。
+wrap_spawn(#{name := <<"spawn_subagent">>} = Tool) ->
+    Inner = maps:get(handler, Tool),
+    Tool#{handler => fun(Args, Ctx) ->
+        put(?LANES, []),
+        try
+            Result = call(Inner, Args, Ctx),
+            ok = adopt(Result),
+            Result
+        catch
+            Class:Reason:Stack ->
+                ok = settle_lanes({error, Reason}),
+                erlang:raise(Class, Reason, Stack)
+        after
+            _ = erase(?LANES)
+        end
+    end};
+wrap_spawn(Tool) ->
+    Tool.
+
+%% @private 工具结果里认出子 agent 的 id，把 lane 接到台账的等待上
+adopt(Result) ->
+    lists:foreach(fun({LaneId, _Lane}) ->
+        _ = beamai_agui_subagent_lanes:watch(LaneId, subagent_id(Result)),
+        ok
+    end, lists:reverse(lanes())),
+    ok.
+
+%% @private spawn 的结果是给 LLM 看的 JSON（`{"id":"sub_…","status":"running"}`）
+%%
+%% 上游没给观察钩子，id 只能从这里认 —— 它同时也是 LLM 之后 `kill_subagent` /
+%% `subagent_result` 要用的那个 id，认出来 lane 才收得干净。认不出（上游改了
+%% 编码）就交回 undefined：台账退回回调兜底与超时兜底，功能少一半但不出错。
+subagent_id({ok, Bin}) when is_binary(Bin) -> json_id(Bin);
+subagent_id(_) -> undefined.
+
+json_id(Bin) ->
+    case binary:match(Bin, <<"\"id\":">>) of
+        {Pos, Len} ->
+            id_value(Bin, Pos + Len);
+        nomatch ->
+            undefined
+    end.
+
+%% 值是带引号的字符串：跳过开引号，到下一个引号为止
+id_value(Bin, From) ->
+    case binary:match(Bin, <<"\"">>, [{scope, {From, byte_size(Bin) - From}}]) of
+        {Open, 1} ->
+            Start = Open + 1,
+            case binary:match(Bin, <<"\"">>,
+                              [{scope, {Start, byte_size(Bin) - Start}}]) of
+                {Close, 1} ->
+                    binary:part(Bin, Start, Close - Start);
+                nomatch ->
+                    undefined
+            end;
+        nomatch ->
+            undefined
+    end.
 
 %% @private 在工具 handler 前后收口：跑完把这次调用开出来的 lane 一条条结掉
 %%
@@ -187,9 +279,53 @@ settle_event(LaneId, {ok, Content}, 1) when is_binary(Content) ->
 settle_event(LaneId, _Result, _N) ->
     beamai_agui_event:subagent_finished(#{subagent_run_id => LaneId}).
 
+%% @private 异步路就地收口（这次工具调用就失败了），逐条交给台账
+settle_lanes(Outcome) ->
+    Lanes = lists:reverse(lanes()),
+    put(?LANES, []),
+    lists:foreach(fun({LaneId, _Lane}) ->
+        beamai_agui_subagent_lanes:settle(LaneId, Outcome)
+    end, Lanes),
+    ok.
+
+%%====================================================================
+%% 内部 - 异步路的回调
+%%====================================================================
+
+%% @private 兜底收口（见 lane_callbacks/3）：晚一拍，让 manager 的通知先到
+settle_soft(LaneId, Outcome) ->
+    beamai_agui_subagent_lanes:settle_soft(LaneId, Outcome),
+    ok.
+
 %%====================================================================
 %% 内部 - lane 发射器
 %%====================================================================
+
+%% @private 开一条 lane
+%%
+%% 同步路的表属主就是本进程（工具进程），handler 收口时删掉；**异步路多一个
+%% `heir`** —— 工具进程死后表转给台账，子 agent 接着跑时回调仍读得到状态。
+open_lane(Observer, LaneId, sync) ->
+    lane_emitter(Observer, LaneId, #{});
+open_lane(Observer, LaneId, async) ->
+    Lane = lane_emitter(Observer, LaneId,
+                         #{heir => beamai_agui_subagent_lanes:heir()}),
+    ok = beamai_agui_subagent_lanes:track(LaneId, Lane),
+    Lane.
+
+%% @private lane 装出来的回调
+%%
+%% 异步路多挂两个**收口**回调（`on_turn_end` / `on_turn_error`，都在 worker
+%% 进程里触发）：台账等的那条通知万一没来（manager 没起、id 没认出来、条目被
+%% drop 掉了不通知等待者），靠它们兜住。回调只知道「跑完了」，所以这条路上收尾
+%% 事件不带 `result` —— 结果原文靠 manager 的通知带回来。
+lane_callbacks(Lane, _LaneId, sync) ->
+    beamai_agui_emitter:callbacks(Lane);
+lane_callbacks(Lane, LaneId, async) ->
+    maps:merge(beamai_agui_emitter:callbacks(Lane),
+               #{on_turn_end => fun(_Meta) -> settle_soft(LaneId, {ok, undefined}) end,
+                 on_turn_error =>
+                     fun(Reason, _Meta) -> settle_soft(LaneId, {error, Reason}) end}).
 
 %% @private 一条 lane 一个发射器
 %%
@@ -199,14 +335,18 @@ settle_event(LaneId, _Result, _N) ->
 %% `tag` 让这条 lane 的**每一条**事件都带 `subagentRunId` —— 给既有事件多一个字段
 %% 是安全的（AG-UI 的事件 schema 是 passthrough，老客户端原样忽略），这也是为什么
 %% 只有 `SUBAGENT_*` 三个新类型需要开关，字段不需要。
-lane_emitter(#{thread_id := ThreadId, run_id := RunId, sink := Sink}, LaneId) ->
+%%
+%% 回调在 manager 的 worker 进程里触发，表在这儿建（见模块头），
+%% 所以 `access => public`。
+lane_emitter(#{thread_id := ThreadId, run_id := RunId, sink := Sink}, LaneId,
+             Extra) ->
     beamai_agui_emitter:new(
-      #{thread_id => ThreadId,
-        run_id => RunId,
-        sink => Sink,
-        tag => #{<<"subagentRunId">> => LaneId},
-        %% 回调在 manager 的 worker 进程里触发，表在这儿建（见模块头）
-        access => public}).
+      maps:merge(
+        #{thread_id => ThreadId,
+          run_id => RunId,
+          sink => Sink,
+          tag => #{<<"subagentRunId">> => LaneId},
+          access => public}, Extra)).
 
 %% @private lane 级的事件直接走 sink —— 父 emitter 的状态表在别的进程里
 emit(#{sink := Sink}, Event) ->

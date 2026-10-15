@@ -624,9 +624,36 @@ union 校验每一条事件，一条 `SUBAGENT_STARTED` 掐断整条流，客户
 之下给既有事件多一个 `subagentRunId` 字段是安全的（事件 schema 是 passthrough），
 所以只有三个新类型需要开关，字段不需要。
 
-两条边界：子 agent 走 `beamai_agent:run/2`（非流式），所以 lane 里的文本是**整条**
-发的；`management_tools` 那条异步委派**不支持**（子 agent 在工具进程死后还在跑，
-那时 lane 的状态表已经回收了）。
+一条边界：子 agent 走 `beamai_agent:run/2`（非流式），所以 lane 里的文本是
+**整条**发的。
+
+### 异步委派（`management_tools`）
+
+`spawn_subagent` 立刻返回，子 agent 在**工具进程死后**还在跑 —— lane 那本记在进程
+字典里的账和那张 ETS 状态表都会跟着没。所以异步路换一套记账：
+
+```erlang
+Tools = beamai_agui_subagent:management_tools(Config, Observer).  %% 一组工具
+```
+
+* lane 的状态表建出来时把 **`beamai_agui_subagent_lanes`** 设为 ETS heir，工具进程
+  退出后表转给它，子 agent 的回调照常读写；
+* 收尾等 `beamai_subagent_manager` 的通知（一个小进程 `await(Id, infinity)`）——
+  正常跑完、失败、被 kill 都会回来一条 outcome，顺带把结果原文带回来
+  （`SUBAGENT_FINISHED.result` 与同步 lane 同义）；
+* 兜底两层：子 agent 配置里的 `on_turn_end` / `on_turn_error` 回调（晚 1 秒收口，
+  给通知先到的机会），以及 `{beamai_agui, subagent_lane_timeout, Ms}`（缺省 10
+  分钟，`infinity` 关掉）—— **宁可报一条超时，也不让前端那张卡片永远转圈**。
+
+在飞的 lane 用 `beamai_agui_subagent_lanes:lanes()` 查（`#{LaneId =>
+#{subagent_id => ..., timer => ...}}`）—— 异步委派没有「本次调用开了哪些 lane」
+那本进程内的账，宿主要报「还有几个子 agent 在跑」只能问台账。
+
+仍然没改上游。代价是 spawn 工具的结果得认出子 agent 的 id（上游那是给 LLM 看的
+JSON）；认不出来就退回回调兜底（收尾不带 `result`）与超时兜底。`restart_subagent`
+复用 manager 里存的 spec，那份回调指着已收口的表 —— 重跑的事件**静默丢弃**（回调
+异常由 `beamai_agent_callbacks` 兜住，不会带走 agent）；要让重跑也开新 lane，得让
+上游的 spec 可更新。
 
 ## 全能力走查（离线可跑）
 
@@ -681,17 +708,16 @@ chunk 形状认得出吗、模型看得懂插件的提示词吗、它真会去�
 
 ## 尚未覆盖的
 
-1. **认证与限流**。`beamai_a2a_auth` / `beamai_a2a_rate_limit` 是现成的样板。
-2. **未对真实 CopilotKit 前端验证过**。事件形状是照协议文档写的，还没被真客户端
+1. **未对真实 CopilotKit 前端验证过**。事件形状是照协议文档写的，还没被真客户端
    消费过（真 LLM 已经跑通，见下）。
-3. **单进程**。会话在进程内，多实例部署要 sticky session（同一个 threadId 落到
-   同一个节点），否则重连会连到一个没有那份缓冲的节点上。
-4. **`/threads/:id/messages`**。对话历史归 chat memory，而那层协议没有「列出某个
+2. **多实例只有 owner 路由，没有共享事件存储**。threadId 用 `global` 选一个 owner
+   会话（`{beamai_agui, [{distributed_sessions, true}]}`），但事件缓冲仍是 owner
+   节点的内存 —— owner 崩溃仍会丢易失缓冲，跨实例的 pause store / 聊天历史仍由宿主
+   提供。
+3. **`/threads/:id/messages`**。对话历史归 chat memory，而那层协议没有「列出某个
    会话的消息」的入口 —— 造一个就等于建第二个真相店。会话里那份消息账本只是
    **这条流自己的投影**（用来补缺口），不当历史用。
-5. **异步委派的 lane**（`management_tools`）。要让 `beamai_subagent_manager` 透出
-   观察钩子，那是上游的改动。
-6. **插件的中间态**。三个 activity 插件都在参数到齐时一次翻译，没有「边生成边
+4. **插件的中间态**。三个 activity 插件都在参数到齐时一次翻译，没有「边生成边
    长出来」。
 
 ## 实机验证
