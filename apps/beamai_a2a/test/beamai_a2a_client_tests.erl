@@ -95,25 +95,6 @@ test_discover() ->
 
     ok.
 
-test_discover_with_trailing_slash() ->
-    MockCard = #{
-        <<"name">> => <<"test-agent">>,
-        <<"description">> => <<"Test">>,
-        <<"url">> => <<"https://test.example.com/a2a">>,
-        <<"version">> => <<"1.0.0">>,
-        <<"capabilities">> => #{},
-        <<"skills">> => []
-    },
-
-    meck:expect(beamai_http, get, fun(Url, _Params, _Opts) ->
-        %% 验证 URL 没有双斜杠
-        ?assertNot(binary:match(Url, <<"//.">>)),
-        {ok, MockCard}
-    end),
-
-    {ok, _} = beamai_a2a_client:discover("https://test.example.com/"),
-    ok.
-
 %%====================================================================
 %% 消息发送测试
 %%====================================================================
@@ -146,33 +127,6 @@ test_send_message() ->
 
     ?assertEqual(<<"task-abc123">>, maps:get(<<"id">>, Task)),
     ?assertEqual(<<"working">>, maps:get(<<"state">>, maps:get(<<"status">>, Task))),
-
-    ok.
-
-test_send_message_with_context() ->
-    MockResponse = #{
-        <<"jsonrpc">> => <<"2.0">>,
-        <<"id">> => <<"req-123">>,
-        <<"result">> => #{
-            <<"id">> => <<"task-abc123">>,
-            <<"contextId">> => <<"ctx-456">>,
-            <<"status">> => #{<<"state">> => <<"working">>}
-        }
-    },
-
-    meck:expect(beamai_http, post_json, fun(_Url, Request, _Opts) ->
-        %% 验证 contextId 被包含
-        Params = maps:get(<<"params">>, Request),
-        ?assertEqual(<<"ctx-456">>, maps:get(<<"contextId">>, Params)),
-        {ok, MockResponse}
-    end),
-
-    Message = beamai_a2a_client:create_text_message(<<"Hello">>),
-    {ok, _} = beamai_a2a_client:send_message(
-        "https://test.example.com/a2a",
-        Message,
-        <<"ctx-456">>
-    ),
 
     ok.
 

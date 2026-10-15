@@ -43,7 +43,7 @@ send(Message, #{queue := Q} = State) ->
     end.
 
 recv(_Timeout, #{queue := [H | T]} = State) -> {ok, H, State#{queue => T}};
-recv(_Timeout, #{queue := []} = State) -> {error, timeout}.
+recv(_Timeout, #{queue := []} = _State) -> {error, timeout}.
 
 close(_) -> ok.
 is_connected(_) -> true.
