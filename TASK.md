@@ -21,6 +21,10 @@
 - [x] examples 构建验证纳入 CI（`.github/workflows/ci.yml` + `scripts/check_examples.sh`）。
 - [x] 文档化 `branch => main + rebar.lock` 的依赖升级策略
   （docs/DEPENDENCIES.md + `scripts/check_dependency_lock.escript`）。
+- [x] Phase E1 公共 API 审计清单已建立：362 条 unused export 分类为
+  public_api 215 / test_only 95 / internal_only 40 / no_evidence 9 /
+  otp_callback 3，结论见 [designs/api_audit.md](designs/api_audit.md)。
+  E2（逐 app 去 export 与删除）待逐 app 独立提交。
 
 ### 门禁基线
 

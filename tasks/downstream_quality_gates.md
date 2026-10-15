@@ -169,11 +169,17 @@
 
 ### E1. 建立初始清单
 
-- [ ] 使用 xref 输出生成按 app 分组的 unused-export 清单。
-- [ ] 标记 docs / README / examples 引用为 Public API。
-- [ ] 标记 supervisor、gen_server、cowboy handler、behaviour 回调为 OTP surface。
-- [ ] 标记仅测试使用的导出为 internal/test candidate。
-- [ ] 标记完全无证据使用者为 deletion candidate。
+- [x] 使用 xref 输出生成按 app 分组的 unused-export 清单
+  （`scripts/xref_unused_exports.escript` → `designs/api_audit_inventory.md`）。
+- [x] 标记 docs / README / examples 引用为 Public API（215 条）。
+- [x] 标记 supervisor、gen_server、cowboy handler、behaviour 回调为 OTP surface
+  （3 条 `gen_statem` 状态函数，含 `-callback` 与 stdlib/kernel 声明的比对）。
+- [x] 标记仅测试使用的导出为 internal/test candidate（95 条）。
+- [x] 标记完全无证据使用者为 deletion candidate（9 条，已逐条复核外部引用为 0）。
+
+结论见 [designs/api_audit.md](../designs/api_audit.md)：额外分出 `internal_only`
+（本模块内部调用、无外部调用者，40 条）一类——xref 的 `exports_not_used` 不把
+本模块调用算作使用，这类应当去 export 而非删除。
 
 ### E2. 分 app 清理
 
