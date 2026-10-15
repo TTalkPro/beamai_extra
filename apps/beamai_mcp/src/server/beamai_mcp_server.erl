@@ -77,6 +77,7 @@
 %% 类型定义
 %%====================================================================
 
+
 -record(state, {
     %% 服务器配置
     server_info :: map(),
@@ -421,34 +422,13 @@ handle_tools_call(#{<<"name">> := Name} = Params, #state{tools = Tools} = State)
              #{<<"tool">> => Name}, State};
         #mcp_tool{handler = Handler} ->
             Arguments = maps:get(<<"arguments">>, Params, #{}),
-            %% of 分支**不在** try 的保护区内：历史写法 `try Handler(A) of
-            %% {ok,_} -> ...; {error,_} -> ... catch' 在 handler 返回第三种形状
-            %% 时抛出 try_clause——catch 接不住，整个 server 进程崩掉，还带走
-            %% linked 的 Cowboy 进程。所以 of 里用必然匹配的裸变量，形状判断
-            %% 放进 case 并给足兜底。
-            try Handler(Arguments) of
+            %% call_tool_handler/2 把精确契约还原成 term()：handler 的公开类型
+            %% 保持 `{ok,_} | {error,_}`，但运行时值来自宿主。用动态 dispatch
+            %% 阻断 Dialyzer 对返回形状的内联推断，让 unknown-shape 防御分支
+            %% 可达，而不是放宽公共 handler 类型。
+            try call_tool_handler(Handler, Arguments) of
                 Returned ->
-                    case Returned of
-                        {ok, Result} ->
-                            ResultContent = format_tool_result(Result),
-                            {ok, #{<<"content">> => ResultContent,
-                                   <<"isError">> => false}, State};
-                        {error, Error} ->
-                            %% 二进制错误按原文透出（handler 已经写好了给模型看的
-                            %% 句子），其余形状用 ~p——否则 <<"...">> 会一起进文本
-                            ErrorContent = [beamai_mcp_types:text_content(
-                                format_error_text(Error)
-                            )],
-                            {ok, #{<<"content">> => ErrorContent,
-                                   <<"isError">> => true}, State};
-                        Other ->
-                            OtherContent = [beamai_mcp_types:text_content(
-                                iolist_to_binary(io_lib:format(
-                                    "Tool returned unexpected shape: ~p", [Other]))
-                            )],
-                            {ok, #{<<"content">> => OtherContent,
-                                   <<"isError">> => true}, State}
-                    end
+                    tool_call_response(Returned, State)
             catch
                 _:Exception:_Stack ->
                     ExceptionContent = [beamai_mcp_types:text_content(
@@ -459,6 +439,33 @@ handle_tools_call(#{<<"name">> := Name} = Params, #state{tools = Tools} = State)
     end;
 handle_tools_call(_Params, State) ->
     {error, ?MCP_ERROR_INVALID_PARAMS, <<"Missing tool name">>, State}.
+
+%% @private
+-spec call_tool_handler(fun((map()) -> term()), map()) -> term().
+call_tool_handler(Handler, Arguments) ->
+    Handler(Arguments).
+
+%% tool handler 的静态契约是精确的，但运行时值属于宿主边界。Dialyzer 能证明
+%% Other 在该契约下不可达；为了不放宽公共类型，这里只对运行时信任边界函数
+%% 关闭 unreachable-type 告警，防御分支仍由回归测试锁住。
+-dialyzer({nowarn_function, tool_call_response/2}).
+tool_call_response({ok, Result}, State) ->
+    ResultContent = format_tool_result(Result),
+    {ok, #{<<"content">> => ResultContent,
+           <<"isError">> => false}, State};
+tool_call_response({error, Error}, State) ->
+    %% 二进制错误按原文透出（handler 已经写好了给模型看的句子），
+    %% 其余形状用 ~p——否则 <<"...">> 会一起进文本。
+    ErrorContent = [beamai_mcp_types:text_content(format_error_text(Error))],
+    {ok, #{<<"content">> => ErrorContent,
+           <<"isError">> => true}, State};
+tool_call_response(Other, State) ->
+    OtherContent = [beamai_mcp_types:text_content(
+        iolist_to_binary(io_lib:format(
+            "Tool returned unexpected shape: ~p", [Other]))
+    )],
+    {ok, #{<<"content">> => OtherContent,
+           <<"isError">> => true}, State}.
 
 %%====================================================================
 %% 内部函数 - 资源方法

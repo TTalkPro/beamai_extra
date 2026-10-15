@@ -20,6 +20,8 @@ beamai_mcp_server_test_() ->
       fun test_tools_list/1,
       fun test_tools_call/1,
       fun test_tools_call_error/1,
+      fun test_tools_call_ok_and_error_shapes/1,
+      fun test_tools_call_unknown_shape/1,
       fun test_resources_list/1,
       fun test_resources_read/1,
       fun test_prompts_list/1,
@@ -60,6 +62,22 @@ setup() ->
         handler = fun(_) -> error(intentional_crash) end
     },
 
+    OkErrorTool = #mcp_tool{
+        name = <<"shape">>,
+        description = <<"Return contract shapes">>,
+        input_schema = #{},
+        handler = fun(#{<<"shape">> := <<"ok">>}) -> {ok, <<"valid result">>};
+                     (#{<<"shape">> := <<"error">>}) -> {error, <<"valid error">>}
+                  end
+    },
+
+    WeirdTool = #mcp_tool{
+        name = <<"weird">>,
+        description = <<"Return an unknown shape">>,
+        input_schema = #{},
+        handler = fun(_) -> {weird, self()} end
+    },
+
     %% 创建测试资源
     TestResource = #mcp_resource{
         uri = <<"file:///test.txt">>,
@@ -91,7 +109,7 @@ setup() ->
 
     %% 启动服务器
     Config = #{
-        tools => [EchoTool, AddTool, FailTool],
+        tools => [EchoTool, AddTool, FailTool, OkErrorTool, WeirdTool],
         resources => [TestResource, JsonResource],
         prompts => [GreetPrompt],
         server_info => #{<<"name">> => <<"test-server">>, <<"version">> => <<"1.0.0">>}
@@ -174,13 +192,15 @@ test_tools_list(Pid) ->
 
         Result = maps:get(<<"result">>, Decoded),
         Tools = maps:get(<<"tools">>, Result),
-        ?assertEqual(3, length(Tools)),
+        ?assertEqual(5, length(Tools)),
 
         %% 验证工具名称
         ToolNames = [maps:get(<<"name">>, T) || T <- Tools],
         ?assert(lists:member(<<"echo">>, ToolNames)),
         ?assert(lists:member(<<"add">>, ToolNames)),
-        ?assert(lists:member(<<"fail">>, ToolNames))
+        ?assert(lists:member(<<"fail">>, ToolNames)),
+        ?assert(lists:member(<<"shape">>, ToolNames)),
+        ?assert(lists:member(<<"weird">>, ToolNames))
     end}.
 
 test_tools_call(Pid) ->
@@ -261,6 +281,60 @@ test_tools_call_error(Pid) ->
 
         FailResult = maps:get(<<"result">>, FailDecoded),
         ?assertEqual(true, maps:get(<<"isError">>, FailResult))
+    end}.
+
+test_tools_call_ok_and_error_shapes(Pid) ->
+    {"工具 handler 契约返回形状测试", fun() ->
+        initialize_server(Pid),
+
+        Rpc = fun(Id, Shape) ->
+            Request = #{
+                <<"jsonrpc">> => <<"2.0">>,
+                <<"id">> => Id,
+                <<"method">> => <<"tools/call">>,
+                <<"params">> => #{
+                    <<"name">> => <<"shape">>,
+                    <<"arguments">> => #{<<"shape">> => Shape}
+                }
+            },
+            {ok, Response} = beamai_mcp_server:handle_request(Pid, Request),
+            {ok, Decoded} = beamai_mcp_jsonrpc:decode(Response),
+            maps:get(<<"result">>, Decoded)
+        end,
+
+        OkResult = Rpc(11, <<"ok">>),
+        ?assertEqual(false, maps:get(<<"isError">>, OkResult)),
+        [OkContent] = maps:get(<<"content">>, OkResult),
+        ?assertEqual(<<"valid result">>, maps:get(<<"text">>, OkContent)),
+
+        ErrorResult = Rpc(12, <<"error">>),
+        ?assertEqual(true, maps:get(<<"isError">>, ErrorResult)),
+        [ErrorContent] = maps:get(<<"content">>, ErrorResult),
+        ?assertEqual(<<"valid error">>, maps:get(<<"text">>, ErrorContent))
+    end}.
+
+test_tools_call_unknown_shape(Pid) ->
+    {"未知 handler 返回形状不崩溃", fun() ->
+        initialize_server(Pid),
+
+        Request = #{
+            <<"jsonrpc">> => <<"2.0">>,
+            <<"id">> => 13,
+            <<"method">> => <<"tools/call">>,
+            <<"params">> => #{
+                <<"name">> => <<"weird">>,
+                <<"arguments">> => #{}
+            }
+        },
+
+        {ok, Response} = beamai_mcp_server:handle_request(Pid, Request),
+        {ok, Decoded} = beamai_mcp_jsonrpc:decode(Response),
+        Result = maps:get(<<"result">>, Decoded),
+        ?assertEqual(true, maps:get(<<"isError">>, Result)),
+        [Content] = maps:get(<<"content">>, Result),
+        ?assertMatch(#{<<"text">> := <<"Tool returned unexpected shape:", _/binary>>},
+                     Content),
+        ?assert(is_process_alive(Pid))
     end}.
 
 %%====================================================================
@@ -416,7 +490,7 @@ test_register_unregister(Pid) ->
         {ok, ListResponse} = beamai_mcp_server:handle_request(Pid, ListRequest),
         {ok, ListDecoded} = beamai_mcp_jsonrpc:decode(ListResponse),
         Tools1 = maps:get(<<"tools">>, maps:get(<<"result">>, ListDecoded)),
-        ?assertEqual(4, length(Tools1)),
+        ?assertEqual(6, length(Tools1)),
 
         %% 注销工具
         ok = beamai_mcp_server:unregister_tool(Pid, <<"new_tool">>),
@@ -424,7 +498,7 @@ test_register_unregister(Pid) ->
         {ok, ListResponse2} = beamai_mcp_server:handle_request(Pid, ListRequest),
         {ok, ListDecoded2} = beamai_mcp_jsonrpc:decode(ListResponse2),
         Tools2 = maps:get(<<"tools">>, maps:get(<<"result">>, ListDecoded2)),
-        ?assertEqual(3, length(Tools2))
+        ?assertEqual(5, length(Tools2))
     end}.
 
 %%====================================================================
