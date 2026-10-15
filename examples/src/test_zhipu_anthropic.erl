@@ -270,7 +270,3 @@ ensure_apps() ->
     application:ensure_all_started(gun),
     application:ensure_all_started(beamai_core).
 
-truncate(Bin, MaxLen) when byte_size(Bin) > MaxLen ->
-    <<(binary:part(Bin, 0, MaxLen))/binary, "...">>;
-truncate(Bin, _) ->
-    Bin.
