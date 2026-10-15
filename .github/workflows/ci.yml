@@ -16,6 +16,10 @@ jobs:
           rebar3-version: '3.23'
       - run: escript scripts/check_dependency_lock.escript rebar.lock
       - run: rebar3 compile
+      - name: Check public API rules
+        run: |
+          escript scripts/xref_unused_exports.escript "$RUNNER_TEMP/api_inventory.md"
+          escript scripts/check_api_rules.escript "$RUNNER_TEMP/api_inventory.md"
       - run: rebar3 xref
       - run: rebar3 dialyzer
       - run: rebar3 eunit

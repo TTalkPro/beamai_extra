@@ -577,3 +577,6 @@ Apache-2.0
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request！
+
+公共 API 的新增、测试 helper 放置位置和删除说明见
+[docs/API_GUIDELINES.md](docs/API_GUIDELINES.md)。

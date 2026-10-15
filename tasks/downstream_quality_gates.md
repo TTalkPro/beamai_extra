@@ -206,15 +206,22 @@ helper，删除候选按复核结果删除或补文档/测试。刷新后的清�
 
 ### E3. 长期规则
 
-- [ ] 新增公共导出必须有 `-spec` 与 doc 注释。
-- [ ] 仅为测试暴露的函数不得放在生产 src 的公共 API 中。
-- [ ] API 删除必须在提交说明中列出模块、函数、arity 和兼容性影响。
+- [x] 新增公共导出必须有 `-spec` 与 doc 注释。
+- [x] 仅为测试暴露的函数不得放在生产 src 的公共 API 中。
+  Phase E2 已知的 98 条 test-only API 以
+  `designs/api/test_only_api_baseline.txt` 固化，只允许收缩、不允许新增。
+- [x] API 删除必须在提交说明中列出模块、函数、arity 和兼容性影响。
+  规则与示例见 [docs/API_GUIDELINES.md](../docs/API_GUIDELINES.md)。
+
+自动化：`scripts/check_api_rules.escript` 在 CI 的 `rebar3 compile` 后读取
+unused-export 审计清单，检查公共导出基线、新导出的 `-spec` / `@doc`、以及
+test-only 基线。
 
 验收：
 
-- [ ] 每条 unused export 能归入 Public API、OTP surface、internal candidate
+- [x] 每条 unused export 能归入 Public API、OTP surface、internal candidate
   或 deletion candidate。
-- [ ] 没有无分类依据的直接删除。
+- [x] 没有无分类依据的直接删除。
 
 ## 总验收
 

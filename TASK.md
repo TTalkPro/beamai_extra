@@ -27,6 +27,9 @@
 - [x] Phase E2 公共 API 收缩完成：internal_only 与 no_evidence 清零；
   刷新后剩 328 条（public_api 227 / test_only 98 / otp_callback 3）。
   公共 API 保留并补齐文档/测试，删除项与兼容性影响已写入逐 app 提交。
+- [x] Phase E3 API 治理规则已固化为 CI 门禁：新公共导出必须有 `-spec` / `@doc`，
+  test-only 导出以基线收缩，API 删除提交说明要求见
+  [docs/API_GUIDELINES.md](docs/API_GUIDELINES.md)。
 
 ### 门禁基线
 
