@@ -85,9 +85,7 @@ server_id_of(Tool) when is_map(Tool) ->
                            maps:get(<<"serverId">>, Meta, undefined)]);
         _ ->
             undefined
-    end;
-server_id_of(_) ->
-    undefined.
+    end.
 
 %% @doc 工具表里哪些是**带 UI 的** → `#{工具名 => #{resource_uri, server_id}}`
 %%

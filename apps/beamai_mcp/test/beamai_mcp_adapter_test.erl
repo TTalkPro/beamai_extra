@@ -218,7 +218,8 @@ test_failed_tool_result() ->
     ?assertEqual(<<"Error: file not found">>, Result).
 
 test_non_content_tool_result() ->
-    ?assertEqual(<<"Success">>, beamai_mcp_adapter:extract_content(#{})).
+    %% 没有 content 的 map 保留其 JSON 形状，调用方还能看到服务端额外字段。
+    ?assertEqual(<<"{}">>, beamai_mcp_adapter:extract_content(#{})).
 
 %%====================================================================
 %% 测试：错误格式化
