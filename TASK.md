@@ -1,5 +1,35 @@
 # BeamAI Extra - Task List
 
+## 下游质量门与依赖适配（2026-10-15）
+
+> 目标：修复升级排查中暴露的 examples 加载路径、静态检查噪音、dialyzer 防御分支
+> 与上游 lock 治理问题，让 `beamai_extra` 可以可靠跟随上游 `c440eef`。
+> 设计见 [designs/downstream_quality_gates.md](designs/downstream_quality_gates.md)。
+> 分批执行见 [tasks/downstream_quality_gates.md](tasks/downstream_quality_gates.md)。
+
+### 当前状态
+
+- [x] 上游 API 兼容性排查完成：`beamai_extra` 各应用源码无需破坏性适配。
+- [x] examples `ERL_LIBS` 已适配 `git_subdir` 嵌套 app 布局；当前 examples
+  9 tests / 0 failures。
+- [x] `rebar.lock` 已固定 `beamai_core` / `beamai_llm` / `beamai_agent` 到
+  上游 `c440eef`。
+- [ ] `xref` 调整为框架库显式检查集：362 条 unused export 属于下游公共 API 噪音，
+  不做无分类删除。
+- [ ] 修复 `beamai_mcp_server` tool handler 未知返回形状的 dialyzer 告警，
+  并补充 server 不崩溃的回归测试。
+- [ ] examples 构建验证纳入 CI。
+- [ ] 文档化 `branch => main + rebar.lock` 的依赖升级策略。
+
+### 门禁基线
+
+| 范围 | 当前验证结果 |
+|---|---|
+| 根项目 | `rebar3 eunit`：747 tests / 0 failures |
+| examples | `make -C examples test`：9 tests / 0 failures |
+| xref | 362 条 `exports_not_used` 告警，无未定义调用/导出 |
+| dialyzer | 1 条 `beamai_mcp_server.erl:444` 告警 |
+
 ## AG-UI Runtime（`beamai_agui`）（2026-09-03）
 
 > 目标：把 CopilotKit runtime 的能力做进 BeamAI —— agent 一次执行翻译成前端可增量
