@@ -51,8 +51,7 @@
     prompt_to_map/1,
     prompt_arg_to_map/1,
     server_capabilities_to_map/1,
-    client_capabilities_to_map/1,
-    session_to_map/1
+    client_capabilities_to_map/1
 ]).
 
 %% 构造函数
@@ -406,26 +405,6 @@ client_capabilities_to_map(#mcp_client_capabilities{roots = Roots, sampling = Sa
     Caps1 = add_capability(Caps, <<"roots">>, Roots),
     Caps2 = add_capability(Caps1, <<"sampling">>, Sampling),
     add_capability(Caps2, <<"elicitation">>, Elicitation).
-
-%% @doc 会话记录转为 map
--spec session_to_map(mcp_session()) -> map().
-session_to_map(#mcp_session{id = Id, client_info = ClientInfo,
-                             client_capabilities = ClientCaps,
-                             protocol_version = Version,
-                             created_at = CreatedAt, last_active = LastActive,
-                             subscriptions = Subs}) ->
-    #{
-        <<"id">> => Id,
-        <<"clientInfo">> => ClientInfo,
-        <<"clientCapabilities">> => case ClientCaps of
-            #mcp_client_capabilities{} -> client_capabilities_to_map(ClientCaps);
-            Map when is_map(Map) -> Map
-        end,
-        <<"protocolVersion">> => Version,
-        <<"createdAt">> => CreatedAt,
-        <<"lastActive">> => LastActive,
-        <<"subscriptions">> => Subs
-    }.
 
 %%====================================================================
 %% 内部函数

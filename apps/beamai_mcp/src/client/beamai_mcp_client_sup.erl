@@ -18,7 +18,10 @@
 %%% {ok, Pid} = beamai_mcp_client_sup:start_client(#{
 %%%     transport => sse,
 %%%     url => <<"https://example.com/mcp/sse">>
-%%% }).
+%%% }),
+%%%
+%%% %% 停掉某个客户端（重启或下线用）
+%%% ok = beamai_mcp_client_sup:stop_client(Pid).
 %%% ```
 %%%
 %%% @end

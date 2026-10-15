@@ -25,6 +25,16 @@
 %%%
 %%% %% 列出所有客户端
 %%% AllClients = beamai_mcp_client_registry:list_clients().
+%%%
+%%% %% 启动并注册一步到位
+%%% {ok, Pid} = beamai_mcp_client_registry:start_and_register(
+%%%     <<"filesystem">>, #{transport => stdio, command => <<"npx">>, args => [<<"...">>]}
+%%% ),
+%%%
+%%% %% 内省：某个名字注册了没有、带什么元数据
+%%% true = beamai_mcp_client_registry:is_registered(<<"filesystem">>),
+%%% {ok, Info} = beamai_mcp_client_registry:get_client_info(<<"filesystem">>),
+%%% [Pid] = beamai_mcp_client_registry:list_client_pids().
 %%% ```
 %%%
 %%% @end

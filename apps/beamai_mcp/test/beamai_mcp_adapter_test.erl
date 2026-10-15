@@ -166,7 +166,10 @@ content_extraction_test_() ->
      [
       {"extract text from contents", fun test_extract_text/0},
       {"extract from empty contents", fun test_empty_contents/0},
-      {"extract from mixed contents", fun test_mixed_contents/0}
+      {"extract from mixed contents", fun test_mixed_contents/0},
+      {"extract successful tool result", fun test_successful_tool_result/0},
+      {"extract failed tool result", fun test_failed_tool_result/0},
+      {"extract non-content tool result", fun test_non_content_tool_result/0}
      ]}.
 
 test_extract_text() ->
@@ -197,6 +200,25 @@ test_mixed_contents() ->
     ?assertEqual(<<"Text content">>, Result),
 
     ok.
+
+test_successful_tool_result() ->
+    Result = beamai_mcp_adapter:extract_content(#{
+        <<"isError">> => false,
+        <<"content">> => [#{<<"type">> => <<"text">>, <<"text">> => <<"Done">>}]
+    }),
+    ?assertEqual(<<"Done">>, Result).
+
+%% isError 在 MCP 结果里必须优先于 content 判断，否则工具失败会被模型
+%% 当成正常输出。
+test_failed_tool_result() ->
+    Result = beamai_mcp_adapter:extract_content(#{
+        <<"isError">> => true,
+        <<"content">> => [#{<<"type">> => <<"text">>, <<"text">> => <<"file not found">>}]
+    }),
+    ?assertEqual(<<"Error: file not found">>, Result).
+
+test_non_content_tool_result() ->
+    ?assertEqual(<<"Success">>, beamai_mcp_adapter:extract_content(#{})).
 
 %%====================================================================
 %% 测试：错误格式化
