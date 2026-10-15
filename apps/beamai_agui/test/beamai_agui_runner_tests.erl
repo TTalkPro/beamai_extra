@@ -245,6 +245,43 @@ no_context_leaves_prompt_alone_test() ->
         meck:unload(beamai_chat_model)
     end.
 
+state_input_is_not_injected_by_default_test() ->
+    Ref = make_ref(),
+    ok = capture_llm(Ref),
+    try
+        {ok, Input} = beamai_agui_types:parse_run_input(
+                        #{<<"threadId">> => <<"t-state-prompt">>,
+                          <<"state">> => #{<<"todoCount">> => 3},
+                          <<"messages">> => [#{<<"role">> => <<"user">>,
+                                               <<"content">> => <<"go">>}]}),
+        ok = beamai_agui_runner:run(Input, simple_factory(<<"You are Bob.">>),
+                                    fun(_) -> ok end),
+        Messages = receive {Ref, M} -> M after 2000 -> [] end,
+        ?assertEqual(<<"You are Bob.">>, system_text(Messages))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
+state_input_is_injected_when_enabled_test() ->
+    Ref = make_ref(),
+    ok = capture_llm(Ref),
+    try
+        {ok, Input} = beamai_agui_types:parse_run_input(
+                        #{<<"threadId">> => <<"t-state-prompt-on">>,
+                          <<"state">> => #{<<"todoCount">> => 3},
+                          <<"messages">> => [#{<<"role">> => <<"user">>,
+                                               <<"content">> => <<"go">>}]}),
+        ok = beamai_agui_runner:run(Input, simple_factory(<<"You are Bob.">>),
+                                    fun(_) -> ok end, #{inject_state => true}),
+        Messages = receive {Ref, M} -> M after 2000 -> [] end,
+        Text = system_text(Messages),
+        ?assertMatch({_, _}, binary:match(Text, <<"You are Bob.">>)),
+        ?assertMatch({_, _}, binary:match(Text, <<"AG-UI state"/utf8>>)),
+        ?assertMatch({_, _}, binary:match(Text, <<"{\"todoCount\":3}">>))
+    after
+        meck:unload(beamai_chat_model)
+    end.
+
 %%====================================================================
 %% parentRunId：原样带着走
 %%====================================================================

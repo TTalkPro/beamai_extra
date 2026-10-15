@@ -217,6 +217,18 @@ context_prompt_empty_test() ->
                                           <<"value">> => <<>>}]}),
     ?assertEqual(undefined, beamai_agui_types:context_prompt(Blank)).
 
+state_prompt_renders_json_with_source_heading_test() ->
+    Prompt = beamai_agui_types:state_prompt(#{<<"count">> => 3}),
+    ?assert(is_binary(Prompt)),
+    ?assertMatch({_, _},
+                 binary:match(Prompt, <<"AG-UI state"/utf8>>)),
+    ?assertMatch({_, _}, binary:match(Prompt, <<"{\"count\":3}">>)).
+
+empty_or_non_map_state_is_not_injected_test() ->
+    ?assertEqual(undefined, beamai_agui_types:state_prompt(#{})),
+    ?assertEqual(undefined, beamai_agui_types:state_prompt(<<"not a map">>)),
+    ?assertEqual(undefined, beamai_agui_types:state_prompt(undefined)).
+
 %%====================================================================
 %% 多模态 content：客户端可能发一个部件数组
 %%====================================================================

@@ -366,7 +366,7 @@ json_response(_Status, Body) ->
 %% 只挑出来、不做别的 —— 适配器不该知道 runner 的选项长什么样。
 -spec run_opts(config()) -> beamai_agui_runner:opts().
 run_opts(Config) ->
-    maps:with([event_transform, input_transform], Config).
+    maps:with([event_transform, input_transform, inject_state], Config).
 
 %% @doc 从查询串 / 头里解出重连水位
 %%

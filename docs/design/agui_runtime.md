@@ -259,9 +259,12 @@ AG-UI 的 `STATE_DELTA.delta` 是 **JSON Patch 数组**，前端拿它对本地�
 **续跑不采纳前端的 state**：暂停快照里带着服务端累积的那份，`resume` 从那里恢复。
 一个停在半路的 turn，其状态的权威在服务端。
 
-state 是给**工具**读的（`beamai_context:state_get/3`），模型看不到它。要让模型能
-就当前状态推理，得由工厂把 state 渲染进 system prompt —— 实机测试里模型正是因为
-看不见基线里已有的那项而数错了数。
+state 缺省仍只给**工具**读（`beamai_context:state_get/3`），模型看不到它。需要模型
+就当前状态推理时，端点显式打开 `inject_state => true`：runtime 用
+`beamai_agui_types:state_prompt/1` 把整份 state 渲染成 system 文本，追加在 context
+后面。不默认打开 —— 这会把整份 UI state 放进每次 LLM 请求，token 成本和信息暴露
+必须由宿主拍板。续跑注入的是暂停快照里的 `saved_state`，不是 resume 请求重发的
+`state`，保持上面那条「服务端是权威」的规则。
 
 ## 已知缺口
 

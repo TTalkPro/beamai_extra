@@ -12,7 +12,8 @@
 -export([thread_id/1, run_id/1, parent_run_id/1, messages/1, tools/1, state/1]).
 -export([resume/1, forwarded_props/1]).
 -export([agent_name/1, last_user_message/1, resume_input/2]).
--export([context_prompt/1, content_to_text/1, frontend_tool_names/1]).
+-export([context_prompt/1, state_prompt/1, content_to_text/1,
+         frontend_tool_names/1]).
 
 -export_type([run_input/0]).
 
@@ -187,6 +188,19 @@ context_prompt(Items) when is_list(Items) ->
                     lists:join(<<"\n">>, Lines)])
     end;
 context_prompt(_) ->
+    undefined.
+
+%% @doc 共享 state → 一段 system 文本；空/非 map 不注入
+%%
+%% 这是 `inject_state` 的缺省渲染器。state 本来只给工具读写，模型看不到；
+%% 有些应用需要它参与推理，但直接默认打开会把整份 UI state 塞进每次 LLM 请求，
+%% token 成本和信息泄漏风险都应由宿主拍板。抬头明确它是共享状态、不是用户指令。
+-spec state_prompt(term()) -> binary() | undefined.
+state_prompt(State) when is_map(State), map_size(State) > 0 ->
+    iolist_to_binary(
+      [<<"以下是当前共享状态（AG-UI state，非用户输入）：\n"/utf8>>,
+       beamai_utils:encode_json(State)]);
+state_prompt(_) ->
     undefined.
 
 %% @doc AG-UI 消息的 `content` → 纯文本

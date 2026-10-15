@@ -37,7 +37,8 @@ resume_test_() ->
       fun approved_and_rejected_differ/0,
       fun status_is_not_a_decision/0,
       fun frontend_tool_asks_for_a_result/0,
-      fun frontend_tool_result_is_not_fabricated/0]}.
+      fun frontend_tool_result_is_not_fabricated/0,
+      fun state_prompt_uses_saved_state_on_resume/0]}.
 
 %%====================================================================
 %% 辅助
@@ -115,6 +116,37 @@ user_msg(Text) -> #{<<"role">> => <<"user">>, <<"content">> => Text}.
 tool_msg(Id, Content) ->
     #{<<"role">> => <<"tool">>, <<"toolCallId">> => Id, <<"content">> => Content}.
 
+%% 一次 meck 会话里演完两幕：先暂停，再在续跑时捕获发给模型的 system prompt。
+capture_state_resume_llm(Ref) ->
+    Self = self(),
+    CC = counters:new(1, []),
+    meck:new(beamai_chat_model, [passthrough]),
+    meck:expect(beamai_chat_model, stream_chat,
+                fun(_Config, Messages, _RawCb, Opts) ->
+                        counters:add(CC, 1, 1),
+                        TokenCb = maps:get(on_llm_new_token, Opts),
+                        case counters:get(CC, 1) of
+                            1 ->
+                                {ok, beamai_chat_response:new(
+                                       #{content => null,
+                                         tool_calls => [tc(<<"ask1">>, <<"ask_human">>,
+                                                           <<"{\"q\":\"ok?\"}">>)],
+                                         finish_reason => <<"tool_calls">>})};
+                            _ ->
+                                Self ! {Ref, Messages},
+                                TokenCb(<<"done">>, #{}),
+                                {ok, beamai_chat_response:new(
+                                       #{content => <<"done">>,
+                                         finish_reason => <<"stop">>})}
+                        end
+                end),
+    ok.
+
+system_text(Messages) ->
+    iolist_to_binary([maps:get(content, M, <<>>)
+                      || M <- Messages,
+                         maps:get(role, M, undefined) =:= system]).
+
 collect() ->
     receive {ev, Ev} -> [Ev | collect()] after 0 -> [] end.
 
@@ -124,6 +156,12 @@ run(Input) ->
 run(Input, Factory) ->
     Self = self(),
     ok = beamai_agui_runner:run(Input, Factory, fun(Ev) -> Self ! {ev, Ev}, ok end),
+    collect().
+
+run(Input, Factory, RunOpts) ->
+    Self = self(),
+    ok = beamai_agui_runner:run(Input, Factory,
+                                fun(Ev) -> Self ! {ev, Ev}, ok end, RunOpts),
     collect().
 
 types(Events) -> [maps:get(<<"type">>, E) || E <- Events].
@@ -477,4 +515,34 @@ frontend_tool_result_is_not_fabricated() ->
         ?assertMatch({_, _}, binary:match(Content, <<"没有回传"/utf8>>))
     after
         meck:unload(beamai_chat_model)
+    end.
+
+%% 可选 state 注入必须用服务端暂停时保存的那份：客户端重发 `state=999`
+%% 只是本地改动，不能覆盖服务端权威的 `saved_state=41`。
+state_prompt_uses_saved_state_on_resume() ->
+    Thread = <<"t-state-prompt-resume">>,
+    Ref = make_ref(),
+    _CC = capture_state_resume_llm(Ref),
+    try
+        {ok, First} = beamai_agui_types:parse_run_input(
+                        #{<<"threadId">> => Thread,
+                          <<"state">> => #{<<"counter">> => 41},
+                          <<"messages">> => [user_msg(<<"go">>)]}),
+        _ = run(First, factory()),
+        {ok, Snapshot} = beamai_agui_thread:pending(Thread),
+        #{interrupt_state := #{saved_state := #{<<"counter">> := 41}}} = Snapshot,
+
+        {ok, Resume} = beamai_agui_types:parse_run_input(
+                         #{<<"threadId">> => Thread,
+                           <<"state">> => #{<<"counter">> => 999},
+                           <<"messages">> => [user_msg(<<"go">>),
+                                              tool_msg(<<"ask1">>, <<"yes">>)]}),
+        _ = run(Resume, factory(), #{inject_state => true}),
+        Messages = receive {Ref, M} -> M after 2000 -> [] end,
+        Text = system_text(Messages),
+        ?assertMatch({_, _}, binary:match(Text, <<"{\"counter\":41}">>)),
+        ?assertNotMatch({_, _}, binary:match(Text, <<"{\"counter\":999}">>))
+    after
+        beamai_agui_thread:clear(Thread),
+        catch meck:unload(beamai_chat_model)
     end.

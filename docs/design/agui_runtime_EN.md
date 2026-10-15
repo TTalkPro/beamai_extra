@@ -291,10 +291,14 @@ slash, and skipping the escape would compute a path pointing somewhere else.
 server accumulated, and `resume` restores from there. For a turn stopped halfway, the
 server holds the authoritative state.
 
-State is read by **tools** (`beamai_context:state_get/3`); the model does not see it. To let
-the model reason about current state, the factory must render it into the system prompt —
-in live testing the model miscounted precisely because it could not see the item already in
-the baseline.
+By default state is still read only by **tools** (`beamai_context:state_get/3`); the model
+does not see it. When the model must reason about current state, the endpoint opts in with
+`inject_state => true`: the runtime renders the whole state into system text via
+`beamai_agui_types:state_prompt/1` and appends it after context. This is not the default —
+it puts the whole UI state into every LLM request, so the token cost and disclosure are
+the host's explicit decision. Resume injects `saved_state` from the pause snapshot, not the
+`state` resent with the resume request, preserving the rule above that the server is
+authoritative.
 
 ## Known gaps
 

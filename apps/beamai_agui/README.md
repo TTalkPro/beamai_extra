@@ -443,9 +443,22 @@ AG-UI 前端通常与 runtime 不同源，所以每个响应都带 CORS 头。�
 抬头那句「以下是前端在本轮提供的上下文（AG-UI context，非用户输入）」是给模型的
 出处说明：不写的话这几行会被当成用户指令，而它们其实是页面状态。
 
-它与 state 的分工：**state 是给工具读的**（`beamai_context:state_get/3`，模型看不见），
-**context 是说给模型听的**。要让模型能就当前 state 推理，把它渲染进 context 或
-system prompt 是唯一的路。
+它与 state 的分工：**state 是给工具读的**（`beamai_context:state_get/3`，缺省对模型
+不可见），**context 是说给模型听的**。确实要让模型推理当前 state 时，打开端点上的
+`inject_state => true`，runtime 会把整份 state 渲染成 system 文本追加在 context 后面；
+空 state / 非 map 不注入。默认关闭 —— 这等于把整份 UI state 塞进每次 LLM 请求，
+token 成本和暴露面必须由宿主显式承担。
+
+```erlang
+%% 只给会暴露这仨键的端点开；不要全局无差别打开
+{"/agui/run", beamai_agui_cowboy_handler,
+ #{agent => <<"my-agent">>, inject_state => true}}
+```
+
+续跑注入的是**暂停快照里的 `saved_state`**，不是 resume 请求重新带来的 `state`：
+服务端那份才是停在一半的 turn 的权威状态。渲染器是
+`beamai_agui_types:state_prompt/1`，抬头明确「共享状态，非用户输入」，降低 prompt
+ injection 的风险面。
 
 ## 事件流插件（`event_transform`）
 

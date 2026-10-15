@@ -39,7 +39,9 @@
     event_transform => fun((beamai_agui_event:event()) ->
                               beamai_agui_event:event() | [beamai_agui_event:event()] | drop),
     input_transform => fun((beamai_agui_types:run_input()) ->
-                              beamai_agui_types:run_input())
+                              beamai_agui_types:run_input()),
+    %% 显式打开后，共享 state 以 system 文本进入本轮；缺省关闭。
+    inject_state => boolean()
 }.
 
 -export_type([sink/0, opts/0]).
@@ -75,7 +77,9 @@ run(Input0, Factory, Sink, Opts) ->
         ok = beamai_agui_emitter:run_started(Emitter),
         %% 先立基线，后面的 STATE_DELTA 才有得可依
         ok = beamai_agui_emitter:state_snapshot(Emitter),
-        dispatch(Input, Factory, Emitter, beamai_agui_thread:pending(ThreadId))
+        Pending = beamai_agui_thread:pending(ThreadId),
+        PromptState = prompt_state(Input, Pending),
+        dispatch(Input, Factory, Emitter, PromptState, Pending, Opts)
     catch
         Class:Reason:Stack ->
             logger:error("beamai_agui run crashed: ~p:~p", [Class, Reason],
@@ -112,16 +116,18 @@ transform_input(Input, Opts) ->
 %% 内部 - 分路
 %%====================================================================
 
-dispatch(Input, Factory, Emitter, none) ->
-    fresh_run(Input, Factory, Emitter);
-dispatch(Input, Factory, Emitter, {ok, Snapshot}) ->
-    resume_run(Input, Factory, Emitter, Snapshot).
+dispatch(Input, Factory, Emitter, PromptState, Pending, Opts) ->
+    case Pending of
+        none -> fresh_run(Input, Factory, Emitter, PromptState, Opts);
+        {ok, Snapshot} ->
+            resume_run(Input, Factory, Emitter, PromptState, Snapshot, Opts)
+    end.
 
 %%====================================================================
 %% 内部 - 新跑
 %%====================================================================
 
-fresh_run(Input, Factory, Emitter) ->
+fresh_run(Input, Factory, Emitter, PromptState, Opts) ->
     case beamai_agui_types:last_user_message(Input) of
         {error, no_user_message} ->
             beamai_agui_emitter:run_error(Emitter, no_user_message);
@@ -131,14 +137,14 @@ fresh_run(Input, Factory, Emitter) ->
                            %% 用 stream/2 而非 run/2：AG-UI 的价值就在逐 token
                            %% 渲染，非流式等于把整个协议降级成一次性返回。
                            beamai_agent:stream(Agent, UserMessage)
-                       end)
+                       end, PromptState, Opts)
     end.
 
 %%====================================================================
 %% 内部 - 续跑
 %%====================================================================
 
-resume_run(Input, Factory, Emitter, Snapshot) ->
+resume_run(Input, Factory, Emitter, PromptState, Snapshot, Opts) ->
     PendingId = beamai_agui_thread:pending_tool_call_id(Snapshot),
     Kind = pending_kind(Input, Snapshot),
     case beamai_agui_types:resume_input(Input, PendingId) of
@@ -153,7 +159,7 @@ resume_run(Input, Factory, Emitter, Snapshot) ->
                            %% stream_resume 而非 resume：人回完话之后的那段答案
                            %% 才是用户在等的正文，它得逐 token 出来
                            beamai_agent:stream_resume(Agent, Decision, Payload)
-                       end)
+                       end, PromptState, Opts)
     end.
 
 %% @private 这次暂停在等的是**审批**还是**前端工具的执行结果**
@@ -278,34 +284,50 @@ to_text(V) -> iolist_to_binary(io_lib:format("~p", [V])).
 %%====================================================================
 
 %% @private 造 agent 并把结果分派成事件
-with_agent(Input, Factory, Emitter, Go) ->
+with_agent(Input, Factory, Emitter, Go, PromptState, Opts) ->
     case Factory(Input, runtime_config(Input, Emitter)) of
         {ok, Agent} ->
-            Ready = with_context(with_frontend_tools(Agent, Input), Input),
+            Ready = with_prompt(with_frontend_tools(Agent, Input), Input,
+                                PromptState, Opts),
             finish(Input, Emitter, Go(Ready));
         {error, Reason} ->
             beamai_agui_emitter:run_error(Emitter, Reason)
     end.
 
-%% @private 把 `RunAgentInput.context` 追加到 system prompt 后面
+%% @private 把本轮上下文 / 显式开启的 state 注入 system prompt
 %%
 %% `context` 是前端每轮重发的**页面状态**（`useAgentContext`）：当前选中了哪一行、
 %% 用户是谁、页面在哪一屏。它是 turn 级的（这轮带就有，下轮不带就没了），所以
 %% **追加而不是覆盖** —— 工厂那份人设是常量配置，不该被一次请求改掉。
 %%
-%% 由 runtime 追加而不是让工厂自己读：与前端工具同一条理由，请求带上来的东西
-%% 不该渗进"必须可重放"的工厂里（见 beamai_agui_thread 模块头）。
-with_context(Agent, Input) ->
-    case beamai_agui_types:context_prompt(Input) of
-        undefined ->
-            Agent;
-        Context ->
-            case maps:get(system_prompt, Agent, undefined) of
-                P when is_binary(P), P =/= <<>> ->
-                    Agent#{system_prompt => <<P/binary, "\n\n", Context/binary>>};
-                _ ->
-                    Agent#{system_prompt => Context}
-            end
+%% context 由 runtime 追加而不是让工厂自己读：与前端工具同一条理由，请求带上
+%% 来的东西不该渗进"必须可重放"的工厂里。state 是可选注入：默认关闭，只有
+%% 宿主显式打开才把整份 state 的 token 成本和暴露面接进来。
+with_prompt(Agent, Input, PromptState, Opts) ->
+    Agent0 = append_prompt(Agent, beamai_agui_types:context_prompt(Input)),
+    case maps:get(inject_state, Opts, false) of
+        true -> append_prompt(Agent0, beamai_agui_types:state_prompt(PromptState));
+        false -> Agent0
+    end.
+
+append_prompt(Agent, undefined) ->
+    Agent;
+append_prompt(Agent, Text) when is_binary(Text) ->
+    case maps:get(system_prompt, Agent, undefined) of
+        P when is_binary(P), P =/= <<>> ->
+            Agent#{system_prompt => <<P/binary, "\n\n", Text/binary>>};
+        _ ->
+            Agent#{system_prompt => Text}
+    end.
+
+%% 新跑的权威 state 是请求里的 map；续跑的权威 state 是暂停时保存的
+%% saved_state —— 客户端在暂停期间的本地改动不应覆盖服务端累积结果。
+prompt_state(Input, none) ->
+    initial_state(Input);
+prompt_state(_Input, {ok, Snapshot}) ->
+    case maps:get(interrupt_state, Snapshot, undefined) of
+        #{saved_state := State} -> State;
+        _ -> #{}
     end.
 
 %% @private 把前端声明的工具挂成 interrupt_tools

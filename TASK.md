@@ -183,12 +183,14 @@ dialyzer 只剩既有的 `beamai_mcp_server.erl:442`；xref 无非 unused-export
 - [x] 顺手修 `examples/src/beamai_examples.app.src` 的 `applications` 仍列
   `jsx` / `hackney`（两者早已从项目移除，谁真去 `ensure_all_started` 就会莫名失败）。
 
-### 发现·待决
+### 已决·模型可见 state
 
-- [ ] **模型看不到 state**。state 是给**工具**读的（`beamai_context:state_get/3`），
-  不进 prompt。实机测试里模型正是因为看不见基线里已有的那项而数错了数
-  （"共有 2 项"，实为 3）。要让模型能就当前状态推理，得由工厂把 state 渲染进
-  system prompt —— 是留给宿主自己决定，还是 runtime 提供一个可选的注入？
+- [x] **`inject_state` 可选注入**。缺省仍是 state 只给**工具**读 —— 整份 UI state
+  进每次 LLM 请求的 token 成本和暴露面，必须由宿主显式承担。端点打开
+  `inject_state => true` 后，`beamai_agui_types:state_prompt/1` 把 state 渲染成
+  system 文本，追加在 context 后面；空 / 非 map 不注入，抬头明确「非用户输入」。
+  续跑注入暂停快照的 `saved_state`，**不采纳** resume 请求重发的 `state`。
+  测试覆盖默认关闭、显式打开、以及续跑时模型看到 41 而不是客户端重发的 999。
 
 ### 已做·持久化 pause_store（跨节点重启的 HITL）
 
