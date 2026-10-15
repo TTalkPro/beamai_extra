@@ -19,7 +19,7 @@
 %%% ```
 %%% cd examples && make compile
 %%% D=/tmp/agui_durable_demo
-%%% E="../_build/default/lib:../_build/default/checkouts"
+%%% E="../_build/default/lib:../_build/default/lib/beamai_core/apps:../_build/default/lib/beamai_llm/apps:../_build/default/lib/beamai_agent/apps:../_build/default/checkouts"
 %%% P="_build/default/lib/beamai_examples/ebin"
 %%% ERL_LIBS=$E erl -noshell -pa $P -eval "example_agui_durable:phase1(\"$D\")"
 %%% ERL_LIBS=$E erl -noshell -pa $P -eval "example_agui_durable:phase2(\"$D\")"

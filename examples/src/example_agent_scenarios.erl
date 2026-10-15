@@ -9,7 +9,7 @@
 %%% 使用方法：
 %%% ```
 %%% cd examples
-%%% ERL_LIBS=../_build/default/lib:../_build/default/lib/beamai_core/apps:../_build/default/lib/beamai_llm/apps:../_build/default/lib/beamai_agent/apps:../_build/default/checkouts rebar3 shell
+%%% cd examples && make shell
 %%%
 %%% %% Mock 版本（无需 API Key）
 %%% example_agent_scenarios:no_memory_no_plugin().

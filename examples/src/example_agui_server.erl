@@ -6,7 +6,7 @@
 %%%
 %%% ```
 %%% cd examples && make compile
-%%% ERL_LIBS=../_build/default/lib:../_build/default/lib/beamai_core/apps:../_build/default/lib/beamai_llm/apps:../_build/default/lib/beamai_agent/apps:../_build/default/checkouts rebar3 shell
+%%% cd examples && make shell
 %%% 1> example_agui_server:start().              %% MiniMax m2.7，端口 8080
 %%% 2> example_agui_server:start(3001).          %% 换端口
 %%% 3> example_agui_server:start(8080, #{provider => zhipu}).
@@ -24,9 +24,8 @@
 %%% 或者不进 shell 直接跑（Ctrl-C 停）：
 %%%
 %%% ```
-%%% ERL_LIBS=../_build/default/lib:../_build/default/lib/beamai_core/apps:../_build/default/lib/beamai_llm/apps:../_build/default/lib/beamai_agent/apps:../_build/default/checkouts \\
-%%%   erl -noshell +pc unicode -pa _build/default/lib/*/ebin \\
-%%%       -eval 'example_agui_server:run(8080)'
+%%% cd examples && make shell
+%%% 1> example_agui_server:run(8080).
 %%% ```
 %%%
 %%% == 端点 ==

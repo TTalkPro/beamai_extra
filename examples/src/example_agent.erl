@@ -13,7 +13,7 @@
 %%% 使用方法:
 %%% ```
 %%% %% Mock 版本（无需 API Key）
-%%% ERL_LIBS=../_build/default/lib:../_build/default/lib/beamai_core/apps:../_build/default/lib/beamai_llm/apps:../_build/default/lib/beamai_agent/apps:../_build/default/checkouts rebar3 shell
+%%% cd examples && make shell
 %%% example_agent:run_basic().
 %%% example_agent:run_multi_turn().
 %%% example_agent:run_with_plugin().

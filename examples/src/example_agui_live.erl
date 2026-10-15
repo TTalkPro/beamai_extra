@@ -12,7 +12,7 @@
 %%%
 %%% ```
 %%% cd examples && make compile
-%%% ERL_LIBS=../_build/default/lib:../_build/default/lib/beamai_core/apps:../_build/default/lib/beamai_llm/apps:../_build/default/lib/beamai_agent/apps:../_build/default/checkouts rebar3 shell
+%%% cd examples && make shell
 %%% 1> example_agui_live:run().            %% MiniMax m2.7
 %%% 2> example_agui_live:run(zhipu).       %% ZHIPU glm-5.3-flash
 %%% ```
