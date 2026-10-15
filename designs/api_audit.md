@@ -1,4 +1,4 @@
-# 公共 API 审计（Phase E / E1）
+# 公共 API 审计（Phase E / E1–E2）
 
 > 日期：2026-10-15  
 > 执行计划：[tasks/downstream_quality_gates.md](../tasks/downstream_quality_gates.md) Phase E  
@@ -35,7 +35,7 @@ unused export 不再阻断门禁——但它们本身是信息：它们把「框
 ### 已知局限
 
 1. xref 分析的是 **default profile**，测试里的调用不算「使用」——所以有
-   `test_only` 这一类（95 条）。这不是缺陷，是 E3 规则要处理的另一件事：
+   `test_only` 这一类（E1 基线 95 条，E2 后 98 条）。这不是缺陷，是 E3 规则要处理的另一件事：
    仅为测试存在的函数不该占生产 `src` 的公共 API。
 2. 动态分派只覆盖两类：`-callback` 声明与 `gen_statem` 状态函数。将来若出现
    「函数以 `fun Mod:Fun/Arity` 形式存进 map 再被调用」的写法，需要在脚本里
@@ -44,6 +44,8 @@ unused export 不再阻断门禁——但它们本身是信息：它们把「框
    `no_evidence` 只是**候选**，删除前要人工复核（本轮已逐条复核，见第 4 节）。
 
 ## 3. 结果
+
+### E1 基线
 
 总计 **362 条**：
 
@@ -65,37 +67,52 @@ unused export 不再阻断门禁——但它们本身是信息：它们把「框
 | `beamai_rag` | 39 | 39 | 0 | 0 | 0 | 0 |
 | `beamai_tools` | 34 | 31 | 1 | 2 | 0 | 0 |
 
+### E2 后现状
+
+刷新清单后的总计 **328 条**，`internal_only` 与 `no_evidence` 已清零：
+
+| 分类 | 条数 | 处置 |
+|---|---|---|
+| `public_api` | 227 | 保留；本轮补齐了关键宿主入口的文档或测试 |
+| `test_only` | 98 | 保留，移出生产 API 是 E3 的后续治理项 |
+| `internal_only` | 0 | 全部去 export 并保留内部实现 |
+| `no_evidence` | 0 | 逐条复核后删除或按框架 API 补文档/测试 |
+| `otp_callback` | 3 | 保留（`gen_statem` 状态函数） |
+
+按 app 分布：
+
+| app | 总数 | public_api | test_only | otp_callback |
+|---|---:|---:|---:|---:|
+| `beamai_a2a` | 107 | 63 | 44 | 0 |
+| `beamai_agui` | 49 | 34 | 15 | 0 |
+| `beamai_mcp` | 99 | 60 | 36 | 3 |
+| `beamai_rag` | 39 | 39 | 0 | 0 |
+| `beamai_tools` | 34 | 31 | 3 | 0 |
+
 `beamai_rag` 一条待处理项都没有：它的 unused export 全都写在
 `apps/beamai_rag/README.md` 里——这也说明「文档证据」这一档救回了多少本该被
 误删的公共 API。
 
-## 4. `no_evidence` 逐条复核（9 条）
+## 4. `no_evidence` 处置记录（E1 候选 9 条）
 
 全仓（`apps/*/src`、`apps/*/test`、`examples/`、`docs/`、README）搜索
 `Module:fun(` 与裸 `fun(`，**外部引用均为 0**：
 
 | 模块 | 函数 | 判断 |
 |---|---|---|
-| `beamai_mcp_adapter` | `extract_content/1` | 真死代码 |
-| `beamai_agui_event` | `raw/1` | 真死代码 |
-| `beamai_agui_a2ui` | `catalog_id/0` | 真死代码 |
-| `beamai_agui_session` | `awaiting/1` | 真死代码 |
-| `beamai_a2a_task_sup` | `start_task/1` | 真死代码（supervisor 里没有调用者） |
-| `beamai_mcp_client_registry` | `get_client_info/1` | **需产品决策**：像是给宿主看的内省 API |
-| `beamai_mcp_client_registry` | `is_registered/1` | **需产品决策**：同上 |
-| `beamai_mcp_client_registry` | `list_client_pids/0` | **需产品决策**：同上 |
-| `beamai_mcp_client_sup` | `stop_client/1` | **需产品决策**：动态停 client 的运维入口 |
+| `beamai_mcp_adapter` | `extract_content/1` | 保留 + 测试：这是 MCP tool result 的内容抽取合同，`isError` 优先级是关键回归点 |
+| `beamai_agui_event` | `raw/1` | 删除：运行时走专用 raw translator，不存在 `RAW` 事件出口 |
+| `beamai_agui_a2ui` | `catalog_id/0` | 删除：catalog 常量只由 `basic_catalog/0` 与 transform 使用 |
+| `beamai_agui_session` | `awaiting/1` | 删除：`status/1` 已返回同一份 awaiting 信息 |
+| `beamai_a2a_task_sup` | `start_task/1` | 保留 + 文档：动态启动任务是有意保留的宿主入口 |
+| `beamai_mcp_client_registry` | `get_client_info/1` | 保留 + 文档/测试：宿主内省 API |
+| `beamai_mcp_client_registry` | `is_registered/1` | 保留 + 文档/测试：同上 |
+| `beamai_mcp_client_registry` | `list_client_pids/0` | 保留 + 文档/测试：同上 |
+| `beamai_mcp_client_sup` | `stop_client/1` | 保留 + 文档：动态停 client 的运维入口 |
 
-后 4 条的共同点：它们不是「写剩下的」，而是**本来该有宿主用、却从没写进
-文档**的 API。删掉会让「宿主想查自己注册了哪些 MCP client」这件事没路可走；
-留着又是无文档的公共面。合理处置是补文档 + 测试，不是删，也不是就这么悬着。
+## 5. E2 收尾
 
-## 5. 下一步（E2）
-
-按 `beamai_tools` → `beamai_rag` → `beamai_a2a` → `beamai_mcp` → `beamai_agui`
-逐 app 清理，每个 app 一次独立提交：
-
-- `public_api`：不动。
-- `internal_only`：去 export，保留实现；行为不变，靠现有测试守。
-- `test_only`：判断是否该移到测试 helper。
-- `no_evidence`：按第 4 节结论执行，提交说明写明模块 / 函数 / arity 与兼容性影响。
+五个 app 都已按独立提交处理。`internal_only` 函数只收缩可见性，不改变运行时
+行为；删除的导出已逐条列在对应提交说明中，属于外部调用者的 source-level
+breaking change。剩余 328 条分别是文档化的 public API、测试专用 API 与
+`gen_statem` 回调，没有待删除候选。

@@ -193,10 +193,16 @@
 
 每个 app：
 
-- [ ] Public API 保留，不因内部未调用而删除。
-- [ ] internal helper 收缩为局部函数。
-- [ ] deletion candidate 只在独立 PR 中删除。
-- [ ] 删除导出前补一条兼容性说明或测试。
+- [x] Public API 保留，不因内部未调用而删除。
+- [x] internal helper 收缩为局部函数。
+- [x] deletion candidate 只在独立提交中删除。
+- [x] 删除导出前补一条兼容性说明或测试。
+
+E2 已完成：`beamai_tools` 仅补安全模块测试；`beamai_rag` 39 条均有 README
+证据，无动作；`beamai_a2a` / `beamai_mcp` / `beamai_agui` 已去 export 内部
+helper，删除候选按复核结果删除或补文档/测试。刷新后的清单为 328 条
+（public_api 227、test_only 98、otp_callback 3），`internal_only` 与
+`no_evidence` 均为 0。
 
 ### E3. 长期规则
 

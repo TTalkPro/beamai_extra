@@ -24,13 +24,15 @@
 - [x] Phase E1 公共 API 审计清单已建立：362 条 unused export 分类为
   public_api 215 / test_only 95 / internal_only 40 / no_evidence 9 /
   otp_callback 3，结论见 [designs/api_audit.md](designs/api_audit.md)。
-  E2（逐 app 去 export 与删除）待逐 app 独立提交。
+- [x] Phase E2 公共 API 收缩完成：internal_only 与 no_evidence 清零；
+  刷新后剩 328 条（public_api 227 / test_only 98 / otp_callback 3）。
+  公共 API 保留并补齐文档/测试，删除项与兼容性影响已写入逐 app 提交。
 
 ### 门禁基线
 
 | 范围 | 当前验证结果 |
 |---|---|
-| 根项目 | `rebar3 eunit`：749 tests / 0 failures |
+| 根项目 | `rebar3 eunit`：776 tests / 0 failures |
 | examples | `make -C examples test`：9 tests / 0 failures |
 | xref | 显式框架库检查集，0 告警（`exports_not_used` 不启用，另走 API 审计） |
 | dialyzer | 0 warning |
