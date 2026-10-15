@@ -57,8 +57,7 @@
 -export([handle_threads/1, handle_thread/2, handle_thread_messages/2,
          handle_thread_events/2, handle_thread_state/2,
          handle_thread_stop/2, handle_thread_delete/2]).
--export([sse_headers/0, json_headers/0]).
--export([cors_headers/0, cors_headers/1]).
+-export([sse_headers/0, json_headers/0, cors_headers/1]).
 -export([since_of/2, run_opts/1]).
 
 -type config() :: #{
@@ -289,10 +288,6 @@ json_headers() -> json_headers(#{}).
 -spec json_headers(config()) -> [{binary(), binary()}].
 json_headers(Config) ->
     [{<<"content-type">>, <<"application/json">>}] ++ cors_headers(Config).
-
-%% @doc CORS 头（AG-UI 前端通常与 runtime 不同源）
--spec cors_headers() -> [{binary(), binary()}].
-cors_headers() -> cors_headers(#{}).
 
 %% @doc 按配置算这次请求的 CORS 头
 %%

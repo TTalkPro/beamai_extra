@@ -58,7 +58,7 @@
 -module(beamai_agui_a2ui).
 
 -export([tool_name/0, activity_type/0, basic_catalog/0]).
--export([render_tool/1, with_tool/1, with_tool/2]).
+-export([with_tool/1, with_tool/2]).
 -export([event_transform/0, event_transform/1]).
 -export([input_transform/0]).
 -export([surface_ops/2, surface_event/3]).
