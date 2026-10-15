@@ -304,8 +304,11 @@ authoritative.
 
 ### Runtime side
 
-1. **Auth and rate limiting.** `beamai_a2a_auth` / `beamai_a2a_rate_limit` are ready-made
-   templates.
+1. **The security gates use single-node semantics.** Authentication and rate limiting
+   (`beamai_agui_auth` / `beamai_agui_rate_limit`) are wired into Cowboy, disabled by
+   default and enabled explicitly by the host; key storage and fixed-window counters are
+   still ETS. A multi-node deployment needs shared identity/counters or key-based session
+   affinity.
 
 ### Engineering side
 

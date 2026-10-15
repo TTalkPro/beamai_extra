@@ -505,7 +505,12 @@ happy（ClojureScript + UIx 的 AG-UI 客户端）拿 `beamai_agui/1.1` 做联�
 
 ### 待办·功能
 
-- [ ] **认证与限流**。抄 `beamai_a2a_auth` / `beamai_a2a_rate_limit`。
+- [x] **认证与限流**。`beamai_agui_auth` / `beamai_agui_rate_limit` 是 AG-UI 自己的
+  worker，**默认关闭** —— 升级不锁死既有前端，接公网由宿主显式打开。Cowboy 所有
+  业务路由先过 `beamai_agui_middleware`（`OPTIONS` 预检除外）；认证打开时用 key
+  限流，认证关闭时按 `X-Forwarded-For` 最左 IP。401 / 429 都带 CORS，429 带
+  `retry-after`。9 个测试覆盖缺头、错 key、过期、两种 key 头、按 key 隔离、
+  代理 IP、以及 Cowboy 的 401 / 200 集成。
 - [ ] **多实例部署**。会话在进程内，要么 sticky session，要么把缓冲挪到共享存储。
 - [ ] **异步委派的 lane**（`management_tools`）。子 agent 在工具进程死后还在跑，
   那时 lane 的状态表已经回收 —— 要让 `beamai_subagent_manager` 透出观察钩子，

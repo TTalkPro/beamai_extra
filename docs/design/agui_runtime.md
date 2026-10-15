@@ -270,7 +270,9 @@ state 缺省仍只给**工具**读（`beamai_context:state_get/3`），模型看
 
 ### runtime 侧
 
-1. **认证与限流**。`beamai_a2a_auth` / `beamai_a2a_rate_limit` 是现成样板。
+1. **安全门是进程内单机语义**。认证 / 限流（`beamai_agui_auth` /
+   `beamai_agui_rate_limit`）已接入 Cowboy，默认关闭、由宿主显式打开；但 key 表和
+   固定窗口桶仍在 ETS。多实例部署需要共享身份与计数，或按 key 粘住同一节点。
 
 ### 工程侧
 

@@ -88,7 +88,32 @@ init(Req, Config0) ->
                       path_agent => cowboy_req:binding(agent, Req)},
     Method = cowboy_req:method(Req),
     Mode = maps:get(mode, Config, run),
-    dispatch(Method, Mode, Req, Config).
+    case cowboy_req:method(Req) of
+        <<"OPTIONS">> ->
+            dispatch(Method, Mode, Req, Config);
+        _ ->
+            case beamai_agui_middleware:check(maps:to_list(cowboy_req:headers(Req))) of
+                {ok, _Security} ->
+                    dispatch(Method, Mode, Req, Config);
+                {error, Status, Code, Detail, ExtraHeaders} ->
+                    security_error(Status, Code, Detail, ExtraHeaders, Req, Config)
+            end
+    end.
+
+%% @private 401 / 429 也必须带 CORS，浏览器才读得到失败原因而不是报跨域
+security_error(Status, Code, Detail, ExtraHeaders, Req, Config) ->
+    Body = beamai_utils:encode_json(#{
+        <<"error">> => Code,
+        <<"detail">> => Detail,
+        <<"hint">> => hint(Code)}),
+    Headers = headers_map(ExtraHeaders ++
+                          beamai_agui_http_handler:json_headers(), Config),
+    Req2 = cowboy_req:reply(Status, Headers, Body, Req),
+    {ok, Req2, undefined}.
+
+hint(<<"auth_required">>) -> <<"Send the key via Authorization: Bearer <key> or X-API-Key"/utf8>>;
+hint(<<"rate_limited">>) -> <<"Wait for the interval in retry-after, then retry"/utf8>>;
+hint(_) -> undefined.
 
 %%====================================================================
 %% 分发

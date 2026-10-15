@@ -434,6 +434,46 @@ AG-UI 前端通常与 runtime 不同源，所以每个响应都带 CORS 头。�
 `beamai_agui_cowboy_handler` 按 `cors_headers/1` 重算一遍覆盖上去（所有回复点都
 经过同一个 `headers_map/2`，不会漏）。
 
+## 认证与限流
+
+两道安全门是 **默认关闭** 的独立 worker：`beamai_agui_auth` 和
+`beamai_agui_rate_limit`。升级不该把既有前端锁在外面；接公开网络时由宿主显式打开。
+`beamai_agui_cowboy_handler` 在进入任何业务路由前统一过这道门，CORS 预检
+（`OPTIONS`）除外 —— 不放行它，浏览器连“该怎么带凭据”都问不到。
+
+```erlang
+{ok, _} = application:ensure_all_started(beamai_agui),
+ok = beamai_agui_auth:set_config(#{enabled => true}),
+{ok, _} = beamai_agui_auth:add_key(<<"frontend-key">>, #{name => <<"web">>}),
+ok = beamai_agui_rate_limit:set_config(#{enabled => true,
+                                         requests_per_minute => 60,
+                                         requests_per_hour => 1000}).
+%% 高价值 key 单独放宽；轮换或封禁时删除旧 key。
+ok = beamai_agui_rate_limit:set_rule(<<"frontend-key">>,
+                                     #{requests_per_minute => 120}),
+ok = beamai_agui_auth:remove_key(<<"old-key">>).
+%% 运维侧也可以直接核对 key 是否仍然有效。
+{ok, _KeyInfo} = beamai_agui_auth:validate_key(<<"frontend-key">>),
+ok = beamai_agui_rate_limit:remove_rule(<<"retired-key">>).
+%% 改规则后如需立刻重新计窗口，可以清掉进程内的旧桶。
+ok = beamai_agui_rate_limit:reset_all().
+```
+
+请求头认 `Authorization: Bearer <key>` 和 `X-API-Key: <key>`。认证打开时，命中的
+key 就是限流身份；认证关闭但限流打开时，用 `X-Forwarded-For` 最左侧 IP（否则
+`X-Real-IP`，再否则 `anonymous`）。失败分别回 401 / 429，并带常规 CORS 头；
+429 还带 `retry-after` 秒数。
+
+两个 worker 也支持应用环境启动配置：
+
+```erlang
+{beamai_agui, [{beamai_agui_auth, #{enabled => true}},
+               {beamai_agui_rate_limit, #{enabled => true}}]}
+```
+
+`beamai_agui_middleware:check/1` 是框架无关入口，非 Cowboy 适配器应复用它，不要
+在各自路由里散落第二套 401 / 429 语义。
+
 ## 前端上下文（`RunAgentInput.context`）
 
 `context` 是前端每轮重发的**页面状态**（`useAgentContext`）：当前选中了哪一行、
