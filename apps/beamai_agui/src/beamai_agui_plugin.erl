@@ -23,8 +23,15 @@
 %%% 的那些），单独一片解析不了。攒到 `TOOL_CALL_END` 再一次解析，对流式与非流式
 %%% 两条路都成立 —— 非流式那条本来就是一片装完整的 JSON。
 %%%
-%%% 代价是「边生成边长出来」要等参数流式落地才有：事件的**形状与顺序**与上游
-%%% 一致，少的是中间态。
+%%% == 中间态（可选）==
+%%%
+%%% 「边生成边长出来」的原料是 `TOOL_CALL_ARGS` 的**半截 JSON**：给它配一个
+%%% `on_partial`（与 `on_args` 同形，收的是「已经写完的那一段」），插件就会在流式
+%%% 过程中反复发中间态 —— A2UI 靠 `replace: true` + 稳定的 messageId，前端整块
+%%% 换掉，组件树就一点点长出来。扫描在 `beamai_agui_json_prefix`（找切点，不写
+%%% 完整的增量 parser）。节流与去重在公共层：每 `partial_every` 字节（缺省 200）
+%%% 扫一次，内容没变就不发。**不配 `on_partial` 就一条中间态都没有**，行为与
+%%% 之前完全一致。
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
@@ -38,10 +45,15 @@
 
 %% - `tools`      盯哪几个工具名
 %% - `on_args`    `fun((ToolCallId, ToolName, Args) -> [event()])`，参数到齐时调用
+%% - `on_partial` `fun((ToolCallId, ToolName, ArgsPrefix) -> [event()])`，流式过程中的
+%%                中间态（不配就没有）；`ArgsPrefix` 是半截 JSON 里已经写完的那段
+%% - `partial_every` 中间态的扫描节流（字节，缺省 200）
 %% - `hold_start` 扣住 `TOOL_CALL_START` / `ARGS` 直到 activity 先发出去（见下）
 -type watcher_opts() :: #{
     tools := [binary()],
     on_args := fun((binary(), binary(), map()) -> [event()]),
+    on_partial => fun((binary(), binary(), map()) -> [event()]),
+    partial_every => pos_integer(),
     hold_start => boolean()
 }.
 
@@ -61,10 +73,9 @@
 %% **扣住的事件一定要在 `TOOL_CALL_END` 放完**：终态事件不过 transform，扣着不放
 %% 就是真丢了。
 -spec tool_watcher(watcher_opts()) -> transform().
-tool_watcher(#{tools := Names, on_args := OnArgs} = Opts) ->
+tool_watcher(#{tools := _Names, on_args := _OnArgs} = Opts) ->
     Key = {?MODULE, make_ref()},
-    Hold = maps:get(hold_start, Opts, false),
-    fun(Event) -> watch(Key, Names, OnArgs, Hold, Event) end.
+    fun(Event) -> watch(Key, Opts, Event) end.
 
 %% @doc 把若干 transform 串成一个（前一个的产出喂给后一个）
 %%
@@ -113,15 +124,17 @@ append_system_prompt(Config, Text) ->
 %% 内部 - watcher
 %%====================================================================
 
-watch(Key, Names, OnArgs, Hold, Event) ->
+watch(Key, Opts, Event) ->
     case beamai_agui_event:type_of(Event) of
-        <<"TOOL_CALL_START">> -> on_start(Key, Names, Hold, Event);
-        <<"TOOL_CALL_ARGS">> -> on_args(Key, Hold, Event);
-        <<"TOOL_CALL_END">> -> on_end(Key, OnArgs, Hold, Event);
+        <<"TOOL_CALL_START">> -> on_start(Key, Opts, Event);
+        <<"TOOL_CALL_ARGS">> -> on_args(Key, Opts, Event);
+        <<"TOOL_CALL_END">> -> on_end(Key, Opts, Event);
         _ -> [Event]
     end.
 
-on_start(Key, Names, Hold, Event) ->
+on_start(Key, Opts, Event) ->
+    Names = maps:get(tools, Opts),
+    Hold = maps:get(hold_start, Opts, false),
     Id = maps:get(<<"toolCallId">>, Event, undefined),
     Name = maps:get(<<"toolCallName">>, Event, undefined),
     case lists:member(Name, Names) of
@@ -133,19 +146,28 @@ on_start(Key, Names, Hold, Event) ->
             case Hold of true -> []; false -> [Event] end
     end.
 
-on_args(Key, Hold, Event) ->
+on_args(Key, Opts, Event) ->
     Id = maps:get(<<"toolCallId">>, Event, undefined),
     case get_call(Key, Id) of
         undefined ->
             [Event];
-        #{buf := Buf, held := Held} = Call ->
+        #{buf := Buf, held := Held, name := Name} = Call ->
+            Hold = maps:get(hold_start, Opts, false),
             Delta = maps:get(<<"delta">>, Event, <<>>),
             Held1 = case Hold of true -> Held ++ [Event]; false -> Held end,
-            put_call(Key, Id, Call#{buf => Buf ++ [Delta], held => Held1}),
-            case Hold of true -> []; false -> [Event] end
+            Buf1 = Buf ++ [Delta],
+            Call1 = Call#{buf => Buf1, held => Held1},
+            {Partials, Call2} = partial_events(Opts, Id, Name, Buf1, Call1),
+            put_call(Key, Id, Call2),
+            case Hold of
+                true -> Partials;
+                false -> [Event | Partials]
+            end
     end.
 
-on_end(Key, OnArgs, Hold, Event) ->
+on_end(Key, Opts, Event) ->
+    OnArgs = maps:get(on_args, Opts),
+    Hold = maps:get(hold_start, Opts, false),
     Id = maps:get(<<"toolCallId">>, Event, undefined),
     case take_call(Key, Id) of
         undefined ->
@@ -172,6 +194,49 @@ safe_on_args(OnArgs, Id, Name, Args) ->
     catch
         Class:Reason:Stack ->
             logger:warning("beamai_agui plugin on_args crashed: ~p:~p", [Class, Reason],
+                           #{stacktrace => Stack}),
+            []
+    end.
+
+%% @private 流式中间态：攒够 `partial_every` 字节扫一次，内容没变不发
+%%
+%% **没配 `on_partial` 就什么都不做** —— 这条路是 2026-10 新加的，不该凭空改变
+%% 既有插件的事件序列。
+partial_events(Opts, Id, Name, Buf, Call) ->
+    OnPartial = maps:get(on_partial, Opts, undefined),
+    Scanned = maps:get(scanned, Call, 0),
+    case is_function(OnPartial, 3)
+         andalso iolist_size(Buf) - Scanned >= partial_every(Opts) of
+        false ->
+            {[], Call};
+        true ->
+            case beamai_agui_json_prefix:parse_prefix(iolist_to_binary(Buf)) of
+                {ok, Prefix} when is_map(Prefix) ->
+                    case Prefix =/= maps:get(prefix, Call, none) of
+                        false ->
+                            {[], Call#{scanned => iolist_size(Buf)}};
+                        true ->
+                            Events = safe_on_partial(OnPartial, Id, Name, Prefix),
+                            {Events, Call#{scanned => iolist_size(Buf),
+                                           prefix => Prefix}}
+                    end;
+                _Other ->
+                    %% 无效前缀也要推进节流位，否则每个 delta 都重复扫坏输入
+                    {[], Call#{scanned => iolist_size(Buf)}}
+            end
+    end.
+
+%% @private 中间态的节流粒度（字节）
+partial_every(Opts) ->
+    maps:get(partial_every, Opts, 200).
+
+safe_on_partial(OnPartial, Id, Name, Prefix) ->
+    try OnPartial(Id, Name, Prefix) of
+        Events when is_list(Events) -> Events;
+        _ -> []
+    catch
+        Class:Reason:Stack ->
+            logger:warning("beamai_agui plugin on_partial crashed: ~p:~p", [Class, Reason],
                            #{stacktrace => Stack}),
             []
     end.

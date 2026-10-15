@@ -523,9 +523,13 @@ happy（ClojureScript + UIx 的 AG-UI 客户端）拿 `beamai_agui/1.1` 做联�
   `subagent_lane_timeout`（缺省 10 分钟）。代价：spawn 工具结果里要认出子 agent 的
   id，认不出就退到兜底；`restart_subagent` 复用旧 spec，重跑事件静默丢弃。
   两个用例覆盖「工具进程死后 lane 仍在」与「被 kill 也收口」。
-- [ ] **插件的中间态**。三个 activity 插件都在参数到齐时一次翻译；「边生成边长
-  出来」要把 `TOOL_CALL_ARGS` 的片段做增量 JSON 扫描（clj 那边有一个现成的
-  `scanner` 可照抄）。
+- [x] **插件的中间态**。A2UI 已能边流边贴：公共 `tool_watcher` 新增可选
+  `on_partial` / `partial_every`（缺省 200 字节），`beamai_agui_json_prefix` 用
+  切点法扫 `TOOL_CALL_ARGS` —— 找最近一个完整值，补闭合括号后交给 `json:decode/1`，
+  不写增量 parser。数字/字面量等分隔符，字符串转义不误判结构；内容没变不发。
+  同一 `messageId` + `replace: true` 让前端整块替换，组件树单调增长，终态仍在
+  `TOOL_CALL_END` 后带 data。Open Generative UI 需要固定字段顺序与完成标记，
+  MCP Apps 由 tool result 驱动，两者不配 `on_partial`，行为不变。
 
 ### 待办·验证
 

@@ -48,8 +48,9 @@
 %%% == 与上游的两处差异 ==
 %%%
 %%% 1. 上游从流式 tool-call 参数里增量抠出「已经完整的那几个组件」，一边生成一边
-%%%    往面上贴。我们攒到 `TOOL_CALL_END` 一次翻译（见 `beamai_agui_plugin` 模块头），
-%%%    **一条快照发完** —— 形状与顺序一致，少的是中间态；
+%%%    往面上贴。我们的形状与顺序一致：`event_transform/0` 缺省配了 `on_partial`，
+%%%    用 `beamai_agui_json_prefix` 扫半截参数，组件写到哪贴到哪 —— 同一个
+%%%    messageId + `replace: true`，前端整块换掉，中间态与终态共用一条路；
 %%% 2. 上游把用户动作合成成一次工具调用 + 工具结果塞进历史。我们的历史是服务端
 %%%    权威（客户端塞不进消息），所以翻成一条**用户消息** —— 语义相同，路径不同。
 %%%
@@ -186,7 +187,30 @@ event_transform(Opts) ->
     CatalogId = maps:get(catalog_id, Opts, ?CATALOG_ID),
     beamai_agui_plugin:tool_watcher(
       #{tools => [Name],
-        on_args => fun(ToolCallId, _N, Args) -> [surface_event(ToolCallId, Args, CatalogId)] end}).
+        on_args => fun(ToolCallId, _N, Args) -> [surface_event(ToolCallId, Args, CatalogId)] end,
+        on_partial => fun(ToolCallId, _N, Args) ->
+            partial_surface_event(ToolCallId, Args, CatalogId)
+        end}).
+
+%% @private 流式中间态：组件写到哪就先贴到哪
+%%
+%% 与终态是**同一个 messageId** + `replace: true` —— 前端整块换掉，组件树于是
+%% 一点点长出来，终态那次覆盖成完整的一份。两条门槛：
+%%
+%% 1. `surfaceId` 还没写出来就不发 —— 半截参数拿缺省面 "default" 建出来的面，
+%%    终态换成真 id 时旧面收不回去，前端会留下一张空面；
+%% 2. `components` 一个都还没有就不发 —— 空面闪一下没有信息量。
+partial_surface_event(ToolCallId, Args, CatalogId) ->
+    Components = case maps:get(<<"components">>, Args, undefined) of
+                     L when is_list(L), L =/= [] -> L;
+                     _ -> []
+                 end,
+    case {maps:is_key(<<"surfaceId">>, Args), Components =/= []} of
+        {true, true} ->
+            [surface_event(ToolCallId, Args, CatalogId)];
+        _ ->
+            []
+    end.
 
 %%====================================================================
 %% 入站：用户在生成出来的界面上点了什么

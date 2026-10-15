@@ -527,6 +527,11 @@ token 成本和暴露面必须由宿主显式承担。
 
 插件自己抛异常不会把 run 带走：它是旁路增强，出事就退回原事件。
 
+`beamai_agui_plugin:tool_watcher/1` 还收可选的 `on_partial` 和 `partial_every`
+（缺省 200 字节）。`on_partial` 在流式 `TOOL_CALL_ARGS` 的**已写完前缀**上调用；
+前缀扫描不是手写增量 parser，而是 `beamai_agui_json_prefix` 找最近一个完整值切点，
+补闭合括号后交给 `json:decode/1`。不配 `on_partial` 就完全保持旧行为。
+
 ## 多模态输入
 
 客户端可能把 `content` 发成一个部件数组。runtime 把其中的文本部件拼起来往下走，
@@ -560,6 +565,10 @@ beamai_agent:new(maps:merge(beamai_agui_a2ui:with_tool(#{chat_client => K}), Run
 op：`createSurface` → `updateComponents` → `updateDataModel`。**顺序是协议要求的**，
 少一条或反了，前端要么空白要么报「surface 不存在」。
 
+参数流式到达时，A2UI 缺省就会发中间态：只要 `surfaceId` 和至少一个组件已经写完，
+就用同一个 `messageId`、`replace: true` 整块替换；组件写到哪，面就先长到哪。
+终态仍在 `TOOL_CALL_END` 后发出，包含完整组件树和 data。
+
 缺省 catalog 是 A2UI v0.9 基础 catalog 的 18 个组件。**换成你前端真正注册的那份**
 （`with_tool/2` 的 `catalog`）—— catalog 是模型的词汇表，报了前端没有的组件，渲染
 就是空白。
@@ -591,11 +600,11 @@ op：`createSurface` → `updateComponents` → `updateDataModel`。**顺序是�
 
 哪些工具带 UI 在**装配期**算一次（`app_tools/1`），不每轮再问 server。
 
-### 一处与上游的共同差异
+### 中间态差异
 
-三个插件都在 `TOOL_CALL_END` 才翻译（攒齐参数片段再一次解析），而不是边流边贴。
-事件的**形状与顺序**与上游逐条一致，少的是中间态。理由在 `beamai_agui_plugin`
-模块头。
+A2UI 已按上游的意图边流边贴。Open Generative UI 仍等参数到齐后重排键并生成
+patch —— 它的中间态要维护固定字段顺序和完成标记，先不做半截猜测。MCP Apps 由
+tool **result** 驱动，没有参数流可贴。
 
 ## 子 agent lane
 
@@ -717,8 +726,8 @@ chunk 形状认得出吗、模型看得懂插件的提示词吗、它真会去�
 3. **`/threads/:id/messages`**。对话历史归 chat memory，而那层协议没有「列出某个
    会话的消息」的入口 —— 造一个就等于建第二个真相店。会话里那份消息账本只是
    **这条流自己的投影**（用来补缺口），不当历史用。
-4. **插件的中间态**。三个 activity 插件都在参数到齐时一次翻译，没有「边生成边
-   长出来」。
+4. **Open Generative UI 的参数中间态**。A2UI 已能边流边贴；genui 仍等参数到齐后
+   重排字段并生成 patch。
 
 ## 实机验证
 

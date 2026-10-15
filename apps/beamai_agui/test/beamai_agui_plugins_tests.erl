@@ -148,6 +148,33 @@ a2ui_event_transform_test() ->
     ?assertEqual([<<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_ARGS">>,
                   <<"TOOL_CALL_END">>, <<"ACTIVITY_SNAPSHOT">>], types(Out)).
 
+%% 中间态：参数还在流式落地时，组件就该一点点长出来；终态仍在 END 后整块覆盖。
+a2ui_partial_event_transform_test() ->
+    T = beamai_agui_a2ui:event_transform(),
+    Id = <<"c1">>,
+    Events =
+        [beamai_agui_event:tool_call_start(Id, <<"render_a2ui">>, <<"msg-1">>),
+         beamai_agui_event:tool_call_args(Id, a2ui_chunk1()),
+         beamai_agui_event:tool_call_args(Id, a2ui_chunk2()),
+         beamai_agui_event:tool_call_args(Id, a2ui_chunk3()),
+         beamai_agui_event:tool_call_end(Id)],
+    Out = feed(T, Events),
+    Snapshots = pick(<<"ACTIVITY_SNAPSHOT">>, Out),
+
+    ?assertEqual(2, length(Snapshots)),
+    ?assertEqual([<<"TOOL_CALL_START">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_ARGS">>,
+                  <<"ACTIVITY_SNAPSHOT">>, <<"TOOL_CALL_ARGS">>, <<"TOOL_CALL_END">>,
+                  <<"ACTIVITY_SNAPSHOT">>], types(Out)),
+    ?assertEqual([<<"a2ui-surface-c1">>, <<"a2ui-surface-c1">>],
+                 [maps:get(<<"messageId">>, S) || S <- Snapshots]),
+    ?assert(lists:all(fun(S) -> maps:get(<<"replace">>, S) end, Snapshots)),
+
+    Counts = [components_count(S) || S <- Snapshots],
+    ?assertEqual([4, 5], Counts),
+    ?assertEqual(Counts, lists:sort(Counts)),
+    FinalOps = operations(lists:last(Snapshots)),
+    ?assert(lists:any(fun(Op) -> maps:is_key(<<"updateDataModel">>, Op) end, FinalOps)).
+
 %% catalog 是模型的词汇表，也是「编不出别的组件」的保证 —— 它必须进 prompt
 a2ui_with_tool_injects_catalog_test() ->
     Config = beamai_agui_a2ui:with_tool(client_config(<<"You are Bob.">>)),
@@ -182,6 +209,27 @@ a2ui_input_transform_noop_test() ->
 op_name(Op) ->
     [Name] = [K || K <- maps:keys(Op), K =/= <<"version">>],
     Name.
+
+operations(Snapshot) ->
+    maps:get(<<"a2ui_operations">>, maps:get(<<"content">>, Snapshot)).
+
+components_count(Snapshot) ->
+    [Op] = [Op || Op <- operations(Snapshot), maps:is_key(<<"updateComponents">>, Op)],
+    length(maps:get(<<"components">>, maps:get(<<"updateComponents">>, Op))).
+
+%% 三片拼成一份超过 200 字节的参数；切点都在完整 component 后。
+a2ui_chunk1() ->
+    <<"{\"surfaceId\":\"s1\",\"components\":["
+      "{\"id\":\"root\",\"component\":\"Column\",\"children\":[\"title\",\"row\"]},"
+      "{\"id\":\"title\",\"component\":\"Text\",\"text\":\"Overview\",\"variant\":\"h2\"},">>.
+
+a2ui_chunk2() ->
+    <<"{\"id\":\"row\",\"component\":\"Row\",\"children\":[\"c1\",\"c2\"]},"
+      "{\"id\":\"c1\",\"component\":\"Text\",\"text\":\"first\"},">>.
+
+a2ui_chunk3() ->
+    <<"{\"id\":\"c2\",\"component\":\"Text\",\"text\":\"second\"}],"
+      "\"data\":{\"kpi\":\"revenue\"}}">>.
 
 %%====================================================================
 %% MCP Apps
