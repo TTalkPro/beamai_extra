@@ -317,7 +317,7 @@ beamai_agent:new(maps:merge(
 ```
 cd examples && make compile
 D=/tmp/agui_durable_demo
-E="../_build/default/lib:../_build/default/checkouts"
+E="../_build/default/lib:../_build/default/lib/beamai_core/apps:../_build/default/lib/beamai_llm/apps:../_build/default/lib/beamai_agent/apps:../_build/default/checkouts"
 P="_build/default/lib/beamai_examples/ebin"
 ERL_LIBS=$E erl -noshell -pa $P -eval "example_agui_durable:phase1(\"$D\")"
 ERL_LIBS=$E erl -noshell -pa $P -eval "example_agui_durable:phase2(\"$D\")"
@@ -563,7 +563,7 @@ API key**（LLM 由 `example_agui_scripted` 照剧本演）：
 
 ```
 cd examples && make compile
-ERL_LIBS=../_build/default/lib:../_build/default/checkouts rebar3 shell
+ERL_LIBS=../_build/default/lib:../_build/default/lib/beamai_core/apps:../_build/default/lib/beamai_llm/apps:../_build/default/lib/beamai_agent/apps:../_build/default/checkouts rebar3 shell
 1> example_agui_full:run().           %% 九个场景
 2> example_agui_full:run(reconnect).  %% 只跑一个
 ```
@@ -630,7 +630,7 @@ chunk 形状认得出吗、模型看得懂插件的提示词吗、它真会去�
 
 ```
 cd examples && make compile
-ERL_LIBS=../_build/default/lib:../_build/default/checkouts rebar3 shell
+ERL_LIBS=../_build/default/lib:../_build/default/lib/beamai_core/apps:../_build/default/lib/beamai_llm/apps:../_build/default/lib/beamai_agent/apps:../_build/default/checkouts rebar3 shell
 1> example_agui_live:run().          %% MiniMax m2.7
 2> example_agui_live:run(zhipu).     %% ZHIPU glm-5.3-flash
 ```

@@ -6,7 +6,7 @@
 %%%
 %%% ```
 %%% cd examples && make compile
-%%% ERL_LIBS=../_build/default/lib:../_build/default/checkouts rebar3 shell
+%%% ERL_LIBS=../_build/default/lib:../_build/default/lib/beamai_core/apps:../_build/default/lib/beamai_llm/apps:../_build/default/lib/beamai_agent/apps:../_build/default/checkouts rebar3 shell
 %%% 1> example_agui_full:run().              %% 九个场景，离线，约 3 秒
 %%% 2> example_agui_full:run(reconnect).     %% 只跑一个
 %%% 3> example_agui_full:scenarios().        %% 有哪些
