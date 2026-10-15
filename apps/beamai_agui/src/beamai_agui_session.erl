@@ -50,7 +50,7 @@
 
 -export([start_link/1]).
 -export([start_run/3, start_run/4, subscribe/2, unsubscribe/2]).
--export([stop_run/1, stop_run/2, status/1, events/1, state/1, awaiting/1]).
+-export([stop_run/1, stop_run/2, status/1, events/1, state/1]).
 -export([messages/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
@@ -158,14 +158,6 @@ state(Session) ->
     case call(Session, state) of
         {error, _} -> #{};
         State -> State
-    end.
-
-%% @doc 在等哪次调用的回话（会话进程内的缓存，权威仍是 pause_store）
--spec awaiting(pid() | binary()) -> map() | undefined.
-awaiting(Session) ->
-    case call(Session, awaiting) of
-        {error, _} -> undefined;
-        Awaiting -> Awaiting
     end.
 
 %% @doc 从事件流折出来的消息列表（AG-UI `Message` 形状）

@@ -4,6 +4,16 @@
 %%% 事件是**带 binary 键的 map**，形状即 AG-UI 线上格式（BaseEvent 的
 %%% `type` / `timestamp` 加各事件自己的字段），可直接 json 编码。
 %%%
+%%% == 代理层用的 chunk 构造器 ==
+%%%
+%%% runtime 自己发显式三件套 / `TOOL_CALL_ARGS`，但有些代理层只能转发不带边界的
+%%% provider token 流，那时 chunk 事件才是对的表达：
+%%%
+%%% ```erlang
+%%% Chunk = beamai_agui_event:text_message_chunk(<<"m1">>, <<"hel">>),
+%%% ToolChunk = beamai_agui_event:tool_call_chunk(<<"c1">>, <<"lookup">>, <<"{">>, <<"m1">>).
+%%% ```
+%%%
 %%% == SSE 帧 ==
 %%%
 %%% AG-UI 的 SSE 帧**不带 event 名**，只有 `data:` 一行 —— 事件类型在 JSON 的
@@ -29,7 +39,7 @@
 -export([activity_snapshot/3, activity_snapshot/4, activity_delta/3]).
 -export([subagent_started/1, subagent_finished/1, subagent_error/3]).
 -export([text_message_chunk/2, text_message_chunk/3, tool_call_chunk/2, tool_call_chunk/4]).
--export([custom/2, raw/1, tag/2]).
+-export([custom/2, tag/2]).
 
 %% 断言
 -export([type_of/1, is_terminal/1]).
@@ -352,11 +362,6 @@ tool_call_chunk(ToolCallId, ToolCallName, Delta, ParentMessageId) ->
 -spec custom(binary(), term()) -> event().
 custom(Name, Value) ->
     new(<<"CUSTOM">>, #{<<"name">> => Name, <<"value">> => Value}).
-
-%% @doc 原样透传的 provider 事件
--spec raw(term()) -> event().
-raw(Event) ->
-    new(<<"RAW">>, #{<<"event">> => Event}).
 
 %% @doc 给一条事件补几个字段（已有的不覆盖）
 %%

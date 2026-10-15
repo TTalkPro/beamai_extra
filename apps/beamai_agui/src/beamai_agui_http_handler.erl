@@ -57,9 +57,9 @@
 -export([handle_threads/1, handle_thread/2, handle_thread_messages/2,
          handle_thread_events/2, handle_thread_state/2,
          handle_thread_stop/2, handle_thread_delete/2]).
--export([sse_headers/0, sse_headers/1, json_headers/0, json_headers/1]).
--export([cors_headers/0, cors_headers/1, cors_origins/1]).
--export([json_response/2, since_of/2, run_opts/1]).
+-export([sse_headers/0, json_headers/0]).
+-export([cors_headers/0, cors_headers/1]).
+-export([since_of/2, run_opts/1]).
 
 -type config() :: #{
     %% 该端点固定服务的 agent 名；不给则从 forwardedProps.agent 取
@@ -273,6 +273,7 @@ handle_thread_delete(ThreadId, _Query) ->
 -spec sse_headers() -> [{binary(), binary()}].
 sse_headers() -> sse_headers(#{}).
 
+%% @private 有配置的版本只给本模块装配流响应用。
 -spec sse_headers(config()) -> [{binary(), binary()}].
 sse_headers(Config) ->
     [{<<"content-type">>, <<"text/event-stream">>},
@@ -280,10 +281,11 @@ sse_headers(Config) ->
      {<<"connection">>, <<"keep-alive">>},
      {<<"x-accel-buffering">>, <<"no">>}] ++ cors_headers(Config).
 
-%% @doc JSON 响应头
+%% @doc JSON 响应头（缺省配置，供适配器复用）。
 -spec json_headers() -> [{binary(), binary()}].
 json_headers() -> json_headers(#{}).
 
+%% @private 有配置的版本只给本模块装配 JSON 响应用。
 -spec json_headers(config()) -> [{binary(), binary()}].
 json_headers(Config) ->
     [{<<"content-type">>, <<"application/json">>}] ++ cors_headers(Config).
@@ -328,7 +330,7 @@ cors_headers(Config) ->
             [{<<"vary">>, <<"origin">>} | allow_origin(Config, Allowed) ++ Base]
     end.
 
-%% @doc 这个端点允许哪些源
+%% @private 这个端点允许哪些源
 %%
 %% 端点配置 > 应用环境 > `any`。应用环境这一层是给「整台服务一个口径」用的：
 %% ```erlang
@@ -359,7 +361,7 @@ allow_origin(Config, Allowed) ->
 %% 辅助（供适配器复用）
 %%====================================================================
 
-%% @doc 组装一个 JSON 响应
+%% @private JSON 端点统一经 cowboy_handler 落地。
 -spec json_response(pos_integer(), map()) -> {ok, binary(), [{binary(), binary()}]}.
 json_response(_Status, Body) ->
     {ok, beamai_utils:encode_json(Body), json_headers()}.

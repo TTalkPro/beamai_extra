@@ -21,6 +21,23 @@ tool_call_start_optional_parent_test() ->
     WithParent = beamai_agui_event:tool_call_start(<<"c1">>, <<"t">>, <<"m1">>),
     ?assertEqual(<<"m1">>, maps:get(<<"parentMessageId">>, WithParent)).
 
+%% 代理层可能只能转发不带边界的 token 流；chunk 构造器保留给这类宿主。
+text_message_chunk_test() ->
+    Ev = beamai_agui_event:text_message_chunk(<<"m1">>, <<"hel">>),
+    ?assertEqual(<<"TEXT_MESSAGE_CHUNK">>, maps:get(<<"type">>, Ev)),
+    ?assertEqual(<<"hel">>, maps:get(<<"delta">>, Ev)),
+    ?assertEqual(<<"assistant">>, maps:get(<<"role">>, Ev)),
+    WithRole = beamai_agui_event:text_message_chunk(<<"m1">>, <<"hel">>, <<"reasoning">>),
+    ?assertEqual(<<"reasoning">>, maps:get(<<"role">>, WithRole)).
+
+tool_call_chunk_test() ->
+    Ev = beamai_agui_event:tool_call_chunk(<<"c1">>, <<"lookup">>, <<"{">>, <<"m1">>),
+    ?assertEqual(<<"TOOL_CALL_CHUNK">>, maps:get(<<"type">>, Ev)),
+    ?assertEqual(<<"c1">>, maps:get(<<"toolCallId">>, Ev)),
+    ?assertEqual(<<"lookup">>, maps:get(<<"toolCallName">>, Ev)),
+    ?assertEqual(<<"{">>, maps:get(<<"delta">>, Ev)),
+    ?assertEqual(<<"m1">>, maps:get(<<"parentMessageId">>, Ev)).
+
 %% SSE 帧只有 data 一行、以空行收尾——AG-UI 不用具名事件
 sse_frame_shape_test() ->
     Frame = beamai_agui_event:to_sse(

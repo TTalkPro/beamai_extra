@@ -10,7 +10,7 @@
 
 -export([parse_run_input/1]).
 -export([thread_id/1, run_id/1, parent_run_id/1, messages/1, tools/1, state/1]).
--export([context/1, resume/1, forwarded_props/1]).
+-export([resume/1, forwarded_props/1]).
 -export([agent_name/1, last_user_message/1, resume_input/2]).
 -export([context_prompt/1, content_to_text/1, frontend_tool_names/1]).
 
@@ -84,7 +84,7 @@ state(#{state := V}) -> V.
 -spec forwarded_props(run_input()) -> map().
 forwarded_props(#{forwarded_props := V}) -> V.
 
-%% @doc 前端注册的本轮环境说明（`useAgentContext`）
+%% @private 前端注册的本轮环境说明（`useAgentContext`）
 -spec context(run_input()) -> [map()].
 context(#{context := V}) -> V;
 context(_) -> [].

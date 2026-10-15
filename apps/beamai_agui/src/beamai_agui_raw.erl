@@ -41,14 +41,14 @@
 %%%-------------------------------------------------------------------
 -module(beamai_agui_raw).
 
--export([translator/0, translate/2]).
+-export([translator/0]).
 
 %% @doc 交给 beamai_agui_emitter 的 raw_translator
 -spec translator() -> fun((map(), beamai_agui_emitter:emitter()) -> ok).
 translator() ->
     fun(Event, Emitter) -> translate(Event, Emitter) end.
 
-%% @doc 翻译一个 provider 原始 chunk（认不出则 no-op）
+%% @private 翻译一个 provider 原始 chunk（认不出则 no-op）
 -spec translate(term(), beamai_agui_emitter:emitter()) -> ok.
 %% --- OpenAI 系 ---
 translate(#{<<"choices">> := [#{<<"delta">> := Delta} | _]}, E) when is_map(Delta) ->

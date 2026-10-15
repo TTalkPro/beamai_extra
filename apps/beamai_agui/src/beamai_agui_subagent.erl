@@ -18,6 +18,12 @@
 %%%   └── 包住整个工具的 handler：跑完按结果发 SUBAGENT_FINISHED / SUBAGENT_ERROR
 %%% ```
 %%%
+%%% fan-out 的入口是：
+%%%
+%%% ```erlang
+%%% Tool = beamai_agui_subagent:fanout_tool(Config, Observer).
+%%% ```
+%%%
 %%% 上游一个字都不用改。`fanout_tool` 同样成立 —— 它对每个子任务调一次
 %%% `subagent` fn，于是每个子任务自然得到一条自己的 lane。
 %%%
@@ -61,7 +67,7 @@
 -module(beamai_agui_subagent).
 
 -export([enabled/0, observer/1]).
--export([delegate_tool/2, fanout_tool/2, with_observer/2]).
+-export([delegate_tool/2, fanout_tool/2]).
 
 %% 一次工具调用期间开出来的 lane（进程字典，见模块头）
 -define(LANES, {?MODULE, lanes}).
@@ -109,7 +115,7 @@ fanout_tool(Config, undefined) ->
 fanout_tool(Config, Observer) ->
     wrap(beamai_agent_delegate:fanout_tool(with_observer(Config, Observer)), Observer).
 
-%% @doc 只包 `subagent` fn（不包 handler）
+%% @private 只包 `subagent` fn（不包 handler）
 %%
 %% 给自己拼委派工具的宿主用：lane 开了、事件也发，只是没有 `SUBAGENT_FINISHED`
 %% （那要知道工具什么时候跑完，得由包住 handler 的那一层给）。

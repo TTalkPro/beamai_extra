@@ -33,7 +33,7 @@
 %%%-------------------------------------------------------------------
 -module(beamai_agui_mcp_apps).
 
--export([activity_type/0, ui_resource/1, server_id_of/1, app_tools/1]).
+-export([activity_type/0, app_tools/1]).
 -export([event_transform/1]).
 -export([proxy_allowed_methods/0, proxy_request/2]).
 
@@ -58,7 +58,7 @@ proxy_allowed_methods() ->
 %% 哪些工具带 UI
 %%====================================================================
 
-%% @doc 一个工具的 UI 资源 URI（不带就是普通工具）
+%% @private 一个工具的 UI 资源 URI（不带就是普通工具）
 %%
 %% MCP 把它放在工具的 `_meta` 里，键是 `ui/resourceUri`。atom 键与 binary 键都认 ——
 %% 从 wire 上解出来的是 binary，宿主手写的可能是 atom。
@@ -75,7 +75,7 @@ ui_resource(Tool) when is_map(Tool) ->
 ui_resource(_) ->
     undefined.
 
-%% @doc 工具属于哪个 server（`_meta` 里的 `server_id`，装配时由宿主打上）
+%% @private 工具属于哪个 server（`_meta` 里的 `server_id`，装配时由宿主打上）
 -spec server_id_of(map()) -> binary() | undefined.
 server_id_of(Tool) when is_map(Tool) ->
     case meta_of(Tool) of

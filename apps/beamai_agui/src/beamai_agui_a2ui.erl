@@ -57,10 +57,10 @@
 %%%-------------------------------------------------------------------
 -module(beamai_agui_a2ui).
 
--export([tool_name/0, activity_type/0, catalog_id/0, basic_catalog/0]).
--export([render_tool/0, render_tool/1, with_tool/1, with_tool/2]).
+-export([tool_name/0, activity_type/0, basic_catalog/0]).
+-export([render_tool/1, with_tool/1, with_tool/2]).
 -export([event_transform/0, event_transform/1]).
--export([input_transform/0, user_action_message/1]).
+-export([input_transform/0]).
 -export([surface_ops/2, surface_event/3]).
 
 -define(TOOL_NAME, <<"render_a2ui">>).
@@ -82,21 +82,14 @@ tool_name() -> ?TOOL_NAME.
 -spec activity_type() -> binary().
 activity_type() -> ?ACTIVITY_TYPE.
 
-%% @doc A2UI v0.9 基础 catalog 的 id
--spec catalog_id() -> binary().
-catalog_id() -> ?CATALOG_ID.
-
 %%====================================================================
 %% 工具与 agent 配置
 %%====================================================================
 
-%% @doc `render_a2ui` 的工具定义
+%% @private `render_a2ui` 的工具定义（宿主入口是 with_tool/1,2）。
 %%
-%% **handler 不画任何东西** —— UI 就是参数本身，后台只负责把它翻成 activity 事件；
+%% handler 不画任何东西：UI 就是参数本身，后台只负责把它翻成 activity 事件；
 %% handler 只给模型一个「贴上去了」的回执，好让它继续说话。
--spec render_tool() -> map().
-render_tool() -> render_tool(?TOOL_NAME).
-
 -spec render_tool(binary()) -> map().
 render_tool(Name) ->
     #{name => Name,
@@ -199,7 +192,7 @@ event_transform(Opts) ->
 %% 入站：用户在生成出来的界面上点了什么
 %%====================================================================
 
-%% @doc `forwardedProps.a2uiAction.userAction` → 一句喂回模型的话
+%% @private `forwardedProps.a2uiAction.userAction` → 一句喂回模型的话
 -spec user_action_message(map()) -> binary().
 user_action_message(Action) ->
     Name = get_str(Action, <<"name">>, <<"unknown_action">>),
