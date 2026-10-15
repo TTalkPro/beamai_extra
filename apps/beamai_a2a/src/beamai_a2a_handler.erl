@@ -29,15 +29,7 @@
 -module(beamai_a2a_handler).
 
 %% API 导出
--export([
-    %% 请求分发
-    dispatch/3,
-
-
-
-    %% Push 通知配置
-    handle_push_config_delete/3
-]).
+-export([dispatch/3]).
 
 -include_lib("beamai_core/include/beamai_common.hrl").
 
