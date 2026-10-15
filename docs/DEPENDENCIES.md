@@ -6,6 +6,21 @@
 
 ## 外部依赖
 
+### 上游 BeamAI 锁定策略
+
+`rebar.config` 中的三个上游依赖使用 `{branch, "main"}` 声明源；但实际构建版本以
+提交过的 `rebar.lock` 为准。不要只改分支声明而不提交 lock，也不要在 CI 或发布构建中
+用临时参数绕过 lock。
+
+升级上游时必须显式刷新依赖、运行根项目与 examples 的验证矩阵，并把新的
+`rebar.lock` 和解析到的上游 commit 一起提交到发布说明。
+
+可用以下只读命令验证并输出三个上游锁定 commit：
+
+```bash
+escript scripts/check_dependency_lock.escript rebar.lock
+```
+
 ### 运行时依赖
 
 | 依赖包 | 版本 | 用途 |
