@@ -22,43 +22,43 @@
 
 ### A2. 将 xref 调整为框架库检查集
 
-- [ ] 在根 `rebar.config` 增加显式 `{xref_checks, [...]}`。
-- [ ] 保留 `undefined_function_calls`、`undefined_functions`、`locals_not_used`、
+- [x] 在根 `rebar.config` 增加显式 `{xref_checks, [...]}`。
+- [x] 保留 `undefined_function_calls`、`undefined_functions`、`locals_not_used`、
   `deprecated_function_calls`、`deprecated_functions`。
-- [ ] 显式不启用 `exports_not_used`，理由写入配置注释。
-- [ ] `rebar3 xref` 返回 0。
+- [x] 显式不启用 `exports_not_used`，理由写入配置注释。
+- [x] `rebar3 xref` 返回 0。
 
 验收：
 
-- [ ] `rebar3 xref` 不再因公共导出未使用而失败。
-- [ ] `rebar3 check` 可以继续执行到 dialyzer。
+- [x] `rebar3 xref` 不再因公共导出未使用而失败。
+- [x] `rebar3 check` 可以继续执行到 dialyzer。
 
 ### A3. 修复 MCP tool handler 防御分支
 
-- [ ] 在 `beamai_mcp_server` 增加私有 `call_tool_handler/2`。
-- [ ] 该函数 contract 接收 `fun((map()) -> term())`，返回 `term()`。
-- [ ] `handle_tools_call/2` 改经该函数调用 handler。
-- [ ] 保留 `{ok, _}`、`{error, _}`、unknown shape、exception 四类处理。
-- [ ] 新增回归测试：handler 返回非 `{ok,_}/{error,_}` 形状时，服务端响应
+- [x] 在 `beamai_mcp_server` 增加私有 `call_tool_handler/2`。
+- [x] 该函数 contract 接收 `fun((map()) -> term())`，返回 `term()`。
+- [x] `handle_tools_call/2` 改经该函数调用 handler。
+- [x] 保留 `{ok, _}`、`{error, _}`、unknown shape、exception 四类处理。
+- [x] 新增回归测试：handler 返回非 `{ok,_}/{error,_}` 形状时，服务端响应
   `isError => true` 且 server 不崩溃。
-- [ ] 新增或调整测试：handler 正常返回 `{ok,_}` / `{error,_}` 的行为不变。
+- [x] 新增或调整测试：handler 正常返回 `{ok,_}` / `{error,_}` 的行为不变。
 
 验收：
 
-- [ ] `rebar3 dialyzer` 无 `beamai_mcp_server.erl:444` 告警。
-- [ ] `rebar3 eunit --app=beamai_mcp` 通过。
+- [x] `rebar3 dialyzer` 无 `beamai_mcp_server.erl:444` 告警。
+- [x] `rebar3 eunit --app=beamai_mcp` 通过。
 
 ### A4. 全量门禁验证
 
-- [ ] `rebar3 compile`。
-- [ ] `rebar3 xref`。
-- [ ] `rebar3 dialyzer`，0 warning。
-- [ ] `rebar3 eunit`，0 failures。
-- [ ] `rebar3 ct`。
+- [x] `rebar3 compile`。
+- [x] `rebar3 xref`。
+- [x] `rebar3 dialyzer`，0 warning。
+- [x] `rebar3 eunit`，0 failures（749 tests）。
+- [x] `rebar3 ct`（当前无 ct 套件，0 tests passed）。
 
 验收：
 
-- [ ] 根项目门禁可从 xref 一路执行到测试，不再被公共导出噪音提前终止。
+- [x] 根项目门禁可从 xref 一路执行到测试，不再被公共导出噪音提前终止。
 
 提交约定：
 
@@ -77,28 +77,30 @@
 
 ### B2. 消除重复路径示例
 
-- [ ] 将 examples 内部模块注释中的裸 `ERL_LIBS` 示例收敛为 `make compile` / `make test` / `make shell`。
-- [ ] README 中需要保留底层命令时，引用与 `examples/Makefile` 相同的三类路径。
-- [ ] 不允许出现只包含 `_build/default/lib` 的旧路径。
+- [x] 将 examples 内部模块注释中的裸 `ERL_LIBS` 示例收敛为 `make compile` / `make test` / `make shell`。
+- [x] README 中需要保留底层命令时，引用与 `examples/Makefile` 相同的三类路径。
+- [x] 不允许出现只包含 `_build/default/lib` 的旧路径（`example_agui_durable.erl` 的
+  双进程说明保留完整五段路径，与 Makefile 一致）。
 
 ### B3. 增加可脚本化入口
 
-- [ ] 新增 `scripts/check_examples.sh` 或等价脚本。
-- [ ] 脚本行为：根项目 compile → examples `make test`。
-- [ ] 脚本返回码可被 CI 直接使用。
-- [ ] 脚本不引入根依赖。
+- [x] 新增 `scripts/check_examples.sh` 或等价脚本。
+- [x] 脚本行为：根项目 compile → examples `make test`。
+- [x] 脚本返回码可被 CI 直接使用。
+- [x] 脚本不引入根依赖。
 
 ### B4. CI 集成
 
-- [ ] CI 根任务执行 `rebar3 compile`、`xref`、`dialyzer`、`eunit`、`ct`。
-- [ ] CI examples 任务执行 B3 脚本。
-- [ ] CI 失败日志能区分根项目失败与 examples 加载路径失败。
+- [x] CI 根任务执行 `rebar3 compile`、`xref`、`dialyzer`、`eunit`、`ct`。
+- [x] CI examples 任务执行 B3 脚本。
+- [x] CI 失败日志能区分根项目失败与 examples 加载路径失败（examples 为独立 job，
+  失败日志单独可见）。
 
 验收：
 
-- [ ] 干净 checkout 中 `make -C examples test` 通过。
-- [ ] examples 当前基线 9 tests / 0 failures。
-- [ ] CI 覆盖根项目与 examples。
+- [x] 干净 checkout 中 `make -C examples test` 通过。
+- [x] examples 当前基线 9 tests / 0 failures。
+- [x] CI 覆盖根项目与 examples。
 
 提交约定：
 
@@ -114,21 +116,21 @@
 
 ### C2. 文档化锁定规则
 
-- [ ] 在 README 或依赖文档说明：`rebar.config` 使用 `branch => main` 只表示源，
+- [x] 在 README 或依赖文档说明：`rebar.config` 使用 `branch => main` 只表示源，
   实际构建以 `rebar.lock` 为准。
-- [ ] 说明升级时必须提交新的 `rebar.lock`。
-- [ ] 发布说明需记录解析到的上游 commit。
+- [x] 说明升级时必须提交新的 `rebar.lock`。
+- [x] 发布说明需记录解析到的上游 commit（docs/DEPENDENCIES.md）。
 
 ### C3. lock 完整性检查
 
-- [ ] 增加轻量 escript 或脚本检查 `rebar.lock` 中三个上游依赖存在且 ref 一致。
-- [ ] 可选输出当前锁定 commit，便于发布说明粘贴。
-- [ ] 不自动升级依赖；升级仍由人工触发。
+- [x] 增加轻量 escript 或脚本检查 `rebar.lock` 中三个上游依赖存在且 ref 一致。
+- [x] 可选输出当前锁定 commit，便于发布说明粘贴。
+- [x] 不自动升级依赖；升级仍由人工触发。
 
 验收：
 
-- [ ] 清洁构建无需重新解析上游版本即可复现。
-- [ ] lock 检查脚本在当前仓库通过。
+- [x] 清洁构建无需重新解析上游版本即可复现。
+- [x] lock 检查脚本在当前仓库通过。
 
 提交约定：
 
@@ -140,21 +142,21 @@
 
 ### D1. 生产代码
 
-- [ ] 复核 `examples/src/test_zhipu_anthropic.erl` 的 `truncate/2`。
-- [ ] 确认无外部使用后删除；若仍需保留，补充引用或明确注释。
-- [ ] `rebar3 compile` 后无生产代码告警。
+- [x] 复核 `examples/src/test_zhipu_anthropic.erl` 的 `truncate/2`。
+- [x] 确认无外部使用后删除；若仍需保留，补充引用或明确注释。
+- [x] `rebar3 compile` 后无生产代码告警。
 
 ### D2. 测试代码
 
-- [ ] 删除 `beamai_a2a_client_tests` 中两个未使用 helper。
-- [ ] 将 `beamai_mcp_mock_transport` 中未使用 `State` 改为 `_State`。
-- [ ] 不改变任何测试断言。
+- [x] 删除 `beamai_a2a_client_tests` 中两个未使用 helper。
+- [x] 将 `beamai_mcp_mock_transport` 中未使用 `State` 改为 `_State`。
+- [x] 不改变任何测试断言。
 
 ### D3. 验证
 
-- [ ] `rebar3 compile`。
-- [ ] `rebar3 eunit`。
-- [ ] `make -C examples test`。
+- [x] `rebar3 compile`。
+- [x] `rebar3 eunit`。
+- [x] `make -C examples test`。
 
 提交约定：
 
@@ -206,24 +208,24 @@
 
 ### 根项目
 
-- [ ] `rebar3 compile` 通过。
-- [ ] `rebar3 xref` 通过。
-- [ ] `rebar3 dialyzer` 0 warning。
-- [ ] `rebar3 eunit` 至少 747 tests / 0 failures。
-- [ ] `rebar3 ct` 通过。
+- [x] `rebar3 compile` 通过。
+- [x] `rebar3 xref` 通过。
+- [x] `rebar3 dialyzer` 0 warning。
+- [x] `rebar3 eunit` 至少 747 tests / 0 failures（749 tests）。
+- [x] `rebar3 ct` 通过。
 
 ### examples
 
-- [ ] `make -C examples test` 通过。
-- [ ] examples 至少 9 tests / 0 failures。
-- [ ] examples 加载的是当前根项目 `_build/default` 中的上游 beam。
+- [x] `make -C examples test` 通过。
+- [x] examples 至少 9 tests / 0 failures。
+- [x] examples 加载的是当前根项目 `_build/default` 中的上游 beam。
 
 ### 文档与依赖
 
-- [ ] `designs/downstream_quality_gates.md` 描述所有问题、决策与回滚。
-- [ ] `tasks/downstream_quality_gates.md` 每批有明确验证命令。
-- [ ] `TASK.md` 顶部能发现当前状态和计划入口。
-- [ ] `rebar.lock` 提交且指向明确上游 commit。
+- [x] `designs/downstream_quality_gates.md` 描述所有问题、决策与回滚。
+- [x] `tasks/downstream_quality_gates.md` 每批有明确验证命令。
+- [x] `TASK.md` 顶部能发现当前状态和计划入口。
+- [x] `rebar.lock` 提交且指向明确上游 commit。
 
 ## 完成定义
 

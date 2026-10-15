@@ -14,21 +14,22 @@
   9 tests / 0 failures。
 - [x] `rebar.lock` 已固定 `beamai_core` / `beamai_llm` / `beamai_agent` 到
   上游 `c440eef`。
-- [ ] `xref` 调整为框架库显式检查集：362 条 unused export 属于下游公共 API 噪音，
+- [x] `xref` 调整为框架库显式检查集：362 条 unused export 属于下游公共 API 噪音，
   不做无分类删除。
-- [ ] 修复 `beamai_mcp_server` tool handler 未知返回形状的 dialyzer 告警，
+- [x] 修复 `beamai_mcp_server` tool handler 未知返回形状的 dialyzer 告警，
   并补充 server 不崩溃的回归测试。
-- [ ] examples 构建验证纳入 CI。
-- [ ] 文档化 `branch => main + rebar.lock` 的依赖升级策略。
+- [x] examples 构建验证纳入 CI（`.github/workflows/ci.yml` + `scripts/check_examples.sh`）。
+- [x] 文档化 `branch => main + rebar.lock` 的依赖升级策略
+  （docs/DEPENDENCIES.md + `scripts/check_dependency_lock.escript`）。
 
 ### 门禁基线
 
 | 范围 | 当前验证结果 |
 |---|---|
-| 根项目 | `rebar3 eunit`：747 tests / 0 failures |
+| 根项目 | `rebar3 eunit`：749 tests / 0 failures |
 | examples | `make -C examples test`：9 tests / 0 failures |
-| xref | 362 条 `exports_not_used` 告警，无未定义调用/导出 |
-| dialyzer | 1 条 `beamai_mcp_server.erl:444` 告警 |
+| xref | 显式框架库检查集，0 告警（`exports_not_used` 不启用，另走 API 审计） |
+| dialyzer | 0 warning |
 
 ## AG-UI Runtime（`beamai_agui`）（2026-09-03）
 
