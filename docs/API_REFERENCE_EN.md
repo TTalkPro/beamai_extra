@@ -583,7 +583,7 @@ LLM = test_zhipu_anthropic:create_llm().
 **Advantages:**
 - Configuration reuse: multiple Agents share the same LLM configuration
 - Centralized management: API Key, model parameters unified configuration
-- Provider abstraction: 7 built-in providers + custom provider support
+- Provider abstraction: 11 built-in providers + custom provider support
 - Automatic retry: built-in exponential backoff retry mechanism
 
 ### Configuration and Chat
@@ -626,26 +626,31 @@ Opts = #{
 | Provider | Module | API Mode | Features |
 |----------|--------|----------|----------|
 | `openai` | llm_provider_openai | OpenAI | Chat, streaming, tool calling |
+| `openai_responses` | llm_provider_openai_responses | OpenAI Responses | Chat, streaming, tool calling |
 | `anthropic` | llm_provider_anthropic | Anthropic | Chat, streaming, tool calling |
 | `deepseek` | llm_provider_deepseek | OpenAI compatible | Chat, streaming, tool calling |
 | `zhipu` | llm_provider_zhipu | OpenAI compatible | Chat, streaming, tool calling, async |
 | `dashscope` | llm_provider_dashscope | DashScope native | Chat, streaming, tool calling, web search |
 | `ollama` | llm_provider_ollama | OpenAI compatible | Chat, streaming |
+| `xai` | llm_provider_xai | OpenAI compatible | Chat, streaming, tool calling |
+| `moonshot` / `kimi` | llm_provider_moonshot | OpenAI compatible | Chat, streaming, tool calling |
+| `openrouter` | llm_provider_openrouter | OpenAI compatible | Chat, streaming, tool calling |
+| `siliconflow` | llm_provider_siliconflow | OpenAI compatible | Chat, streaming, tool calling |
 | `mock` | llm_provider_mock | Built-in | Mock LLM for testing |
 | `{custom, Module}` | Custom | Custom | User-defined provider |
 
 ### DeepSeek Detailed Description
 
-DeepSeek Provider uses OpenAI compatible API, supporting `deepseek-chat` and `deepseek-reasoner` models.
+DeepSeek Provider uses the OpenAI-compatible API and supports thinking mode and multimodal input.
 
 **Supported Models:**
-- `deepseek-chat`: General conversation model (default)
-- `deepseek-reasoner`: Reasoning enhanced model
+- `deepseek-flash`: V4.1-Flash (default; thinking and non-thinking modes)
+- `deepseek-v4-pro`: V4-Pro (thinking mode only)
 
 **Configuration Example:**
 ```erlang
 LLM = beamai_chat_model:create(deepseek, #{
-    model => <<"deepseek-chat">>,
+    model => <<"deepseek-flash">>,
     api_key => list_to_binary(os:getenv("DEEPSEEK_API_KEY")),
     max_tokens => 4096
 }).
@@ -680,7 +685,7 @@ LLM = beamai_chat_model:create(Provider, #{
 }).
 ```
 
-**Provider Types:** `openai | anthropic | deepseek | zhipu | dashscope | ollama | mock | {custom, module()}`
+**Provider Types:** `openai | openai_responses | anthropic | deepseek | zhipu | dashscope | ollama | xai | moonshot | kimi | openrouter | siliconflow | mock | {custom, module()}`
 
 **Config Type Marker:** The returned config map includes `'__llm_config__' => true` marker for internal validation.
 

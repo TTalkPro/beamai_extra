@@ -6,7 +6,7 @@
 %%%   - minimax(): MiniMax Anthropic 兼容 API（MiniMax-M2）
 %%%   - claude(): Anthropic 原生 API（Claude Sonnet 4）
 %%%   - zhipu(): Zhipu 原生 API（GLM-4.6）
-%%%   - deepseek(): DeepSeek API（deepseek-chat）
+%%%   - deepseek(): DeepSeek API（deepseek-flash）
 %%%   - openai(): OpenAI 兼容 API（gpt-4）
 %%%
 %%% 环境变量：
@@ -41,7 +41,7 @@
 -define(ANTHROPIC_DEFAULT_MODEL, <<"glm-4.7">>).
 -define(CLAUDE_DEFAULT_MODEL, <<"claude-sonnet-4-20250514">>).
 -define(ZHIPU_DEFAULT_MODEL, <<"glm-4.7">>).
--define(DEEPSEEK_DEFAULT_MODEL, <<"deepseek-chat">>).
+-define(DEEPSEEK_DEFAULT_MODEL, <<"deepseek-flash">>).
 -define(OPENAI_DEFAULT_MODEL, <<"gpt-4">>).
 -define(DEFAULT_MAX_TOKENS, 2048).
 
@@ -191,7 +191,7 @@ deepseek() ->
 %%
 %% Opts 支持:
 %%   - api_key: API Key (必填)
-%%   - model: 模型名 (默认 deepseek-chat)
+%%   - model: 模型名 (默认 deepseek-flash；v4-pro 使用 deepseek-v4-pro)
 %%   - max_tokens: 最大 token 数 (默认 2048)
 -spec deepseek(map()) -> beamai_chat_model:config().
 deepseek(Opts) ->

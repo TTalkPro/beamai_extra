@@ -1,14 +1,14 @@
 # BeamAI Extra - Erlang Agent Framework Extensions
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-26%2B-red.svg)](https://www.erlang.org/)
+[![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-27%2B-red.svg)](https://www.erlang.org/)
 [![Build](https://img.shields.io/badge/build-rebar3-brightgreen.svg)](https://rebar3.org/)
 
 English | [中文](README.md)
 
 A high-performance AI Agent extension framework based on [BeamAI](https://github.com/TTalkPro/beamai), providing a complete Agent development toolkit.
 
-This project depends on the main branch of the [BeamAI core library](https://github.com/TTalkPro/beamai) and includes the following extension features:
+This project depends on the `v2.0.0` tag of the [BeamAI core library](https://github.com/TTalkPro/beamai) and includes the following extension features:
 
 ## Features
 
@@ -17,22 +17,19 @@ This project depends on the main branch of the [BeamAI core library](https://git
   - Tool management and Middleware pipeline
   - Security validation and permission control
 
-- **Simple Agent**: ReAct Agent based on tool loop
+- **Simple Agent (upstream BeamAI)**: ReAct Agent based on tool loop
   - Pure functional API (`new/1` -> `run/2` -> new state)
   - Custom tools, Plugin loading, system prompts
   - 8 callback hooks (turn/llm/tool/token/interrupt/resume)
   - Streaming output (`stream/2`)
   - Interrupt and resume support (Human-in-the-Loop)
-  - Built-in Memory persistence (`save/1`, `restore/2`)
+  - Pluggable cross-turn Memory (window / ETS / DETS / custom provider)
+  - SubAgent delegation and parallel execution
 
-- **Deep Agent**: Recursive planning Agent based on SubAgent architecture
-  - Planner -> Executor -> Reflector pipeline
-  - Parallel subtask execution
-  - Coordinator multi-Agent orchestration
-
-- **Protocol Support**: A2A and MCP
+- **Protocol Support**: A2A, MCP, and AG-UI
   - Agent-to-Agent communication protocol
   - Model Context Protocol integration
+  - Agent event-stream runtime
 
 - **RAG**: Retrieval-Augmented Generation
   - Vector embeddings and similarity search
@@ -128,57 +125,33 @@ K2 = beamai_chat_client:add_tool(K1, #{
 {ok, Result, _} = beamai_agent:run(Agent0, <<"List .erl files in src/">>).
 ```
 
-### 5. Simple Agent (With Memory Persistence)
+### 5. Simple Agent (With Cross-turn Memory)
 
 ```erlang
-%% Create storage backend
-{ok, _} = beamai_store_ets:start_link(my_store, #{}),
-StateStore = beamai_state_store:new({beamai_store_ets, my_store}),
-Mgr = beamai_process_snapshot:new(StateStore),
-Memory = {Mgr, #{thread_id => <<"my-session">>}},
+%% Create an ETS memory backend with a controlled lifecycle
+{ok, _} = beamai_chat_memory_ets:start_link(my_store),
+Memory = {store, beamai_chat_memory_ets:handle(my_store)},
 
-%% Create Agent with Memory (auto_save enables per-turn auto-save)
+%% Agents with the same conversation_id load the same cross-turn history
 {ok, Agent0} = beamai_agent:new(#{
     llm => LLM,
     system_prompt => <<"You are a persistent assistant.">>,
     memory => Memory,
-    auto_save => true
+    conversation_id => <<"my-session">>
 }),
 
-%% Conversation (auto-saved)
+%% User, assistant, and tool messages are persisted after each turn
 {ok, _, Agent1} = beamai_agent:run(Agent0, <<"Remember: the password is 12345">>),
-{ok, _, _Agent2} = beamai_agent:run(Agent1, <<"OK">>),
 
-%% Manual save
-ok = beamai_agent:save(Agent1),
-
-%% Later restore session
-{ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory),
-{ok, Result, _} = beamai_agent:run(RestoredAgent, <<"What's the password?">>).
-%% Agent will remember the password is 12345
-```
-
-### 6. Deep Agent (SubAgent Orchestration)
-
-```erlang
-%% Create Deep Agent configuration (new/1 returns config map directly)
-Config = beamai_deepagent:new(#{
+%% Create another Agent pointed at the same conversation
+{ok, Agent2} = beamai_agent:new(#{
     llm => LLM,
-    max_depth => 3,
-    planning_enabled => true,
-    reflection_enabled => true,
-    system_prompt => <<"You are a research expert.">>,
-    %% Use Tool modules for tools
-    plugins => [beamai_tool_file, beamai_tool_shell]
+    system_prompt => <<"You are a persistent assistant.">>,
+    memory => Memory,
+    conversation_id => <<"my-session">>
 }),
-
-%% Run complex task (Planner -> Executor -> Reflector)
-{ok, Result} = beamai_deepagent:run(Config,
-    <<"Analyze this codebase's architecture and provide optimization suggestions.">>),
-
-%% View execution plan and trace
-Plan = beamai_deepagent:get_plan(Result),
-Trace = beamai_deepagent:get_trace(Result).
+{ok, Result, _Agent3} = beamai_agent:run(Agent2, <<"What's the password?">>).
+%% Agent will remember the password is 12345
 ```
 
 ## Architecture
@@ -193,28 +166,28 @@ beamai (external dependency)
 │   ├── ChatClient         # beamai_chat_client, beamai_tool, beamai_context,
 │   │                  # beamai_filter, beamai_prompt, beamai_result
 │   ├── LLM            # beamai_chat_response (unified LLM response accessors)
-│   ├── Process        # beamai_process, beamai_process_builder,
-│   │                  # beamai_process_runtime, beamai_process_step,
-│   │                  # beamai_process_executor, beamai_process_event
-│   ├── HTTP           # beamai_http, beamai_http_gun, beamai_http_hackney,
-│   │                  # beamai_http_pool
-│   ├── Behaviours     # beamai_llm_behaviour, beamai_http_behaviour,
-│   │                  # beamai_step_behaviour, beamai_process_store_behaviour
-│   ├── Graph          # graph, graph_node, graph_edge, graph_builder, graph_dsl,
-│   │                  # graph_runner, graph_snapshot, graph_state, graph_command
-│   ├── Pregel         # pregel, pregel_master, pregel_worker, pregel_vertex
+│   ├── HTTP           # beamai_http, beamai_http_gun, beamai_http_pool
+│   ├── Memory         # beamai_chat_memory, beamai_memory_provider,
+│   │                  # beamai_chat_memory_ets, beamai_memory_provider_default
+│   ├── Behaviours     # beamai_chat_behaviour, beamai_http_behaviour,
+│   │                  # beamai_chat_memory, beamai_memory_provider
 │   └── Utils          # beamai_id, beamai_jsonrpc, beamai_sse, beamai_utils
 │
 ├── beamai_llm/         # LLM client
 │   ├── Chat           # beamai_chat_model
 │   ├── Parser         # beamai_output_parser, beamai_parser_json
 │   ├── Adapters       # llm_message_adapter, llm_response_adapter, llm_tool_adapter
-│   └── Providers      # OpenAI, Anthropic, DeepSeek, Zhipu, DashScope, Ollama
+│   └── Providers      # OpenAI, OpenAI Responses, Anthropic, DeepSeek, Zhipu,
+│                      # DashScope, Ollama, xAI, Moonshot/Kimi, OpenRouter,
+│                      # SiliconFlow
 │
-└── beamai_memory/      # Memory and context storage
-    ├── Context        # Context management
-    ├── Store          # ETS/SQLite storage backends
-    └── Snapshot       # Snapshots, branching, time travel
+├── beamai_agent/       # SimpleAgent (ReAct loop, callbacks, HITL, SubAgents)
+│   ├── Core           # beamai_agent, beamai_agent_state, beamai_agent_callbacks,
+│   │                  # beamai_agent_event, beamai_agent_interrupt
+│   ├── Memory         # branch / timeline and pause snapshot stores
+│   ├── Execution      # beamai_agent_tool_loop, beamai_tool_calling_manager,
+│   │                  # beamai_tool_batch_worker
+│   └── SubAgents      # beamai_agent_delegate, beamai_subagent_manager
 ```
 
 **Project Extensions:**
@@ -229,20 +202,6 @@ apps/
 │   └── Tools          # beamai_tool_file, beamai_tool_shell,
 │                      # beamai_tool_human, beamai_tool_todo
 │
-├── beamai_agent/       # Agent implementation
-│   ├── Core           # beamai_agent, beamai_agent_state, beamai_agent_callbacks
-│   ├── Memory         # beamai_agent_memory
-│   ├── Execution      # beamai_agent_tool_loop, beamai_agent_interrupt
-│   └── Process Agent  # beamai_process_agent, beamai_process_agent_llm_step,
-│                      # beamai_process_agent_tool_step
-│
-├── beamai_deepagent/   # Deep Agent (SubAgent architecture)
-│   ├── Core           # beamai_deepagent, beamai_deepagent_plan,
-│   │                  # beamai_deepagent_dependencies, beamai_deepagent_trace
-│   └── SubAgents      # beamai_deepagent_planner, beamai_deepagent_executor,
-│                      # beamai_deepagent_reflector, beamai_deepagent_parallel,
-│                      # beamai_deepagent_coordinator
-│
 ├── beamai_a2a/         # A2A protocol implementation
 │   ├── Server         # A2A server
 │   └── Client         # A2A client
@@ -250,6 +209,10 @@ apps/
 ├── beamai_mcp/         # MCP protocol implementation
 │   ├── Server         # MCP server
 │   └── Client         # MCP client
+│
+├── beamai_agui/        # AG-UI protocol implementation
+│   ├── Runtime        # sessions, registry, run orchestration
+│   └── HTTP           # framework-neutral HTTP layer and Cowboy adapter
 │
 └── beamai_rag/         # RAG functionality
     ├── Embeddings     # Vector embeddings
@@ -260,28 +223,29 @@ apps/
 
 ```
 ┌────────────────────────────────────────────────────┐
-│   Agent Implementation Layer (Project Extensions)  │
-│  (beamai_agent, beamai_deepagent)                  │
+│   Agent Implementation Layer (Upstream BeamAI)     │
+│  (beamai_agent)                                    │
 └────────────────┬───────────────────────────────────┘
                  │
 ┌────────────────┴───────────────────────────────────┐
 │   Services Layer (Project Extensions)              │
-│  (beamai_tools, beamai_rag, beamai_a2a, beamai_mcp) │
+│  (beamai_tools, beamai_rag, beamai_a2a,            │
+│   beamai_mcp, beamai_agui)                          │
 └────────────────┬───────────────────────────────────┘
                  │
 ┌────────────────┴───────────────────────────────────┐
 │   Core Layer (from BeamAI external dependency)     │
-│  (beamai_core, beamai_llm, beamai_memory)          │
+│  (beamai_core, beamai_llm, beamai_agent)           │
 │       https://github.com/TTalkPro/beamai           │
 └────────────────────────────────────────────────────┘
 ```
 
 **Dependency Notes:**
-- This project depends on the main branch of [BeamAI](https://github.com/TTalkPro/beamai) via `rebar.config`
-- Core functionality (ChatClient, Process Framework, Graph, LLM, Memory) is provided by BeamAI
-- This project focuses on Agent implementation, protocol support (A2A, MCP), tool system, and RAG features
+- This project depends on the `v2.0.0` tag of [BeamAI](https://github.com/TTalkPro/beamai) via `rebar.config`
+- Core functionality (ChatClient, LLM, SimpleAgent) is provided by BeamAI
+- This project focuses on protocol support (A2A, MCP, AG-UI), the tool system, and RAG features
 
-See [DEPENDENCIES_EN.md](doc/DEPENDENCIES_EN.md) for details
+See [DEPENDENCIES_EN.md](docs/DEPENDENCIES_EN.md) for details
 
 ## Core Concepts
 
@@ -317,24 +281,27 @@ ChatClient2 = beamai_chat_client:add_tool(ChatClient1, Tool),
 
 ### 2. Memory Persistence
 
-Use storage backends for session persistence:
+Use storage backends for cross-turn session persistence:
 
 ```erlang
 %% Create Memory (using ETS storage backend)
-{ok, _} = beamai_store_ets:start_link(my_store, #{}),
-StateStore = beamai_state_store:new({beamai_store_ets, my_store}),
-Mgr = beamai_process_snapshot:new(StateStore),
-Memory = {Mgr, #{thread_id => <<"my-session">>}},
+{ok, _} = beamai_chat_memory_ets:start_link(my_store),
+Memory = {store, beamai_chat_memory_ets:handle(my_store)},
 
-%% Create Agent with memory (auto_save enables per-turn auto-save)
-{ok, Agent0} = beamai_agent:new(#{llm => LLM, memory => Memory, auto_save => true}),
+%% Agents with the same conversation_id share history automatically
+{ok, Agent0} = beamai_agent:new(#{
+    llm => LLM,
+    memory => Memory,
+    conversation_id => <<"my-session">>
+}),
 {ok, _, Agent1} = beamai_agent:run(Agent0, <<"Hello">>),
 
-%% Manual save
-ok = beamai_agent:save(Agent1),
-
-%% Restore session from Memory
-{ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory).
+%% Point a new instance at the same conversation_id to continue
+{ok, RestoredAgent} = beamai_agent:new(#{
+    llm => LLM,
+    memory => Memory,
+    conversation_id => <<"my-session">>
+}).
 ```
 
 ### 3. Callbacks
@@ -422,15 +389,20 @@ LLM = test_zhipu_anthropic:create_llm().  %% Built from ZHIPU_API_KEY + ZHIPU_AN
 |----------|--------|----------|-------------|
 | `anthropic` | llm_provider_anthropic | Anthropic | Anthropic Claude API |
 | `openai` | llm_provider_openai | OpenAI | OpenAI API |
-| `deepseek` | llm_provider_deepseek | OpenAI compatible | DeepSeek API |
+| `openai_responses` | llm_provider_openai_responses | OpenAI Responses | OpenAI Responses API |
+| `deepseek` | llm_provider_deepseek | OpenAI compatible | DeepSeek API (default `deepseek-flash`) |
 | `zhipu` | llm_provider_zhipu | OpenAI compatible | Zhipu AI (GLM series) |
 | `dashscope` | llm_provider_dashscope | DashScope native | Alibaba Cloud DashScope (Qwen series) |
 | `ollama` | llm_provider_ollama | OpenAI compatible | Ollama local models |
+| `xai` | llm_provider_xai | OpenAI compatible | xAI (Grok series) |
+| `moonshot` / `kimi` | llm_provider_moonshot | OpenAI compatible | Moonshot (Kimi series) |
+| `openrouter` | llm_provider_openrouter | OpenAI compatible | OpenRouter gateway |
+| `siliconflow` | llm_provider_siliconflow | OpenAI compatible | SiliconFlow hosted models |
 | `mock` | llm_provider_mock | Built-in | Mock LLM for testing |
 
 ### HTTP Backend Configuration
 
-BeamAI supports both Gun and Hackney HTTP backends, with Gun as the default (supports HTTP/2).
+BeamAI uses Gun as its single HTTP backend (HTTP/2 supported).
 
 ```erlang
 %% Configure in sys.config (optional)
@@ -443,33 +415,31 @@ BeamAI supports both Gun and Hackney HTTP backends, with Gun as the default (sup
 ]}.
 ```
 
-| Feature | Gun (default) | Hackney |
-|---------|---------------|---------|
-| HTTP/2 | Supported | Not supported |
-| Connection Pool | Built-in beamai_http_pool | Relies on hackney pool |
-| TLS | Automatically uses system CA certificates | hackney default config |
-| Use Case | Recommended for production | Legacy system compatibility |
+| Feature | Gun |
+|--------|-----|
+| HTTP/2 | Supported |
+| Connection Pool | Built-in beamai_http_pool |
+| TLS | Automatically uses system CA certificates |
+| Use Case | Recommended for production |
 
 ## Documentation
 
 ### Core Documentation
 
-- **[doc/API_REFERENCE_EN.md](doc/API_REFERENCE_EN.md)** - API Reference
-- **[doc/MIDDLEWARE_EN.md](doc/MIDDLEWARE_EN.md)** - Middleware System Documentation
-- **[doc/CALLBACKS_EN.md](doc/CALLBACKS_EN.md)** - Callback System Documentation
-- **[doc/ARCHITECTURE_EN.md](doc/ARCHITECTURE_EN.md)** - Architecture Design
-- **[DEPENDENCIES_EN.md](doc/DEPENDENCIES_EN.md)** - Dependency Relationship Details
+- **[docs/API_REFERENCE_EN.md](docs/API_REFERENCE_EN.md)** - API Reference
+- **[docs/MIDDLEWARE_EN.md](docs/MIDDLEWARE_EN.md)** - Middleware System Documentation
+- **[docs/CALLBACKS_EN.md](docs/CALLBACKS_EN.md)** - Callback System Documentation
+- **[docs/ARCHITECTURE_EN.md](docs/ARCHITECTURE_EN.md)** - Architecture Design
+- **[docs/DEPENDENCIES_EN.md](docs/DEPENDENCIES_EN.md)** - Dependency Relationship Details
 
 ### Module Documentation
 
 | Module | Description | Source | Documentation |
 |--------|-------------|--------|---------------|
-| **beamai_core** | Core framework: ChatClient, Process Framework, Graph Engine, HTTP, Behaviours | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
-| **beamai_llm** | LLM client: supports OpenAI, Anthropic, DeepSeek, Zhipu, DashScope, Ollama | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
-| **beamai_memory** | Memory management: Checkpoint, Store, time travel, branching | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
+| **beamai_core** | Core framework: ChatClient, Filter, Memory, HTTP, tools | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
+| **beamai_llm** | LLM client: supports OpenAI, OpenAI Responses, Anthropic, DeepSeek, Zhipu, DashScope, Ollama, xAI, Moonshot/Kimi, OpenRouter, SiliconFlow | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
+| **beamai_agent** | Agent implementation: ReAct pattern, callback system, interrupt/resume, SubAgents | BeamAI | [External Docs](https://github.com/TTalkPro/beamai) |
 | **beamai_tools** | Tool system: tool management, Middleware, security validation | Project | [README](apps/beamai_tools/README.md) |
-| **beamai_agent** | Agent implementation: ReAct pattern, callback system, Process Agent | Project | [README](apps/beamai_agent/README.md) |
-| **beamai_deepagent** | Deep Agent: SubAgent orchestration, task planning, parallel execution, self-reflection | Project | [README](apps/beamai_deepagent/README_EN.md) |
 | **beamai_a2a** | A2A protocol: inter-Agent communication, server/client | Project | [README](apps/beamai_a2a/README_EN.md) |
 | **beamai_mcp** | MCP protocol: Model Context Protocol implementation | Project | [README](apps/beamai_mcp/README_EN.md) |
 | **beamai_rag** | RAG functionality: splitting, vector embeddings, similarity search, reranking, grounded generation | Project | [README](apps/beamai_rag/README_EN.md) |
@@ -524,22 +494,21 @@ test_zhipu_anthropic:test_deepagent_planned().  %% DeepAgent planned execution
 
 | Metric | Count |
 |--------|-------|
-| **OTP Applications (Project)** | 6 |
+| **OTP Applications (Project)** | 5 |
 | **Core Dependencies (BeamAI)** | 3 |
 | **Source Modules (Project)** | ~80 |
 
 **Project Applications:**
 - beamai_tools
-- beamai_agent
-- beamai_deepagent
 - beamai_a2a
 - beamai_mcp
+- beamai_agui
 - beamai_rag
 
 **Core Dependencies (from BeamAI):**
 - beamai_core
 - beamai_llm
-- beamai_memory
+- beamai_agent
 
 ### Running Tests
 
@@ -548,7 +517,7 @@ test_zhipu_anthropic:test_deepagent_planned().  %% DeepAgent planned execution
 rebar3 eunit
 
 # Run tests for specific app
-rebar3 eunit --app=beamai_agent
+rebar3 eunit --app=beamai_tools
 
 # Run type checking
 rebar3 dialyzer

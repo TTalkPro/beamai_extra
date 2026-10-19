@@ -1,14 +1,14 @@
 # BeamAI Extra - Erlang Agent Framework 扩展
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-26%2B-red.svg)](https://www.erlang.org/)
+[![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-27%2B-red.svg)](https://www.erlang.org/)
 [![Build](https://img.shields.io/badge/build-rebar3-brightgreen.svg)](https://rebar3.org/)
 
 [English](README_EN.md) | 中文
 
 基于 [BeamAI](https://github.com/TTalkPro/beamai) 的高性能 AI Agent 扩展框架，提供完整的 Agent 开发工具链。
 
-本项目依赖 [BeamAI 核心库](https://github.com/TTalkPro/beamai) 的 main 分支，包含以下扩展功能：
+本项目依赖 [BeamAI 核心库](https://github.com/TTalkPro/beamai) 的 v2.0.0 tag，包含以下扩展功能：
 
 ## 特性
 
@@ -17,22 +17,19 @@
   - 统一的 Tool 定义和管理
   - Filter 过滤器和安全验证
 
-- **Simple Agent**: 基于工具循环的 ReAct Agent
+- **Simple Agent（上游 BeamAI）**: 基于工具循环的 ReAct Agent
   - 纯函数式 API（`new/1` → `run/2` → 新状态）
   - 支持自定义工具、Plugin 加载、系统提示词
   - 8 个回调钩子（turn/llm/tool/token/interrupt/resume）
   - 流式输出（`stream/2`）
   - 中断和恢复支持（Human-in-the-Loop）
-  - 内置 Memory 持久化（`save/1`, `restore/2`）
+  - 可插拔跨轮 Memory（窗口 / ETS / DETS / 自定义 provider）
+  - 子 Agent 委派与并行执行（SubAgent）
 
-- **Deep Agent**: 基于 SubAgent 架构的递归规划 Agent
-  - Planner（规划器）→ Executor（执行器）→ Reflector（反思器）
-  - 支持并行子任务执行
-  - Coordinator 多 Agent 协调
-
-- **协议支持**: A2A 和 MCP
+- **协议支持**: A2A、MCP 和 AG-UI
   - Agent-to-Agent 通信协议
   - Model Context Protocol 集成
+  - Agent 事件流运行时
 
 - **RAG**: 检索增强生成
   - 向量嵌入和相似度搜索
@@ -128,57 +125,33 @@ K2 = beamai_chat_client:add_tool(K1, #{
 {ok, Result, _} = beamai_agent:run(Agent0, <<"列出 src 目录下的文件"/utf8>>).
 ```
 
-### 5. Simple Agent（带 Memory 持久化）
+### 5. Simple Agent（带跨轮 Memory）
 
 ```erlang
-%% 创建存储后端
-{ok, _} = beamai_store_ets:start_link(my_store, #{}),
-StateStore = beamai_state_store:new({beamai_store_ets, my_store}),
-Mgr = beamai_process_snapshot:new(StateStore),
-Memory = {Mgr, #{thread_id => <<"my-session">>}},
+%% 创建可控生命周期的 ETS 记忆后端
+{ok, _} = beamai_chat_memory_ets:start_link(my_store),
+Memory = {store, beamai_chat_memory_ets:handle(my_store)},
 
-%% 创建带 Memory 的 Agent（auto_save 启用后每轮自动保存）
+%% conversation_id 相同的 Agent 会从同一后端载入跨轮历史
 {ok, Agent0} = beamai_agent:new(#{
     llm => LLM,
     system_prompt => <<"你是持久化助手。"/utf8>>,
     memory => Memory,
-    auto_save => true
+    conversation_id => <<"my-session">>
 }),
 
-%% 对话（自动保存）
+%% 每轮结束后的 user/assistant/tool 消息会持久化
 {ok, _, Agent1} = beamai_agent:run(Agent0, <<"记住：密码是 12345"/utf8>>),
-{ok, _, _Agent2} = beamai_agent:run(Agent1, <<"好的"/utf8>>),
 
-%% 手动保存
-ok = beamai_agent:save(Agent1),
-
-%% 稍后恢复会话
-{ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory),
-{ok, Result, _} = beamai_agent:run(RestoredAgent, <<"密码是多少？"/utf8>>).
-%% Agent 会记得密码是 12345
-```
-
-### 6. Deep Agent（SubAgent 编排）
-
-```erlang
-%% 创建 Deep Agent 配置（new/1 直接返回 config map）
-Config = beamai_deepagent:new(#{
+%% 新建 Agent 并指向同一会话
+{ok, Agent2} = beamai_agent:new(#{
     llm => LLM,
-    max_depth => 3,
-    planning_enabled => true,
-    reflection_enabled => true,
-    system_prompt => <<"你是一个研究专家。"/utf8>>,
-    %% 使用 Tool 模块提供工具
-    plugins => [beamai_tool_file, beamai_tool_shell]
+    system_prompt => <<"你是持久化助手。"/utf8>>,
+    memory => Memory,
+    conversation_id => <<"my-session">>
 }),
-
-%% 运行复杂任务（Planner → Executor → Reflector）
-{ok, Result} = beamai_deepagent:run(Config,
-    <<"分析这个代码库的架构并给出优化建议。"/utf8>>),
-
-%% 查看执行计划和轨迹
-Plan = beamai_deepagent:get_plan(Result),
-Trace = beamai_deepagent:get_trace(Result).
+{ok, Result, _Agent3} = beamai_agent:run(Agent2, <<"密码是多少？"/utf8>>).
+%% Agent 会记得密码是 12345
 ```
 
 ## 架构
@@ -193,29 +166,28 @@ beamai (外部依赖)
 │   ├── ChatClient         # beamai_chat_client, beamai_tool, beamai_context,
 │   │                  # beamai_filter, beamai_prompt, beamai_result
 │   ├── LLM            # beamai_chat_response (统一 LLM 响应访问器)
-│   ├── Process        # beamai_process, beamai_process_builder,
-│   │                  # beamai_process_runtime, beamai_process_step,
-│   │                  # beamai_process_executor, beamai_process_event
-│   ├── HTTP           # beamai_http, beamai_http_gun, beamai_http_hackney,
-│   │                  # beamai_http_pool
-│   ├── Behaviours     # beamai_llm_behaviour, beamai_http_behaviour,
-│   │                  # beamai_step_behaviour, beamai_process_store_behaviour
-│   ├── Graph          # graph, graph_node, graph_edge, graph_builder, graph_dsl,
-│   │                  # graph_runner, graph_snapshot, graph_state, graph_command
-│   ├── Pregel         # pregel, pregel_master, pregel_worker, pregel_vertex,
-│   │                  # pregel_dispatch_worker
+│   ├── HTTP           # beamai_http, beamai_http_gun, beamai_http_pool
+│   ├── Memory         # beamai_chat_memory, beamai_memory_provider,
+│   │                  # beamai_chat_memory_ets, beamai_memory_provider_default
+│   ├── Behaviours     # beamai_chat_behaviour, beamai_http_behaviour,
+│   │                  # beamai_chat_memory, beamai_memory_provider
 │   └── Utils          # beamai_id, beamai_jsonrpc, beamai_sse, beamai_utils
 │
 ├── beamai_llm/         # LLM 客户端
 │   ├── Chat           # beamai_chat_model
 │   ├── Parser         # beamai_output_parser, beamai_parser_json
 │   ├── Adapters       # llm_message_adapter, llm_response_adapter, llm_tool_adapter
-│   └── Providers      # OpenAI, Anthropic, DeepSeek, Zhipu, DashScope, Ollama
+│   └── Providers      # OpenAI, OpenAI Responses, Anthropic, DeepSeek, Zhipu,
+│                      # DashScope, Ollama, xAI, Moonshot/Kimi, OpenRouter,
+│                      # SiliconFlow
 │
-└── beamai_memory/      # 内存和上下文存储
-    ├── Context        # 上下文管理
-    ├── Store          # ETS/SQLite 存储后端
-    └── Snapshot       # 快照、分支、时间旅行
+├── beamai_agent/       # SimpleAgent（ReAct 循环、回调、中断/恢复、SubAgent）
+│   ├── Core           # beamai_agent, beamai_agent_state, beamai_agent_callbacks,
+│   │                  # beamai_agent_event, beamai_agent_interrupt
+│   ├── Memory         # 分支 / 时间线与暂停快照存储
+│   ├── Execution      # beamai_agent_tool_loop, beamai_tool_calling_manager,
+│   │                  # beamai_tool_batch_worker
+│   └── SubAgents      # beamai_agent_delegate, beamai_subagent_manager
 ```
 
 **本项目扩展：**
@@ -230,20 +202,6 @@ apps/
 │   └── Tools          # beamai_tool_file, beamai_tool_shell,
 │                      # beamai_tool_human, beamai_tool_todo
 │
-├── beamai_agent/       # Agent 实现
-│   ├── Core           # beamai_agent, beamai_agent_state, beamai_agent_callbacks
-│   ├── Memory         # beamai_agent_memory
-│   ├── Execution      # beamai_agent_tool_loop, beamai_agent_interrupt
-│   └── Process Agent  # beamai_process_agent, beamai_process_agent_llm_step,
-│                      # beamai_process_agent_tool_step
-│
-├── beamai_deepagent/   # Deep Agent（SubAgent 架构）
-│   ├── Core           # beamai_deepagent, beamai_deepagent_plan,
-│   │                  # beamai_deepagent_dependencies, beamai_deepagent_trace
-│   └── SubAgents      # beamai_deepagent_planner, beamai_deepagent_executor,
-│                      # beamai_deepagent_reflector, beamai_deepagent_parallel,
-│                      # beamai_deepagent_coordinator
-│
 ├── beamai_a2a/         # A2A 协议实现
 │   ├── Server         # A2A 服务端
 │   └── Client         # A2A 客户端
@@ -251,6 +209,10 @@ apps/
 ├── beamai_mcp/         # MCP 协议实现
 │   ├── Server         # MCP 服务端
 │   └── Client         # MCP 客户端
+│
+├── beamai_agui/        # AG-UI 协议实现
+│   ├── Runtime        # 会话、注册表、事件编排
+│   └── HTTP           # 框架无关 HTTP 层与 Cowboy 适配
 │
 └── beamai_rag/         # RAG 功能
     ├── Embeddings     # 向量嵌入
@@ -261,28 +223,29 @@ apps/
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│   Agent 实现层 (本项目扩展)                          │
-│  (beamai_agent, beamai_deepagent)                   │
+│   Agent 实现层 (上游 BeamAI)                         │
+│  (beamai_agent)                                     │
 └────────────────┬────────────────────────────────────┘
                  │
 ┌────────────────┴────────────────────────────────────┐
 │   服务层 (本项目扩展)                               │
-│  (beamai_tools, beamai_rag, beamai_a2a, beamai_mcp) │
+│  (beamai_tools, beamai_rag, beamai_a2a,             │
+│   beamai_mcp, beamai_agui)                          │
 └────────────────┬────────────────────────────────────┘
                  │
 ┌────────────────┴────────────────────────────────────┐
 │   核心层 (来自 BeamAI 外部依赖)                     │
-│  (beamai_core, beamai_llm, beamai_memory)           │
+│  (beamai_core, beamai_llm, beamai_agent)            │
 │       https://github.com/TTalkPro/beamai            │
 └─────────────────────────────────────────────────────┘
 ```
 
 **依赖说明：**
-- 本项目通过 `rebar.config` 依赖 [BeamAI](https://github.com/TTalkPro/beamai) 的 main 分支
-- 核心功能（ChatClient、Process Framework、Graph、LLM、Memory）由 BeamAI 提供
-- 本项目专注于 Agent 实现、协议支持（A2A、MCP）、工具系统和 RAG 功能
+- 本项目通过 `rebar.config` 依赖 [BeamAI](https://github.com/TTalkPro/beamai) 的 v2.0.0 tag
+- 核心功能（ChatClient、LLM、SimpleAgent）由 BeamAI 提供
+- 本项目专注于协议支持（A2A、MCP、AG-UI）、工具系统和 RAG 功能
 
-详见 [DEPENDENCIES.md](doc/DEPENDENCIES.md)
+详见 [DEPENDENCIES.md](docs/DEPENDENCIES.md)
 
 ## 核心概念
 
@@ -318,24 +281,27 @@ ChatClient2 = beamai_chat_client:add_tool(ChatClient1, Tool),
 
 ### 2. Memory 持久化
 
-使用存储后端实现会话持久化：
+使用存储后端实现跨轮会话持久化：
 
 ```erlang
 %% 创建 Memory（使用 ETS 存储后端）
-{ok, _} = beamai_store_ets:start_link(my_store, #{}),
-StateStore = beamai_state_store:new({beamai_store_ets, my_store}),
-Mgr = beamai_process_snapshot:new(StateStore),
-Memory = {Mgr, #{thread_id => <<"my-session">>}},
+{ok, _} = beamai_chat_memory_ets:start_link(my_store),
+Memory = {store, beamai_chat_memory_ets:handle(my_store)},
 
-%% 创建带 memory 的 Agent（auto_save 启用后每轮自动保存）
-{ok, Agent0} = beamai_agent:new(#{llm => LLM, memory => Memory, auto_save => true}),
+%% 相同 conversation_id 的 Agent 会自动载入并写入同一历史
+{ok, Agent0} = beamai_agent:new(#{
+    llm => LLM,
+    memory => Memory,
+    conversation_id => <<"my-session">>
+}),
 {ok, _, Agent1} = beamai_agent:run(Agent0, <<"你好"/utf8>>),
 
-%% 手动保存
-ok = beamai_agent:save(Agent1),
-
-%% 从 Memory 恢复会话
-{ok, RestoredAgent} = beamai_agent:restore(#{llm => LLM}, Memory).
+%% 新会话进程/实例指向同一 conversation_id 即可继续
+{ok, RestoredAgent} = beamai_agent:new(#{
+    llm => LLM,
+    memory => Memory,
+    conversation_id => <<"my-session">>
+}).
 ```
 
 ### 3. Callbacks（回调系统）
@@ -423,15 +389,20 @@ LLM = test_zhipu_anthropic:create_llm().  %% 从 ZHIPU_API_KEY + ZHIPU_ANTHROPIC
 |----------|------|----------|------|
 | `anthropic` | llm_provider_anthropic | Anthropic | Anthropic Claude API |
 | `openai` | llm_provider_openai | OpenAI | OpenAI API |
-| `deepseek` | llm_provider_deepseek | OpenAI 兼容 | DeepSeek API |
+| `openai_responses` | llm_provider_openai_responses | OpenAI Responses | OpenAI Responses API |
+| `deepseek` | llm_provider_deepseek | OpenAI 兼容 | DeepSeek API（默认 `deepseek-flash`） |
 | `zhipu` | llm_provider_zhipu | OpenAI 兼容 | 智谱 AI (GLM 系列) |
 | `dashscope` | llm_provider_dashscope | DashScope 原生 | 阿里云百炼 (通义千问系列) |
 | `ollama` | llm_provider_ollama | OpenAI 兼容 | Ollama 本地模型 |
+| `xai` | llm_provider_xai | OpenAI 兼容 | xAI (Grok 系列) |
+| `moonshot` / `kimi` | llm_provider_moonshot | OpenAI 兼容 | Moonshot (Kimi 系列) |
+| `openrouter` | llm_provider_openrouter | OpenAI 兼容 | OpenRouter 网关 |
+| `siliconflow` | llm_provider_siliconflow | OpenAI 兼容 | SiliconFlow 托管模型 |
 | `mock` | llm_provider_mock | 内置 | 测试用 Mock LLM |
 
 ### HTTP 后端配置
 
-BeamAI 支持 Gun 和 Hackney 两种 HTTP 后端，默认使用 Gun（支持 HTTP/2）。
+BeamAI 使用 Gun 作为唯一 HTTP 后端（支持 HTTP/2）。
 
 ```erlang
 %% 在 sys.config 中配置（可选）
@@ -444,33 +415,31 @@ BeamAI 支持 Gun 和 Hackney 两种 HTTP 后端，默认使用 Gun（支持 HTT
 ]}.
 ```
 
-| 特性 | Gun（默认） | Hackney |
-|------|-------------|---------|
-| HTTP/2 | 支持 | 不支持 |
-| 连接池 | 内置 beamai_http_pool | 依赖 hackney 池 |
-| TLS | 自动使用系统 CA 证书 | hackney 默认配置 |
-| 适用场景 | 推荐生产环境 | 兼容旧系统 |
+| 特性 | Gun |
+|------|-----|
+| HTTP/2 | 支持 |
+| 连接池 | 内置 beamai_http_pool |
+| TLS | 自动使用系统 CA 证书 |
+| 适用场景 | 推荐生产环境 |
 
 ## 文档
 
 ### 核心文档
 
-- **[doc/API_REFERENCE.md](doc/API_REFERENCE.md)** - API 参考文档
-- **[doc/MIDDLEWARE.md](doc/MIDDLEWARE.md)** - Middleware 系统文档
-- **[doc/CALLBACKS.md](doc/CALLBACKS.md)** - Callback 回调系统文档
-- **[doc/ARCHITECTURE.md](doc/ARCHITECTURE.md)** - 架构设计
-- **[DEPENDENCIES.md](doc/DEPENDENCIES.md)** - 依赖关系详解
+- **[docs/API_REFERENCE.md](docs/API_REFERENCE.md)** - API 参考文档
+- **[docs/MIDDLEWARE.md](docs/MIDDLEWARE.md)** - Middleware 系统文档
+- **[docs/CALLBACKS.md](docs/CALLBACKS.md)** - Callback 回调系统文档
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - 架构设计
+- **[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)** - 依赖关系详解
 
 ### 模块文档
 
 | 模块 | 说明 | 来源 | 文档 |
 |------|------|------|------|
-| **beamai_core** | 核心框架：ChatClient、Process Framework、Graph 引擎、HTTP、Behaviours | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
-| **beamai_llm** | LLM 客户端：支持 OpenAI、Anthropic、DeepSeek、Zhipu、DashScope、Ollama | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
-| **beamai_memory** | 记忆管理：Checkpoint、Store、时间旅行、分支 | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
+| **beamai_core** | 核心框架：ChatClient、Filter、Memory、HTTP、工具 | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
+| **beamai_llm** | LLM 客户端：支持 OpenAI、OpenAI Responses、Anthropic、DeepSeek、Zhipu、DashScope、Ollama、xAI、Moonshot/Kimi、OpenRouter、SiliconFlow | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
+| **beamai_agent** | Agent 实现：ReAct 模式、回调系统、中断/恢复、SubAgent | BeamAI | [外部文档](https://github.com/TTalkPro/beamai) |
 | **beamai_tools** | 工具和中间件系统：Tool 模块、Middleware、安全验证 | 本项目 | [README](apps/beamai_tools/README.md) |
-| **beamai_agent** | Agent 实现：ReAct 模式、回调系统、Process Agent | 本项目 | [README](apps/beamai_agent/README.md) |
-| **beamai_deepagent** | Deep Agent：SubAgent 编排、任务规划、并行执行、自我反思 | 本项目 | [README](apps/beamai_deepagent/README.md) |
 | **beamai_a2a** | A2A 协议：Agent 间通信、服务端/客户端 | 本项目 | [README](apps/beamai_a2a/README.md) |
 | **beamai_mcp** | MCP 协议：Model Context Protocol 实现 | 本项目 | [README](apps/beamai_mcp/README.md) |
 | **beamai_rag** | RAG 功能：文档分割、向量嵌入、相似度搜索、重排序、上下文生成 | 本项目 | [README](apps/beamai_rag/README.md) |
@@ -525,22 +494,21 @@ test_zhipu_anthropic:test_deepagent_planned().  %% DeepAgent 规划执行
 
 | 指标 | 数量 |
 |------|------|
-| **OTP 应用（本项目）** | 6 个 |
+| **OTP 应用（本项目）** | 5 个 |
 | **核心依赖（BeamAI）** | 3 个 |
 | **源代码模块（本项目）** | ~80 个 |
 
 **本项目应用：**
 - beamai_tools
-- beamai_agent
-- beamai_deepagent
 - beamai_a2a
 - beamai_mcp
+- beamai_agui
 - beamai_rag
 
 **核心依赖（来自 BeamAI）：**
 - beamai_core
 - beamai_llm
-- beamai_memory
+- beamai_agent
 
 ### 测试运行
 
@@ -549,7 +517,7 @@ test_zhipu_anthropic:test_deepagent_planned().  %% DeepAgent 规划执行
 rebar3 eunit
 
 # 运行特定应用的测试
-rebar3 eunit --app=beamai_agent
+rebar3 eunit --app=beamai_tools
 
 # 运行代码检查
 rebar3 dialyzer

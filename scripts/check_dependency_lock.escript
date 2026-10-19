@@ -3,9 +3,9 @@
 
 main([LockFile]) ->
     Expected = #{
-        <<"beamai_core">> => "c440eefd700990ca7d2755d9fbe00f3c9d999283",
-        <<"beamai_llm">> => "c440eefd700990ca7d2755d9fbe00f3c9d999283",
-        <<"beamai_agent">> => "c440eefd700990ca7d2755d9fbe00f3c9d999283"
+        <<"beamai_core">> => "08aa844a11791fabc20ff2dab19ea82a71343881",
+        <<"beamai_llm">> => "08aa844a11791fabc20ff2dab19ea82a71343881",
+        <<"beamai_agent">> => "08aa844a11791fabc20ff2dab19ea82a71343881"
     },
     case file:consult(LockFile) of
         {ok, Terms} ->

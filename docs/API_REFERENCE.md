@@ -583,7 +583,7 @@ LLM = test_zhipu_anthropic:create_llm().
 **优势：**
 - 配置复用：多个 Agent 共享同一 LLM 配置
 - 集中管理：API Key、模型参数统一配置
-- Provider 抽象：7 种内置 Provider + 自定义 Provider 支持
+- Provider 抽象：11 种内置 Provider + 自定义 Provider 支持
 - 自动重试：内置指数退避重试机制
 
 ### 配置和聊天
@@ -626,11 +626,16 @@ Opts = #{
 | Provider | 模块 | API 模式 | 特性 |
 |----------|------|----------|------|
 | `openai` | llm_provider_openai | OpenAI | 聊天、流式、工具调用 |
+| `openai_responses` | llm_provider_openai_responses | OpenAI Responses | 聊天、流式、工具调用 |
 | `anthropic` | llm_provider_anthropic | Anthropic | 聊天、流式、工具调用 |
 | `deepseek` | llm_provider_deepseek | OpenAI 兼容 | 聊天、流式、工具调用 |
 | `zhipu` | llm_provider_zhipu | OpenAI 兼容 | 聊天、流式、工具调用、异步 |
 | `dashscope` | llm_provider_dashscope | DashScope 原生 | 聊天、流式、工具调用、联网搜索 |
 | `ollama` | llm_provider_ollama | OpenAI 兼容 | 聊天、流式 |
+| `xai` | llm_provider_xai | OpenAI 兼容 | 聊天、流式、工具调用 |
+| `moonshot` / `kimi` | llm_provider_moonshot | OpenAI 兼容 | 聊天、流式、工具调用 |
+| `openrouter` | llm_provider_openrouter | OpenAI 兼容 | 聊天、流式、工具调用 |
+| `siliconflow` | llm_provider_siliconflow | OpenAI 兼容 | 聊天、流式、工具调用 |
 | `mock` | llm_provider_mock | 内置 | 测试用 Mock LLM |
 | `{custom, Module}` | 自定义 | 自定义 | 用户自定义 Provider |
 
@@ -663,16 +668,16 @@ llm_provider_common:parse_usage(Usage) -> #{prompt_tokens, completion_tokens, to
 
 ### DeepSeek 详细说明
 
-DeepSeek Provider 使用 OpenAI 兼容 API，支持 `deepseek-chat` 和 `deepseek-reasoner` 模型。
+DeepSeek Provider 使用 OpenAI 兼容 API，支持思考模式和多模态输入。
 
 **支持的模型：**
-- `deepseek-chat`：通用对话模型（默认）
-- `deepseek-reasoner`：推理增强模型
+- `deepseek-flash`：V4.1-Flash（默认，思考与非思考模式）
+- `deepseek-v4-pro`：V4-Pro（仅思考模式）
 
 **配置示例：**
 ```erlang
 LLM = beamai_chat_model:create(deepseek, #{
-    model => <<"deepseek-chat">>,
+    model => <<"deepseek-flash">>,
     api_key => list_to_binary(os:getenv("DEEPSEEK_API_KEY")),
     max_tokens => 4096
 }).
@@ -707,7 +712,7 @@ LLM = beamai_chat_model:create(Provider, #{
 }).
 ```
 
-**Provider 类型：** `openai | anthropic | deepseek | zhipu | dashscope | ollama | mock | {custom, module()}`
+**Provider 类型：** `openai | openai_responses | anthropic | deepseek | zhipu | dashscope | ollama | xai | moonshot | kimi | openrouter | siliconflow | mock | {custom, module()}`
 
 **Config 类型标记：** 返回的 config map 包含 `'__llm_config__' => true` 标记，用于内部验证。
 

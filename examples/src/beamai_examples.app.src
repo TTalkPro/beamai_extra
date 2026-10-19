@@ -1,6 +1,6 @@
 {application, beamai_examples, [
     {description, "BeamAI ChatClient Examples"},
-    {vsn, "1.0.0"},
+    {vsn, "2.0.0"},
     {registered, []},
     %% jsx / hackney 早已从本项目移除（JSON 走 OTP 27 stdlib json、HTTP 走 gun），
     %% 这里曾经一直列着它们 —— 谁真去 ensure_all_started 这个 app 就会莫名失败。
