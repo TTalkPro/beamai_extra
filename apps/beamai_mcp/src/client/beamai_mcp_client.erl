@@ -352,6 +352,8 @@ connecting(info, recv_loop, #data{transport_mod = Mod, transport_state = TState}
         {error, timeout} ->
             erlang:send_after(100, self(), recv_loop),
             {keep_state, Data};
+        {error, no_pending_request} ->
+            {keep_state, Data};
         {error, Reason} ->
             logger:warning("MCP transport recv failed during init: ~p", [Reason]),
             {next_state, disconnected, Data}
@@ -398,6 +400,10 @@ connected(info, recv_loop, #data{transport_mod = Mod, transport_state = TState} 
             handle_incoming_message(Message, NewData);
         {error, timeout} ->
             %% 继续循环
+            erlang:send_after(100, self(), recv_loop),
+            {keep_state, Data};
+        {error, no_pending_request} ->
+            %% 请求响应已消费完；尾部的空 fin 事件不是连接故障。
             erlang:send_after(100, self(), recv_loop),
             {keep_state, Data};
         {error, _Reason} ->
@@ -547,7 +553,10 @@ send_initialized_notification(Data) ->
 %% @private 发送请求
 send_request(Method, Params, From, Data) ->
     ReqId = make_request_id(Data),
-    Message = beamai_mcp_jsonrpc:encode_request(ReqId, Method, Params),
+    Message = case maps:size(Params) =:= 0 of
+        true -> beamai_mcp_jsonrpc:encode_request(ReqId, Method);
+        false -> beamai_mcp_jsonrpc:encode_request(ReqId, Method, Params)
+    end,
     case send_message(Message, Data) of
         {ok, NewData} ->
             {ok, NewData#data{

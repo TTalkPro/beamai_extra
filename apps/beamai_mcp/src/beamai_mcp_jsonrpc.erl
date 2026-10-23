@@ -32,6 +32,7 @@
 %% 编码 API
 -export([
     encode_request/3,
+    encode_request/2,
     encode_notification/2,
     encode_response/2,
     encode_error/3,
@@ -81,6 +82,15 @@
 -spec encode_request(term(), binary(), map()) -> binary().
 encode_request(Id, Method, Params) ->
     beamai_jsonrpc:encode_request(Id, Method, Params).
+
+%% @doc 编码无参数的 JSON-RPC 请求；params 是可选成员。
+-spec encode_request(term(), binary()) -> binary().
+encode_request(Id, Method) ->
+    beamai_utils:encode_json(#{
+        <<"jsonrpc">> => <<"2.0">>,
+        <<"id">> => Id,
+        <<"method">> => Method
+    }).
 
 %% @doc 编码 JSON-RPC 通知
 -spec encode_notification(binary(), map()) -> binary().

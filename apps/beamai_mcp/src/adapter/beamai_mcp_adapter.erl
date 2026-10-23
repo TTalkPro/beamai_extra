@@ -29,6 +29,8 @@
 
 -include("beamai_mcp.hrl").
 
+-dialyzer({nowarn_function, json_schema_to_parameter/1}).
+
 %%====================================================================
 %% API 导出
 %%====================================================================
@@ -61,7 +63,7 @@
 %% 主要转换：
 %% - name 保持不变
 %% - description 保持不变
-%% - input_schema → parameters
+%% - input_schema（JSON Schema）→ beamai 参数 DSL
 %% - handler 需要适配返回格式
 %%
 %% @param McpTool MCP 工具 record
@@ -76,7 +78,7 @@ mcp_tool_to_beamai_tool(#mcp_tool{
     #{
         name => Name,
         description => Description,
-        parameters => InputSchema,
+        parameters => json_schema_to_parameters(InputSchema),
         handler => adapt_handler(Handler)
     }.
 
@@ -94,9 +96,9 @@ mcp_tools_to_beamai_tools(McpTools) ->
 %% - 成功: {ok, [ContentObject]}
 %% - 失败: {error, Reason}
 %%
-%% beamai_agent handler 期望：
-%% - 返回字符串或 map
-%% - 错误可以抛出异常或返回错误字符串
+%% beamai_core tool executor 只接受 tagged result：
+%% - 成功: {ok, Value}（或 {ok, Value, Writes}）
+%% - 失败: {error, Reason}
 %%
 %% @param McpHandler MCP 风格的处理函数
 %% @returns beamai_agent 风格的处理函数
@@ -106,10 +108,9 @@ adapt_handler(McpHandler) ->
         case safe_call_mcp_handler(McpHandler, Args) of
             {ok, Contents} ->
                 %% 提取文本内容
-                extract_text_from_contents(Contents);
+                {ok, extract_text_from_contents(Contents)};
             {error, Reason} ->
-                %% 转换为字符串错误
-                format_error(Reason)
+                {error, format_error(Reason)}
         end
     end.
 
@@ -125,9 +126,9 @@ adapt_handler(McpHandler, ignore_context) ->
     fun(Args, _Context) ->
         case safe_call_mcp_handler(McpHandler, Args) of
             {ok, Contents} ->
-                extract_text_from_contents(Contents);
+                {ok, extract_text_from_contents(Contents)};
             {error, Reason} ->
-                format_error(Reason)
+                {error, format_error(Reason)}
         end
     end.
 
@@ -226,6 +227,77 @@ format_error(Error) ->
 %%====================================================================
 %% 内部函数
 %%====================================================================
+
+%% @private 把 MCP 的 JSON Schema 转成 beamai_tool 参数 DSL。
+%%
+%% beamai_tool:build_json_schema/1 把 parameters map 的每一项当作“参数声明”，
+%% 不能直接接收 JSON Schema。这里保留 type、description、required、enum、
+%% items 和 properties；其它关键字不影响 beamai 当前执行路径，先安全省略。
+-spec json_schema_to_parameters(map()) -> map().
+json_schema_to_parameters(Schema) ->
+    case schema_type(Schema) of
+        object ->
+            Required = maps:get(<<"required">>, Schema, []),
+            Properties = maps:get(<<"properties">>, Schema, #{}),
+            maps:fold(fun(Key, SubSchema, Acc) ->
+                Base = json_schema_to_parameter(SubSchema),
+                RequiredFlag = lists:member(to_binary(Key), Required),
+                Acc#{Key => Base#{required => RequiredFlag}}
+            end, #{}, Properties);
+        _ ->
+            %% 非对象输入 schema 无参数可声明；保持 beamai 可用的保守兼容。
+            #{}
+    end.
+
+-spec json_schema_to_parameter(term()) -> map().
+json_schema_to_parameter(Schema) when is_map(Schema) ->
+    Base = case schema_type(Schema) of
+        undefined -> #{};
+        Type -> #{type => Type}
+    end,
+    WithDescription = case maps:get(<<"description">>, Schema, undefined) of
+        undefined -> Base;
+        Description -> Base#{description => Description}
+    end,
+    WithEnum = case maps:get(<<"enum">>, Schema, undefined) of
+        undefined -> WithDescription;
+        Enum -> WithDescription#{enum => Enum}
+    end,
+    WithItems = case maps:get(<<"items">>, Schema, undefined) of
+        Item when is_map(Item) -> WithEnum#{items => json_schema_to_parameter(Item)};
+        _ -> WithEnum
+    end,
+    case maps:get(<<"properties">>, WithItems, undefined) of
+        Properties when is_map(Properties) ->
+            WithItems#{properties =>
+                       maps:map(fun(_, SubSchema) ->
+                                    json_schema_to_parameter(SubSchema)
+                                end, Properties)};
+        _ ->
+            WithItems
+    end;
+json_schema_to_parameter(_) ->
+    #{}.
+
+-spec to_binary(binary() | atom() | string()) -> binary().
+to_binary(Key) when is_binary(Key) -> Key;
+to_binary(Key) when is_atom(Key) -> atom_to_binary(Key, utf8);
+to_binary(Key) when is_list(Key) -> list_to_binary(Key).
+
+-spec schema_type(map()) -> atom() | undefined.
+schema_type(#{<<"type">> := <<"object">>}) -> object;
+schema_type(#{<<"type">> := <<"string">>}) -> string;
+schema_type(#{<<"type">> := <<"integer">>}) -> integer;
+schema_type(#{<<"type">> := <<"number">>}) -> float;
+schema_type(#{<<"type">> := <<"boolean">>}) -> boolean;
+schema_type(#{<<"type">> := <<"array">>}) -> array;
+schema_type(#{type := object}) -> object;
+schema_type(#{type := string}) -> string;
+schema_type(#{type := integer}) -> integer;
+schema_type(#{type := number}) -> float;
+schema_type(#{type := boolean}) -> boolean;
+schema_type(#{type := array}) -> array;
+schema_type(_) -> undefined.
 
 %% @private 安全调用 MCP handler
 %%

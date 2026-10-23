@@ -1,6 +1,6 @@
 {application, beamai_agui, [
     {description, "AG-UI Runtime - agent 事件流服务端（对标 CopilotKit runtime）"},
-    {vsn, "2.0.0"},
+    {vsn, "2.0.1"},
     {registered, [beamai_agui_sup, beamai_agui_registry,
                   beamai_agui_session_sup, beamai_agui_sessions,
                   beamai_agui_auth, beamai_agui_rate_limit,

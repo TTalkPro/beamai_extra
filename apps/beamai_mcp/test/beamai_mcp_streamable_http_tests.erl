@@ -22,6 +22,7 @@ streamable_http_test_() ->
     {setup, fun setup/0, fun cleanup/1,
      {with, [
         fun full_session_round_trip/1,
+        fun http_client_connects_and_lists_tools/1,
         fun unknown_session_is_404/1,
         fun missing_session_non_initialize_is_400/1,
         fun delete_ends_session/1,
@@ -84,6 +85,34 @@ full_session_round_trip(Url) ->
     ?assertEqual(<<"你好"/utf8>>, maps:get(<<"text">>, C)).
 
 %% 规范：未知会话回 404，客户端据此重新 initialize
+http_client_connects_and_lists_tools(Url) ->
+    {ok, Pid} = beamai_mcp_client:start_link(#{
+        transport => http,
+        url => unicode:characters_to_binary(Url),
+        timeout => 5000,
+        init_timeout => 5000
+    }),
+    ?assertEqual(connected, wait_for_client_state(Pid, connected, 5000)),
+    ?assertMatch({ok, #{<<"tools">> := [_ | _]}},
+                 beamai_mcp_client:list_tools(Pid)),
+    ?assertMatch({ok, #{<<"content">> := [_]}},
+                 beamai_mcp_client:call_tool(Pid, <<"echo">>, #{<<"text">> => <<"hi">>})),
+    beamai_mcp_client:stop(Pid).
+
+wait_for_client_state(Pid, Want, TimeoutMs) ->
+    Deadline = erlang:monotonic_time(millisecond) + TimeoutMs,
+    client_state_loop(Pid, Want, Deadline).
+
+client_state_loop(Pid, Want, Deadline) ->
+    case beamai_mcp_client:get_state(Pid) of
+        {ok, Want} -> Want;
+        {ok, Other} ->
+            case erlang:monotonic_time(millisecond) >= Deadline of
+                true -> Other;
+                false -> timer:sleep(50), client_state_loop(Pid, Want, Deadline)
+            end
+    end.
+
 unknown_session_is_404(Url) ->
     {Status, _, _} = post(Url, [{"mcp-session-id", "mcp-deadbeef"}],
                           rpc(1, <<"tools/list">>, #{})),

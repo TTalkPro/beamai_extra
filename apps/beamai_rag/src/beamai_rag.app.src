@@ -1,6 +1,6 @@
 {application, beamai_rag, [
     {description, "Agent Framework RAG Layer"},
-    {vsn, "2.0.0"},
+    {vsn, "2.0.1"},
     {registered, []},
     {applications, [
         kernel,

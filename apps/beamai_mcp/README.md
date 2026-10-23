@@ -230,11 +230,12 @@ Routes = [
 %% 连接 HTTP MCP 服务器
 {ok, Client} = beamai_mcp_client:start_link(#{
     transport => http,
-    base_url => <<"http://localhost:8080/mcp">>,
-    client_info => #{name => <<"http-client">>, version => <<"1.0">>}
+    url => <<"https://example.com/mcp">>,
+    timeout => 30000,
+    tls_opts => [{verify, verify_peer}, {cacerts, public_key:cacerts_get()}],
+    client_info => #{<<"name">> => <<"http-client">>, <<"version">> => <<"1.0">>}
 }),
 
-{ok, _} = beamai_mcp_client:initialize(Client),
 {ok, Tools} = beamai_mcp_client:list_tools(Client).
 ```
 

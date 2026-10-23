@@ -42,9 +42,13 @@
 %% 类型定义
 %%====================================================================
 
+-define(MCP_HTTP_MAX_BODY, 16 * 1024 * 1024).
+
 -record(http_gun_state, {
-    %% Gun 连接
-    conn_pid :: pid() | undefined,
+    %% Gun owner 进程。它把 gun 事件原样转发给 MCP client 进程，
+    %% 避免这些消息与 gen_statem 的 info 事件混在同一 mailbox 中。
+    worker :: pid() | undefined,
+    worker_monitor :: reference() | undefined,
     %% 服务器信息
     host :: binary(),
     port :: pos_integer(),
@@ -54,12 +58,17 @@
     headers = [] :: [{binary(), binary()}],
     timeout :: pos_integer(),
     session_id :: binary() | undefined,
-    %% 当前请求的流引用
+    %% 当前请求的流引用与请求级截止时间
     stream_ref :: reference() | undefined,
+    deadline :: integer() | undefined,
     %% SSE 解析缓冲区
     buffer = <<>> :: binary(),
+    response_is_sse = false :: boolean(),
+    nonblocking = false :: boolean(),
     %% 消息队列
     message_queue = [] :: [binary()],
+    %% 响应体保护上限
+    max_body = ?MCP_HTTP_MAX_BODY :: pos_integer(),
     %% 是否已连接
     connected = false :: boolean()
 }).
@@ -76,39 +85,37 @@ connect(#{url := Url} = Config) ->
     Headers = maps:get(headers, Config, []),
     Timeout = maps:get(timeout, Config, 30000),
     SessionId = maps:get(session_id, Config, undefined),
+    MaxBody = maps:get(max_body, Config, ?MCP_HTTP_MAX_BODY),
 
     %% 解析 URL
     case parse_url(Url) of
         {ok, Host, Port, Path, Transport} ->
-            %% 建立 Gun 连接
+            %% 建立 Gun 连接。Gun 要求 owner 处理连接事件；这个专用 owner
+            %% 进程让 MCP client 的 gen_statem 不需要“轮询 + 抢收”自己的邮箱。
             GunOpts = #{
                 connect_timeout => Timeout,
                 transport => Transport,
-                protocols => [http]
+                protocols => protocols(Transport),
+                tls_opts => tls_opts(Host, Transport, Config)
             },
-            case gun:open(binary_to_list(Host), Port, GunOpts) of
-                {ok, ConnPid} ->
-                    %% 等待连接就绪
-                    case gun:await_up(ConnPid, Timeout) of
-                        {ok, _Protocol} ->
-                            State = #http_gun_state{
-                                conn_pid = ConnPid,
-                                host = Host,
-                                port = Port,
-                                path = Path,
-                                transport = Transport,
-                                headers = Headers,
-                                timeout = Timeout,
-                                session_id = SessionId,
-                                connected = true
-                            },
-                            {ok, State};
-                        {error, Reason} ->
-                            gun:close(ConnPid),
-                            {error, {connection_failed, Reason}}
-                    end;
+            case open_connection(Host, Port, GunOpts, Timeout) of
+                {ok, Worker, Monitor} ->
+                    State = #http_gun_state{
+                        worker = Worker,
+                        worker_monitor = Monitor,
+                        host = Host,
+                        port = Port,
+                        path = Path,
+                        transport = Transport,
+                        headers = Headers,
+                        timeout = Timeout,
+                        session_id = SessionId,
+                        max_body = MaxBody,
+                        connected = true
+                    },
+                    {ok, State};
                 {error, Reason} ->
-                    {error, {open_failed, Reason}}
+                    {error, Reason}
             end;
         {error, Reason} ->
             {error, Reason}
@@ -118,38 +125,94 @@ connect(_) ->
 
 %% @doc 发送请求
 -spec send(binary(), state()) -> {ok, state()} | {error, term()}.
-send(Message, #http_gun_state{conn_pid = ConnPid, path = Path,
-                               headers = Headers, session_id = SessionId} = State) ->
+send(Message, #http_gun_state{worker = Worker, path = Path,
+                              headers = Headers, session_id = SessionId,
+                              worker_monitor = Monitor,
+                              timeout = Timeout} = State) ->
     %% 构建请求头
     RequestHeaders = build_request_headers(Headers, SessionId),
-
-    %% 发送 POST 请求
-    StreamRef = gun:post(ConnPid, Path, RequestHeaders, Message),
-    {ok, State#http_gun_state{stream_ref = StreamRef, buffer = <<>>, message_queue = []}}.
+    Tag = make_ref(),
+    Worker ! {beamai_mcp_http, self(), Tag, {post, Path, RequestHeaders, Message}},
+    receive
+        {beamai_mcp_http, Worker, Tag, {sent, StreamRef}} ->
+            Deadline = erlang:monotonic_time(millisecond) + Timeout,
+            SentState = State#http_gun_state{
+                stream_ref = StreamRef,
+                deadline = Deadline,
+                buffer = <<>>,
+                message_queue = []
+            },
+            case is_jsonrpc_notification(Message) of
+                true ->
+                    %% Streamable HTTP 的通知由 HTTP 状态码确认。在返回前排空
+                    %% 202/空响应，避免 client 立刻复用连接时和下一个请求竞争。
+                    drain_notification_response(Timeout, SentState);
+                false ->
+                    {ok, SentState}
+            end;
+        {beamai_mcp_http, Worker, Tag, {error, Reason}} ->
+            {error, Reason};
+        {'DOWN', Monitor, process, Worker, Reason} ->
+            {error, {worker_down, Reason}}
+    after Timeout ->
+        {error, send_timeout}
+    end.
 
 %% @doc 接收响应
 -spec recv(timeout(), state()) -> {ok, binary(), state()} | {error, term()}.
 recv(_Timeout, #http_gun_state{message_queue = [Msg | Rest]} = State) ->
-    %% 队列中有消息
     {ok, Msg, State#http_gun_state{message_queue = Rest}};
 recv(_Timeout, #http_gun_state{stream_ref = undefined}) ->
-    %% 没有活跃的请求
     {error, no_pending_request};
-recv(Timeout, #http_gun_state{conn_pid = ConnPid, stream_ref = StreamRef} = State) ->
-    receive_response(ConnPid, StreamRef, Timeout, State).
+recv(_Timeout, #http_gun_state{worker_monitor = Monitor,
+                               connected = false})
+  when Monitor =/= undefined ->
+    receive
+        {'DOWN', Monitor, process, _Worker, Reason} ->
+            {error, {worker_down, Reason}}
+    after 0 ->
+        {error, not_connected}
+    end;
+recv(Timeout, #http_gun_state{stream_ref = StreamRef, deadline = Deadline} = State)
+  when is_reference(StreamRef), Deadline =/= undefined ->
+    Now = erlang:monotonic_time(millisecond),
+    Remaining = max(0, Deadline - Now),
+    %% 重点：timeout=0 只是“现在没数据就返回”。这个调用绝不能取消在途请求；
+    %% 请求只有在自身截止时间到了之后才允许 cancel。
+    Wait = case Timeout of
+        0 -> 0;
+        _ -> min(Timeout, Remaining)
+    end,
+    WaitState = State#http_gun_state{nonblocking = Wait =:= 0},
+    case {Remaining, Wait} of
+        {0, _} ->
+            cancel_request(State),
+            {error, timeout};
+        {_, 0} ->
+            receive_response(0, WaitState);
+        _ ->
+            receive_response(Wait, WaitState)
+    end.
 
 %% @doc 关闭连接
 -spec close(state()) -> ok | {error, term()}.
-close(#http_gun_state{conn_pid = ConnPid}) when ConnPid =/= undefined ->
-    gun:close(ConnPid),
-    ok;
-close(_) ->
+close(#http_gun_state{worker = Worker, worker_monitor = Monitor}) ->
+    case Worker of
+        undefined -> ok;
+        _ ->
+            Worker ! {beamai_mcp_http, close},
+            case Monitor of
+                undefined -> ok;
+                _ ->
+                    erlang:demonitor(Monitor, [flush])
+            end
+    end,
     ok.
 
 %% @doc 检查连接状态
 -spec is_connected(state()) -> boolean().
-is_connected(#http_gun_state{connected = Connected, conn_pid = ConnPid}) ->
-    Connected andalso is_process_alive(ConnPid).
+is_connected(#http_gun_state{connected = Connected, worker = Worker}) ->
+    Connected andalso is_pid(Worker) andalso is_process_alive(Worker).
 
 %%====================================================================
 %% 额外 API
@@ -163,8 +226,8 @@ request(Message, State) ->
 %% @doc 发送请求并同步等待响应（指定超时）
 -spec request(binary(), timeout(), state()) -> {ok, binary(), state()} | {error, term()}.
 request(Message, Timeout, State) ->
-    {ok, NewState} = send(Message, State),
-    recv(Timeout, NewState).
+    {ok, SentState} = send(Message, State#http_gun_state{timeout = Timeout}),
+    recv(Timeout, SentState).
 
 %%====================================================================
 %% 内部函数
@@ -218,107 +281,232 @@ build_request_headers(Headers, SessionId) ->
         _ -> [{<<"mcp-session-id">>, SessionId} | BaseHeaders]
     end.
 
-%% @private 接收响应
--spec receive_response(pid(), reference(), timeout(), state()) ->
-    {ok, binary(), state()} | {error, term()}.
-receive_response(ConnPid, StreamRef, Timeout, State) ->
+%% @private 启动 Gun owner 并等待连接就绪
+-spec open_connection(binary(), pos_integer(), map(), pos_integer()) ->
+    {ok, pid(), reference()} | {error, term()}.
+open_connection(Host, Port, GunOpts, Timeout) ->
+    Parent = self(),
+    {Worker, Monitor} = spawn_monitor(fun() ->
+        worker_init(Parent, Host, Port, GunOpts, Timeout)
+    end),
     receive
-        {gun_response, ConnPid, StreamRef, fin, Status, _Headers}
-          when Status >= 200, Status < 300 ->
-            %% 无 body 的成功响应
-            {ok, <<>>, State#http_gun_state{stream_ref = undefined}};
-        {gun_response, ConnPid, StreamRef, fin, Status, _Headers} ->
-            {error, {http_error, Status}};
+        {beamai_mcp_http, Worker, ready, {ok, _Protocol}} ->
+            {ok, Worker, Monitor};
+        {beamai_mcp_http, Worker, ready, {error, Reason}} ->
+            erlang:demonitor(Monitor, [flush]),
+            {error, Reason};
+        {'DOWN', Monitor, process, Worker, Reason} ->
+            {error, {worker_down, Reason}}
+    after Timeout + 100 ->
+        exit(Worker, kill),
+        erlang:demonitor(Monitor, [flush]),
+        {error, connection_timeout}
+    end.
 
-        {gun_response, ConnPid, StreamRef, nofin, Status, Headers}
-          when Status >= 200, Status < 300 ->
-            %% 检查 Content-Type 和 Session-Id
-            ContentType = beamai_mcp_types:get_header(Headers, <<"content-type">>),
-            NewSessionId = beamai_mcp_types:get_header(Headers, <<"mcp-session-id">>),
-            NewState = case NewSessionId of
-                undefined -> State;
-                _ -> State#http_gun_state{session_id = NewSessionId}
-            end,
-            %% 根据 Content-Type 处理响应
-            case is_sse_content_type(ContentType) of
-                true ->
-                    receive_sse_response(ConnPid, StreamRef, Timeout, NewState);
-                false ->
-                    receive_json_response(ConnPid, StreamRef, Timeout, NewState)
+%% @private Cleartext HTTP/2 requires prior knowledge; Gun cannot negotiate
+%% this list over TCP. TLS uses ALPN and can fall back to HTTP/1.1.
+-spec protocols(tcp | tls) -> [http2 | http].
+protocols(tls) -> [http2, http];
+protocols(tcp) -> [http].
+
+%% @private Gun owner 初始化
+worker_init(Parent, Host, Port, GunOpts, Timeout) ->
+    ParentMonitor = erlang:monitor(process, Parent),
+    worker_wait_up(Parent, ParentMonitor,
+                   gun:open(binary_to_list(Host), Port, GunOpts), Timeout).
+
+worker_wait_up(Parent, ParentMonitor, {ok, ConnPid}, Timeout) ->
+    case gun:await_up(ConnPid, Timeout) of
+        {ok, Protocol} ->
+            Parent ! {beamai_mcp_http, self(), ready, {ok, Protocol}},
+            worker_loop(Parent, ParentMonitor, ConnPid, queue:new());
+        {error, Reason} ->
+            gun:close(ConnPid),
+            Parent ! {beamai_mcp_http, self(), ready,
+                      {error, {connection_failed, Reason}}},
+            worker_wait_parent_down(ParentMonitor)
+    end;
+worker_wait_up(Parent, ParentMonitor, {error, Reason}, _Timeout) ->
+    Parent ! {beamai_mcp_http, self(), ready, {error, {open_failed, Reason}}},
+    worker_wait_parent_down(ParentMonitor).
+
+worker_wait_parent_down(Monitor) ->
+    receive
+        {'DOWN', Monitor, process, _, _} -> ok
+    end.
+
+%% @private Gun owner 主循环
+worker_loop(Parent, ParentMonitor, ConnPid, EventQueue) ->
+    receive
+        {'DOWN', ParentMonitor, process, _, _} ->
+            gun:close(ConnPid);
+        {beamai_mcp_http, close} ->
+            gun:close(ConnPid);
+        {beamai_mcp_http, Parent, Tag, {post, Path, Headers, Body}} ->
+            StreamRef = gun:post(ConnPid, Path, Headers, Body),
+            Parent ! {beamai_mcp_http, self(), Tag, {sent, StreamRef}},
+            worker_loop(Parent, ParentMonitor, ConnPid, EventQueue);
+        {beamai_mcp_http, cancel, StreamRef} ->
+            gun:cancel(ConnPid, StreamRef),
+            worker_loop(Parent, ParentMonitor, ConnPid, EventQueue);
+        {beamai_mcp_http, Parent, Tag, {recv, Wait}} ->
+            case queue:out(EventQueue) of
+                {{value, Event}, RestQueue} ->
+                    Parent ! {beamai_mcp_http, self(), Tag, {event, Event}},
+                    worker_loop(Parent, ParentMonitor, ConnPid, RestQueue);
+                {empty, _} ->
+                    receive
+                        GunEvent when element(1, GunEvent) =:= gun_response;
+                                      element(1, GunEvent) =:= gun_data;
+                                      element(1, GunEvent) =:= gun_error;
+                                      element(1, GunEvent) =:= gun_down ->
+                            Parent ! {beamai_mcp_http, self(), Tag,
+                                      {event, GunEvent}},
+                            worker_loop(Parent, ParentMonitor, ConnPid,
+                                        EventQueue)
+                    after Wait ->
+                        Parent ! {beamai_mcp_http, self(), Tag, timeout},
+                        worker_loop(Parent, ParentMonitor, ConnPid, EventQueue)
+                    end
             end;
-        {gun_response, ConnPid, StreamRef, nofin, Status, _Headers} ->
-            {error, {http_error, Status}};
+        Message when element(1, Message) =:= gun_response;
+                     element(1, Message) =:= gun_data;
+                     element(1, Message) =:= gun_error;
+                     element(1, Message) =:= gun_down ->
+            worker_loop(Parent, ParentMonitor, ConnPid,
+                        queue:in(Message, EventQueue))
+    end.
 
-        {gun_error, ConnPid, StreamRef, Reason} ->
-            {error, {gun_error, Reason}};
-        {gun_error, ConnPid, Reason} ->
-            {error, {gun_error, Reason}}
-    after Timeout ->
-        gun:cancel(ConnPid, StreamRef),
+%% @private 读取由 worker 转发来的当前请求事件
+-spec receive_response(timeout(), state()) ->
+    {ok, binary(), state()} | {error, term()}.
+receive_response(Timeout, State) ->
+    case receive_gun_event(Timeout, State) of
+        {ok, Event, NewState} ->
+            handle_gun_event(Event, NewState);
+        {error, _} = Error -> Error
+    end.
+
+-spec receive_gun_event(timeout(), state()) ->
+    {ok, tuple(), state()} | {error, term()}.
+receive_gun_event(Timeout, #http_gun_state{worker = Worker,
+                                           worker_monitor = Monitor,
+                                           stream_ref = _StreamRef} = State) ->
+    Tag = make_ref(),
+    Worker ! {beamai_mcp_http, self(), Tag, {recv, Timeout}},
+    receive
+        {beamai_mcp_http, Worker, Tag, {event, Event}} ->
+            {ok, Event, State};
+        {beamai_mcp_http, Worker, Tag, timeout} ->
+            {error, timeout};
+        {'DOWN', Monitor, process, Worker, Reason} ->
+            {error, {worker_down, Reason}}
+    after Timeout + 1 ->
         {error, timeout}
     end.
 
-%% @private 接收 JSON 响应
--spec receive_json_response(pid(), reference(), timeout(), state()) ->
+-spec handle_gun_event(tuple(), state()) ->
     {ok, binary(), state()} | {error, term()}.
-receive_json_response(ConnPid, StreamRef, Timeout, State) ->
-    receive_json_body(ConnPid, StreamRef, <<>>, Timeout, State).
+handle_gun_event({gun_response, _Worker, StreamRef, fin, Status, _Headers}, State)
+  when Status >= 200, Status < 300 ->
+    _ = StreamRef,
+    {ok, <<>>, clear_request(State)};
+handle_gun_event({gun_response, _Worker, _StreamRef, nofin, Status, Headers}, State)
+  when Status >= 200, Status < 300 ->
+    SessionId = beamai_mcp_types:get_header(Headers, <<"mcp-session-id">>),
+    BaseState = case SessionId of
+        undefined -> State;
+        _ -> State#http_gun_state{session_id = SessionId}
+    end,
+    ContentType = beamai_mcp_types:get_header(Headers, <<"content-type">>),
+    NewState = BaseState#http_gun_state{
+        response_is_sse = is_sse_content_type(ContentType)
+    },
+    receive_response(remaining_timeout(NewState), NewState);
+handle_gun_event({gun_response, _Worker, _StreamRef, _Fin, Status, _Headers}, State) ->
+    cancel_request(State),
+    {error, {http_error, Status}};
+handle_gun_event({gun_data, _Worker, _StreamRef, fin, Data}, State) ->
+    append_data(Data, clear_request(State));
+handle_gun_event({gun_data, _Worker, _StreamRef, nofin, Data}, State) ->
+    append_data(Data, State);
+handle_gun_event({gun_error, _Worker, _StreamRef, Reason}, State) ->
+    clear_request(State),
+    {error, {gun_error, Reason}};
+handle_gun_event({gun_error, _Worker, Reason}, State) ->
+    clear_request(State),
+    {error, {gun_error, Reason}};
+handle_gun_event({gun_down, _Worker, _StreamRef, Reason}, State) ->
+    clear_request(State),
+    {error, {connection_closed, Reason}}.
 
--spec receive_json_body(pid(), reference(), binary(), timeout(), state()) ->
-    {ok, binary(), state()} | {error, term()}.
-receive_json_body(ConnPid, StreamRef, Acc, Timeout, State) ->
-    receive
-        {gun_data, ConnPid, StreamRef, fin, Data} ->
-            {ok, <<Acc/binary, Data/binary>>, State#http_gun_state{stream_ref = undefined}};
-        {gun_data, ConnPid, StreamRef, nofin, Data} ->
-            receive_json_body(ConnPid, StreamRef, <<Acc/binary, Data/binary>>, Timeout, State);
-        {gun_error, ConnPid, StreamRef, Reason} ->
-            {error, {gun_error, Reason}}
-    after Timeout ->
-        gun:cancel(ConnPid, StreamRef),
-        {error, timeout}
+append_data(Data, #http_gun_state{buffer = Buffer, max_body = MaxBody} = State) ->
+    NewBuffer = <<Buffer/binary, Data/binary>>,
+    case byte_size(NewBuffer) > MaxBody of
+        true ->
+            cancel_request(State),
+            {error, response_too_large};
+        false ->
+            receive_sse_data(NewBuffer, State#http_gun_state{buffer = NewBuffer})
     end.
 
-%% @private 接收 SSE 响应
--spec receive_sse_response(pid(), reference(), timeout(), state()) ->
-    {ok, binary(), state()} | {error, term()}.
-receive_sse_response(ConnPid, StreamRef, Timeout, #http_gun_state{buffer = Buffer} = State) ->
-    receive
-        {gun_data, ConnPid, StreamRef, fin, Data} ->
-            %% 处理剩余数据
-            FinalBuffer = <<Buffer/binary, Data/binary>>,
-            {_Remaining, Events} = beamai_sse:parse(FinalBuffer),
-            Messages = extract_messages(Events),
-            case Messages of
-                [Msg | Rest] ->
-                    {ok, Msg, State#http_gun_state{
-                        stream_ref = undefined,
-                        buffer = <<>>,
-                        message_queue = Rest
-                    }};
-                [] ->
-                    {error, no_message}
+%% @private JSON 与 SSE 响应体都经这里累积；只有 SSE 会被提前分帧。
+-spec receive_sse_data(binary(), state()) -> {ok, binary(), state()} | {error, term()}.
+receive_sse_data(Buffer, #http_gun_state{response_is_sse = false} = State) ->
+    case State#http_gun_state.stream_ref of
+        undefined -> {ok, Buffer, State};
+        _ -> receive_response(remaining_timeout(State), State)
+    end;
+receive_sse_data(Buffer, State) ->
+    {Remaining, Events} = parse_sse(Buffer),
+    Messages = extract_messages(Events),
+    case Messages of
+        [Msg | Rest] ->
+            {ok, Msg, State#http_gun_state{
+                buffer = Remaining,
+                message_queue = State#http_gun_state.message_queue ++ Rest
+            }};
+        [] when State#http_gun_state.stream_ref =:= undefined ->
+            case Buffer of
+                <<>> -> {error, no_pending_request};
+                _ -> {error, no_message}
             end;
-        {gun_data, ConnPid, StreamRef, nofin, Data} ->
-            NewBuffer = <<Buffer/binary, Data/binary>>,
-            {Remaining, Events} = beamai_sse:parse(NewBuffer),
-            Messages = extract_messages(Events),
-            case Messages of
-                [Msg | Rest] ->
-                    {ok, Msg, State#http_gun_state{
-                        buffer = Remaining,
-                        message_queue = Rest
-                    }};
-                [] ->
-                    receive_sse_response(ConnPid, StreamRef, Timeout,
-                                         State#http_gun_state{buffer = Remaining})
-            end;
-        {gun_error, ConnPid, StreamRef, Reason} ->
-            {error, {gun_error, Reason}}
-    after Timeout ->
-        gun:cancel(ConnPid, StreamRef),
-        {error, timeout}
+        [] ->
+            NewState = State#http_gun_state{buffer = Remaining},
+            receive_response(remaining_timeout(NewState), NewState)
     end.
+
+clear_request(State) ->
+    State#http_gun_state{stream_ref = undefined, deadline = undefined}.
+
+cancel_request(#http_gun_state{worker = Worker, stream_ref = StreamRef}) ->
+    case is_pid(Worker) andalso is_reference(StreamRef) of
+        true -> Worker ! {beamai_mcp_http, cancel, StreamRef};
+        false -> ok
+    end.
+
+remaining_timeout(#http_gun_state{deadline = undefined}) -> 0;
+remaining_timeout(#http_gun_state{nonblocking = true}) -> 0;
+remaining_timeout(#http_gun_state{deadline = Deadline}) ->
+    max(0, Deadline - erlang:monotonic_time(millisecond)).
+
+%% @private 显式 TLS 默认值；用户传入 tls_opts 时原样透传。
+-spec tls_opts(binary(), tcp | tls, map()) -> [term()].
+tls_opts(_Host, tcp, _Config) -> [];
+tls_opts(Host, tls, Config) ->
+    case maps:get(tls_opts, Config, undefined) of
+        Opts when is_list(Opts) -> Opts;
+        undefined -> default_tls_opts(Host)
+    end.
+
+default_tls_opts(Host) ->
+    [
+        {verify, verify_peer},
+        {cacerts, public_key:cacerts_get()},
+        {server_name_indication, binary_to_list(Host)},
+        {customize_hostname_check,
+         [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]}
+    ].
 
 %% @private 获取响应头
 
@@ -327,6 +515,67 @@ receive_sse_response(ConnPid, StreamRef, Timeout, #http_gun_state{buffer = Buffe
 is_sse_content_type(undefined) -> false;
 is_sse_content_type(ContentType) ->
     binary:match(ContentType, <<"text/event-stream">>) =/= nomatch.
+
+%% @private JSON-RPC notification does not carry an id; Streamable HTTP
+%% returns an HTTP acknowledgement which must be consumed before reusing
+%% the HTTP/2 connection for another request.
+-spec is_jsonrpc_notification(binary()) -> boolean().
+is_jsonrpc_notification(Message) ->
+    case beamai_mcp_jsonrpc:decode(Message) of
+        {ok, #{<<"method">> := _Method} = Decoded} ->
+            not is_map_key(<<"id">>, Decoded);
+        _ ->
+            false
+    end.
+
+-spec drain_notification_response(timeout(), state()) ->
+    {ok, state()} | {error, term()}.
+drain_notification_response(Timeout, State) ->
+    case receive_response(Timeout, State) of
+        {ok, _Response, DoneState} ->
+            {ok, DoneState};
+        {error, no_pending_request} ->
+            %% 上一个请求可能留下尾部 fin；继续等真正的 HTTP 通知确认。
+            drain_notification_response(Timeout, State);
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% beamai_sse:parse/1 目前按 LF 分帧；远端服务器普遍使用 CRLF。
+%% HTTP transport 有独立的最小解析器，避免把整条未完成事件永久留在 buffer。
+-spec parse_sse(binary()) -> {binary(), [map()]}.
+parse_sse(Data) ->
+    Candidates = [{binary:match(Data, <<"\r\n\r\n">>), 4},
+                  {binary:match(Data, <<"\n\n">>), 2}],
+    case lists:filtermap(fun({M, _}) when M =:= undefined; M =:= nomatch -> false;
+                            ({{Pos, _}, Len}) -> {true, {Pos, Len}}
+                         end, Candidates) of
+        [] -> {Data, []};
+        Matches ->
+            {Pos, Len} = lists:min(Matches),
+            Block = binary:part(Data, 0, Pos),
+            Rest = binary:part(Data, Pos + Len, byte_size(Data) - Pos - Len),
+            {Rest2, Events} = parse_sse(Rest),
+            {Rest2, [parse_sse_event(Block) | Events]}
+    end.
+
+parse_sse_event(Block) ->
+    Lines = binary:split(Block, <<"\n">>, [global]),
+    lists:foldl(fun(Line0, Acc) ->
+                    Line = string:trim(Line0, trailing, "\r"),
+                    case Line of
+                        <<"event:", Value/binary>> ->
+                            Acc#{event => string:trim(Value)};
+                        <<"data:", Value/binary>> ->
+                            Data = string:trim(Value),
+                            case Acc of
+                                #{data := Old} -> Acc#{data => <<Old/binary, "\n", Data/binary>>};
+                                _ -> Acc#{data => Data}
+                            end;
+                        _ ->
+                            Acc
+                    end
+                end, #{}, Lines).
 
 %% @private 从 SSE 事件中提取消息
 -spec extract_messages([map()]) -> [binary()].

@@ -54,13 +54,19 @@ test_basic_conversion() ->
     %% 验证字段
     ?assertEqual(<<"test_tool">>, maps:get(name, AgentTool)),
     ?assertEqual(<<"A test tool">>, maps:get(description, AgentTool)),
-    ?assert(is_map(maps:get(parameters, AgentTool))),
+    Parameters = maps:get(parameters, AgentTool),
+    ?assertEqual(#{type => string, required => false},
+                 maps:get(<<"arg1">>, Parameters)),
+    %% 回归：转换结果必须能直接进入 beamai_tool 的 schema 构建。
+    ?assertMatch(#{parameters := #{type := object,
+                                   properties := #{<<"arg1">> := #{type := string}}}},
+                 beamai_tool:to_tool_spec(AgentTool)),
     ?assert(is_function(maps:get(handler, AgentTool))),
 
     %% 测试 handler
     Handler = maps:get(handler, AgentTool),
-    Result = Handler(#{<<"arg1">> => <<"value">>}),
-    ?assertEqual(<<"Result: value">>, Result),
+    ?assertEqual({ok, <<"Result: value">>},
+                 Handler(#{<<"arg1">> => <<"value">>})),
 
     ok.
 
@@ -116,8 +122,7 @@ test_successful_handler() ->
     AgentHandler = beamai_mcp_adapter:adapt_handler(McpHandler),
 
     %% 调用
-    Result = AgentHandler(#{}),
-    ?assertEqual(<<"Success">>, Result),
+    ?assertEqual({ok, <<"Success">>}, AgentHandler(#{})),
 
     ok.
 
@@ -131,8 +136,8 @@ test_error_handler() ->
     AgentHandler = beamai_mcp_adapter:adapt_handler(McpHandler),
 
     %% 调用
-    Result = AgentHandler(#{}),
-    ?assertEqual(<<"Error: Something went wrong">>, Result),
+    ?assertEqual({error, <<"Error: Something went wrong">>},
+                 AgentHandler(#{})),
 
     ok.
 
@@ -150,8 +155,7 @@ test_multiple_contents() ->
     AgentHandler = beamai_mcp_adapter:adapt_handler(McpHandler),
 
     %% 调用
-    Result = AgentHandler(#{}),
-    ?assertEqual(<<"First\nSecond">>, Result),
+    ?assertEqual({ok, <<"First\nSecond">>}, AgentHandler(#{})),
 
     ok.
 

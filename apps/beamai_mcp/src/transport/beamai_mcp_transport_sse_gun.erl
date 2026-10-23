@@ -55,6 +55,7 @@
     post_port :: pos_integer() | undefined,
     post_path :: binary() | undefined,
     post_transport :: tcp | tls | undefined,
+    tls_opts = [] :: [term()],
     %% 消息队列
     message_queue = [] :: [binary()],
     %% SSE 解析缓冲区
@@ -84,7 +85,8 @@ connect(#{url := Url} = Config) ->
             GunOpts = #{
                 connect_timeout => Timeout,
                 transport => Transport,
-                protocols => [http]
+                protocols => [http2, http],
+                tls_opts => tls_opts(Host, Transport, Config)
             },
             case gun:open(binary_to_list(Host), Port, GunOpts) of
                 {ok, ConnPid} ->
@@ -103,7 +105,8 @@ connect(#{url := Url} = Config) ->
                                 sse_stream = StreamRef,
                                 sse_url = Url,
                                 headers = Headers,
-                                timeout = Timeout
+                                timeout = Timeout,
+                                tls_opts = tls_opts(Host, Transport, Config)
                             },
                             %% 等待 endpoint 事件
                             wait_for_endpoint(State, Timeout);
@@ -328,6 +331,24 @@ resolve_uri(Uri, BaseUrl) ->
             end
     end.
 
+%% @private 显式 TLS 默认值；用户传入 tls_opts 时原样透传。
+-spec tls_opts(binary(), tcp | tls, map()) -> [term()].
+tls_opts(_Host, tcp, _Config) -> [];
+tls_opts(Host, tls, Config) ->
+    case maps:get(tls_opts, Config, undefined) of
+        Opts when is_list(Opts) -> Opts;
+        undefined -> default_tls_opts(Host)
+    end.
+
+default_tls_opts(Host) ->
+    [
+        {verify, verify_peer},
+        {cacerts, public_key:cacerts_get()},
+        {server_name_indication, binary_to_list(Host)},
+        {customize_hostname_check,
+         [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]}
+    ].
+
 %% @private 确保 POST 连接存在
 -spec ensure_post_connection(state()) -> {ok, state()} | {error, term()}.
 ensure_post_connection(#sse_gun_state{post_conn = Conn} = State)
@@ -343,11 +364,13 @@ ensure_post_connection(State) ->
 -spec create_post_connection(state()) -> {ok, state()} | {error, term()}.
 create_post_connection(#sse_gun_state{post_host = Host, post_port = Port,
                                        post_transport = Transport,
-                                       timeout = Timeout} = State) ->
+                                       timeout = Timeout,
+                                       tls_opts = TlsOpts} = State) ->
     GunOpts = #{
         connect_timeout => Timeout,
         transport => Transport,
-        protocols => [http2, http]
+        protocols => [http2, http],
+        tls_opts => TlsOpts
     },
     case gun:open(binary_to_list(Host), Port, GunOpts) of
         {ok, ConnPid} ->
