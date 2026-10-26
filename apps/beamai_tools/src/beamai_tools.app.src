@@ -1,6 +1,6 @@
 {application, beamai_tools, [
     {description, "BeamAI Tools System - Tools, Middleware, and Tool Modules"},
-    {vsn, "2.0.1"},
+    {vsn, "2.1.0"},
     {registered, []},
     {applications, [kernel, stdlib, beamai_core, beamai_llm]},
     {env, []},

@@ -29,7 +29,8 @@
     send/2,
     recv/2,
     close/1,
-    is_connected/1
+    is_connected/1,
+    set_protocol_version/2
 ]).
 
 %% 额外 API
@@ -58,6 +59,7 @@
     headers = [] :: [{binary(), binary()}],
     timeout :: pos_integer(),
     session_id :: binary() | undefined,
+    protocol_version :: binary() | undefined,
     %% 当前请求的流引用与请求级截止时间
     stream_ref :: reference() | undefined,
     deadline :: integer() | undefined,
@@ -69,6 +71,7 @@
     message_queue = [] :: [binary()],
     %% 响应体保护上限
     max_body = ?MCP_HTTP_MAX_BODY :: pos_integer(),
+    error_response :: {pos_integer(), binary()} | undefined,
     %% 是否已连接
     connected = false :: boolean()
 }).
@@ -85,6 +88,7 @@ connect(#{url := Url} = Config) ->
     Headers = maps:get(headers, Config, []),
     Timeout = maps:get(timeout, Config, 30000),
     SessionId = maps:get(session_id, Config, undefined),
+    ProtocolVersion = maps:get(protocol_version, Config, undefined),
     MaxBody = maps:get(max_body, Config, ?MCP_HTTP_MAX_BODY),
 
     %% 解析 URL
@@ -110,6 +114,7 @@ connect(#{url := Url} = Config) ->
                         headers = Headers,
                         timeout = Timeout,
                         session_id = SessionId,
+                        protocol_version = ProtocolVersion,
                         max_body = MaxBody,
                         connected = true
                     },
@@ -127,10 +132,12 @@ connect(_) ->
 -spec send(binary(), state()) -> {ok, state()} | {error, term()}.
 send(Message, #http_gun_state{worker = Worker, path = Path,
                               headers = Headers, session_id = SessionId,
+                              protocol_version = ProtocolVersion,
                               worker_monitor = Monitor,
                               timeout = Timeout} = State) ->
     %% 构建请求头
-    RequestHeaders = build_request_headers(Headers, SessionId),
+    RequestHeaders = build_request_headers(Headers, SessionId,
+                                           ProtocolVersion),
     Tag = make_ref(),
     Worker ! {beamai_mcp_http, self(), Tag, {post, Path, RequestHeaders, Message}},
     receive
@@ -214,6 +221,11 @@ close(#http_gun_state{worker = Worker, worker_monitor = Monitor}) ->
 is_connected(#http_gun_state{connected = Connected, worker = Worker}) ->
     Connected andalso is_pid(Worker) andalso is_process_alive(Worker).
 
+%% @doc 记录 initialize 协商出的协议版本，供后续 HTTP 请求头使用。
+-spec set_protocol_version(binary(), state()) -> state().
+set_protocol_version(Version, State) ->
+    State#http_gun_state{protocol_version = Version}.
+
 %%====================================================================
 %% 额外 API
 %%====================================================================
@@ -268,17 +280,22 @@ ensure_binary(V) when is_binary(V) -> V;
 ensure_binary(V) when is_list(V) -> list_to_binary(V).
 
 %% @private 构建请求头
--spec build_request_headers([{binary(), binary()}], binary() | undefined) ->
+-spec build_request_headers([{binary(), binary()}], binary() | undefined,
+                            binary() | undefined) ->
     [{binary(), binary()}].
-build_request_headers(Headers, SessionId) ->
+build_request_headers(Headers, SessionId, ProtocolVersion) ->
     BaseHeaders = [
         {<<"content-type">>, <<"application/json">>},
         {<<"accept">>, <<"application/json, text/event-stream">>}
         | Headers
     ],
-    case SessionId of
+    HeadersWithSession = case SessionId of
         undefined -> BaseHeaders;
         _ -> [{<<"mcp-session-id">>, SessionId} | BaseHeaders]
+    end,
+    case ProtocolVersion of
+        undefined -> HeadersWithSession;
+        _ -> HeadersWithSession ++ [{<<"mcp-protocol-version">>, ProtocolVersion}]
     end.
 
 %% @private 启动 Gun owner 并等待连接就绪
@@ -356,6 +373,10 @@ worker_loop(Parent, ParentMonitor, ConnPid, EventQueue) ->
                     worker_loop(Parent, ParentMonitor, ConnPid, RestQueue);
                 {empty, _} ->
                     receive
+                        {'DOWN', ParentMonitor, process, _, _} ->
+                            gun:close(ConnPid);
+                        {beamai_mcp_http, close} ->
+                            gun:close(ConnPid);
                         GunEvent when element(1, GunEvent) =:= gun_response;
                                       element(1, GunEvent) =:= gun_data;
                                       element(1, GunEvent) =:= gun_error;
@@ -423,13 +444,40 @@ handle_gun_event({gun_response, _Worker, _StreamRef, nofin, Status, Headers}, St
         response_is_sse = is_sse_content_type(ContentType)
     },
     receive_response(remaining_timeout(NewState), NewState);
-handle_gun_event({gun_response, _Worker, _StreamRef, _Fin, Status, _Headers}, State) ->
-    cancel_request(State),
-    {error, {http_error, Status}};
+handle_gun_event({gun_response, _Worker, _StreamRef, fin, Status, _Headers}, State) ->
+    _ = cancel_request(State),
+    {error, {http_error, Status, <<>>}};
+handle_gun_event({gun_response, _Worker, _StreamRef, nofin, Status, _Headers}, State) ->
+    NewState = State#http_gun_state{
+        error_response = {Status, <<>>},
+        response_is_sse = false
+    },
+    receive_response(remaining_timeout(NewState), NewState);
 handle_gun_event({gun_data, _Worker, _StreamRef, fin, Data}, State) ->
-    append_data(Data, clear_request(State));
+    case State#http_gun_state.error_response of
+        {Status, Buffer} ->
+            _ = cancel_request(State),
+            {error, {http_error, Status, <<Buffer/binary, Data/binary>>}};
+        undefined ->
+            append_data(Data, clear_request(State))
+    end;
 handle_gun_event({gun_data, _Worker, _StreamRef, nofin, Data}, State) ->
-    append_data(Data, State);
+    case State#http_gun_state.error_response of
+        {Status, Buffer} ->
+            NewBuffer = <<Buffer/binary, Data/binary>>,
+            case byte_size(NewBuffer) > State#http_gun_state.max_body of
+                true ->
+                    cancel_request(State),
+                    {error, response_too_large};
+                false ->
+                    NewState = State#http_gun_state{
+                        error_response = {Status, NewBuffer}
+                    },
+                    receive_response(remaining_timeout(NewState), NewState)
+            end;
+        undefined ->
+            append_data(Data, State)
+    end;
 handle_gun_event({gun_error, _Worker, _StreamRef, Reason}, State) ->
     clear_request(State),
     {error, {gun_error, Reason}};
@@ -439,6 +487,7 @@ handle_gun_event({gun_error, _Worker, Reason}, State) ->
 handle_gun_event({gun_down, _Worker, _StreamRef, Reason}, State) ->
     clear_request(State),
     {error, {connection_closed, Reason}}.
+
 
 append_data(Data, #http_gun_state{buffer = Buffer, max_body = MaxBody} = State) ->
     NewBuffer = <<Buffer/binary, Data/binary>>,
@@ -477,7 +526,8 @@ receive_sse_data(Buffer, State) ->
     end.
 
 clear_request(State) ->
-    State#http_gun_state{stream_ref = undefined, deadline = undefined}.
+    State#http_gun_state{stream_ref = undefined, deadline = undefined,
+                         error_response = undefined}.
 
 cancel_request(#http_gun_state{worker = Worker, stream_ref = StreamRef}) ->
     case is_pid(Worker) andalso is_reference(StreamRef) of

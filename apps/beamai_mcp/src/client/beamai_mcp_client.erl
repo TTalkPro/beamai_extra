@@ -46,7 +46,9 @@
 
 -export([
     start_link/1,
-    stop/1
+    stop/1,
+    await_connected/1,
+    await_connected/2
 ]).
 
 %% 生命周期
@@ -124,6 +126,8 @@
     %% 请求追踪
     pending_requests = #{} :: #{term() => {pid(), reference()}},
     request_id = 1 :: pos_integer(),
+    awaiting_connect = [] :: [gen_statem:from()],
+    last_error :: term() | undefined,
     %% 超时配置
     init_timeout :: pos_integer(),
     default_timeout :: pos_integer(),
@@ -146,6 +150,18 @@ start_link(Config) ->
 -spec stop(pid()) -> ok.
 stop(Pid) ->
     gen_statem:stop(Pid).
+
+%% @doc 等待自动 initialize 完成
+%%
+%% `start_link/1' 保持异步语义；调用方可用本函数拿到连接失败的原始原因。
+-spec await_connected(pid()) -> ok | {error, term()}.
+await_connected(Pid) ->
+    await_connected(Pid, 30000).
+
+%% @doc 等待自动 initialize 完成（指定超时）
+-spec await_connected(pid(), timeout()) -> ok | {error, term()}.
+await_connected(Pid, Timeout) ->
+    gen_statem:call(Pid, await_connected, Timeout).
 
 %% @doc 手动初始化连接
 -spec initialize(pid()) -> ok | {error, term()}.
@@ -227,7 +243,7 @@ get_state(Pid) ->
     gen_statem:call(Pid, get_state).
 
 %% @doc 获取服务器能力
--spec get_capabilities(pid()) -> {ok, map()} | {error, not_connected}.
+-spec get_capabilities(pid()) -> {ok, map()} | {error, {not_connected, term()}}.
 get_capabilities(Pid) ->
     gen_statem:call(Pid, get_capabilities).
 
@@ -280,6 +296,11 @@ code_change(_Vsn, State, Data, _Extra) ->
 disconnected(enter, _OldState, Data) ->
     {keep_state, Data};
 
+disconnected({call, From}, await_connected, Data) ->
+    Reason = not_connected_reason(Data),
+    {keep_state, Data,
+     [{reply, From, {error, {connection_failed, Reason}}}]};
+
 disconnected({call, From}, initialize, Data) ->
     {next_state, connecting, Data, [{reply, From, ok}]};
 
@@ -287,7 +308,8 @@ disconnected({call, From}, get_state, Data) ->
     {keep_state, Data, [{reply, From, {ok, disconnected}}]};
 
 disconnected({call, From}, _, Data) ->
-    {keep_state, Data, [{reply, From, {error, not_connected}}]};
+    Reason = not_connected_reason(Data),
+    {keep_state, Data, [{reply, From, {error, {not_connected, Reason}}}]};
 
 %% 静默吞掉迟到的 info：从 connecting/connected 掉下来时，在途的
 %% send_after(100, recv_loop) 或传输层残留消息会追到这里——没有这条子句
@@ -320,7 +342,7 @@ connecting(state_timeout, connect, #data{config = Config} = Data) ->
             %% 注意不能往 disconnected armed state_timeout：那个状态没有
             %% state_timeout 子句，事件到达即 function_clause
             logger:warning("MCP transport connect failed: ~p", [Reason]),
-            {next_state, disconnected, Data}
+            disconnect_with_reason(Reason, Data)
     end;
 
 connecting(state_timeout, send_initialize, Data) ->
@@ -336,11 +358,11 @@ connecting(state_timeout, send_initialize, Data) ->
             {keep_state, NewData, [{state_timeout, Data#data.init_timeout, init_timeout}]};
         {error, Reason} ->
             logger:warning("MCP initialize send failed: ~p", [Reason]),
-            {next_state, disconnected, Data}
+            disconnect_with_reason(Reason, Data)
     end;
 
 connecting(state_timeout, init_timeout, Data) ->
-    {next_state, disconnected, Data};
+    disconnect_with_reason(init_timeout, Data);
 
 %% 轮询传输层读 initialize 响应（与 connected 的 recv_loop 同构；
 %% handle_incoming_message 会把响应转成 {response, Id, Msg} 投回本进程，
@@ -356,7 +378,7 @@ connecting(info, recv_loop, #data{transport_mod = Mod, transport_state = TState}
             {keep_state, Data};
         {error, Reason} ->
             logger:warning("MCP transport recv failed during init: ~p", [Reason]),
-            {next_state, disconnected, Data}
+            disconnect_with_reason(Reason, Data)
     end;
 
 connecting(info, {response, ReqId, Response}, #data{pending_requests = Pending} = Data) ->
@@ -368,17 +390,22 @@ connecting(info, {response, ReqId, Response}, #data{pending_requests = Pending} 
             case handle_initialize_response(Response, Data) of
                 {ok, NewData} ->
                     %% 发送 initialized 通知
-                    send_initialized_notification(NewData),
-                    {next_state, connected, NewData#data{
+                    ProtocolData = set_transport_protocol(NewData),
+                    send_initialized_notification(ProtocolData),
+                    {next_state, connected, ProtocolData#data{
                         pending_requests = maps:remove(ReqId, Pending)
                     }};
-                {error, _Reason} ->
-                    {next_state, disconnected, Data}
+                {error, Reason} ->
+                    disconnect_with_reason(Reason, Data)
             end
     end;
 
 connecting({call, From}, get_state, Data) ->
     {keep_state, Data, [{reply, From, {ok, connecting}}]};
+
+connecting({call, From}, await_connected, Data) ->
+    Waiting = [From | Data#data.awaiting_connect],
+    {keep_state, Data#data{awaiting_connect = Waiting}};
 
 connecting({call, From}, _, Data) ->
     {keep_state, Data, [{reply, From, {error, initializing}}]}.
@@ -390,7 +417,9 @@ connecting({call, From}, _, Data) ->
 connected(enter, _OldState, Data) ->
     %% 启动消息接收循环
     self() ! recv_loop,
-    {keep_state, Data};
+    %% 连接握手成功；connect 期间排队进来的 await_connected 现在放行。
+    Actions = [{reply, From, ok} || From <- Data#data.awaiting_connect],
+    {keep_state, Data#data{awaiting_connect = []}, Actions};
 
 connected(info, recv_loop, #data{transport_mod = Mod, transport_state = TState} = Data) ->
     %% 非阻塞接收
@@ -406,8 +435,8 @@ connected(info, recv_loop, #data{transport_mod = Mod, transport_state = TState} 
             %% 请求响应已消费完；尾部的空 fin 事件不是连接故障。
             erlang:send_after(100, self(), recv_loop),
             {keep_state, Data};
-        {error, _Reason} ->
-            {next_state, disconnected, Data}
+        {error, Reason} ->
+            disconnect_with_reason(Reason, Data)
     end;
 
 connected(info, {response, ReqId, Response}, #data{pending_requests = Pending} = Data) ->
@@ -422,6 +451,9 @@ connected(info, {response, ReqId, Response}, #data{pending_requests = Pending} =
 
 connected({call, From}, get_state, Data) ->
     {keep_state, Data, [{reply, From, {ok, connected}}]};
+
+connected({call, From}, await_connected, Data) ->
+    {keep_state, Data, [{reply, From, ok}]};
 
 connected({call, From}, get_capabilities, #data{server_capabilities = Caps} = Data) ->
     Result = case Caps of
@@ -504,6 +536,45 @@ handle_call_request(Method, Params, From, Data) ->
 build_cursor_params(undefined) -> #{};
 build_cursor_params(Cursor) -> #{<<"cursor">> => Cursor}.
 
+%% @private 降级前保留失败原因，并立刻回复所有在途调用/等待连接方。
+%%
+%% 过去这里只转 disconnected：调用方只看到 not_connected / initializing，
+%% HTTP 401、响应过大、连接被拒等原因只能翻日志；connected 下 recv 失败时
+%% pending_requests 更是一个都不回，所有调用都干等到自身超时。
+-spec disconnect_with_reason(term(), #data{}) ->
+    gen_statem:event_handler_result(atom()).
+disconnect_with_reason(Reason, Data) ->
+    #data{pending_requests = Pending, awaiting_connect = Awaiting} = Data,
+    Error = {error, {connection_failed, Reason}},
+    ReplyActions =
+        [{reply, From, Error} ||
+            {From, _Ref} <- maps:values(Pending), From =/= undefined] ++
+        [{reply, From, Error} || From <- Awaiting],
+    NewData = Data#data{
+        last_error = Reason,
+        pending_requests = #{},
+        awaiting_connect = []
+    },
+    {next_state, disconnected, NewData, ReplyActions}.
+
+%% @private disconnected 下的错误要带上历史原因，否则调用方只能拿到状态。
+not_connected_reason(#data{last_error = Reason}) ->
+    case Reason of
+        undefined -> unknown;
+        _ -> Reason
+    end.
+
+%% @private 把 initialize 协商后的版本交给支持该可选回调的传输层。
+set_transport_protocol(#data{transport_mod = Mod, transport_state = TState,
+                             protocol_version = Version} = Data) ->
+    case erlang:function_exported(Mod, set_protocol_version, 2) of
+        true ->
+            NewTState = Mod:set_protocol_version(Version, TState),
+            Data#data{transport_state = NewTState};
+        false ->
+            Data
+    end.
+
 %%====================================================================
 %% 内部函数 - 初始化
 %%====================================================================
@@ -523,7 +594,9 @@ send_initialize_request(#data{client_info = ClientInfo} = Data) ->
     case send_message(Message, Data) of
         {ok, NewData} ->
             {ok, NewData#data{
-                pending_requests = #{ReqId => {self(), make_ref()}},
+                %% 自动 initialize 没有发起 gen_statem:call 的调用方；
+                %% 断连时这个占位不能进入 reply actions。
+                pending_requests = #{ReqId => {undefined, make_ref()}},
                 request_id = Data#data.request_id + 1
             }};
         Error ->

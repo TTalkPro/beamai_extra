@@ -59,7 +59,12 @@
 %% 可选回调：检查连接状态
 -callback is_connected(State :: term()) -> boolean().
 
--optional_callbacks([is_connected/1]).
+%% Optional callback: HTTP transports carry the negotiated MCP protocol
+%% version in every request after initialize.
+-callback set_protocol_version(Version :: binary(), State :: term()) ->
+    NewState :: term().
+
+-optional_callbacks([is_connected/1, set_protocol_version/2]).
 
 %%====================================================================
 %% API 导出

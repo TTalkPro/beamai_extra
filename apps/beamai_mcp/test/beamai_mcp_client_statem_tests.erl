@@ -26,6 +26,9 @@ client_test_() ->
       fun list_tools_works_after_connect/0,
       fun call_tool_works_after_connect/0,
       fun transport_failure_does_not_crash/0,
+      fun transport_failure_reason_is_exposed/0,
+      fun await_connected_returns_ok/0,
+      fun recv_failure_replies_pending_call/0,
       fun mute_server_times_out_to_disconnected/0,
       fun late_recv_loop_does_not_crash_disconnected/0,
       fun initialize_on_connected_replies_instead_of_crashing/0,
@@ -72,6 +75,33 @@ transport_failure_does_not_crash() ->
     {ok, Pid} = beamai_mcp_client:start_link(#{transport => stdio}),
     timer:sleep(150),
     ?assert(is_process_alive(Pid)),
+    ?assertEqual({ok, disconnected}, beamai_mcp_client:get_state(Pid)),
+    stop(Pid).
+
+%% 回归：连接失败不能只转 disconnected；await_connected 和后续调用
+%% 都必须拿到 econnrefused。
+transport_failure_reason_is_exposed() ->
+    meck:expect(beamai_mcp_transport, create, fun(_) -> {error, econnrefused} end),
+    {ok, Pid} = beamai_mcp_client:start_link(#{transport => stdio}),
+    ?assertEqual({error, {connection_failed, econnrefused}},
+                 beamai_mcp_client:await_connected(Pid, 1000)),
+    ?assertEqual({error, {not_connected, econnrefused}},
+                 beamai_mcp_client:list_tools(Pid)),
+    stop(Pid).
+
+%% await_connected 的成功路径：start_link 保持异步，但调用方可显式等握手。
+await_connected_returns_ok() ->
+    Pid = start(),
+    ?assertEqual(ok, beamai_mcp_client:await_connected(Pid, 2000)),
+    stop(Pid).
+
+%% 回归：connected 下传输层读取失败时，pending call 不能干等到超时。
+recv_failure_replies_pending_call() ->
+    mock_transport(#{fail_on_call => 1}),
+    Pid = start(),
+    connected = wait_for_state(Pid, connected, 2000),
+    Result = beamai_mcp_client:call_tool(Pid, <<"mock_tool">>, #{}, 3000),
+    ?assertEqual({error, {connection_failed, transport_closed}}, Result),
     ?assertEqual({ok, disconnected}, beamai_mcp_client:get_state(Pid)),
     stop(Pid).
 

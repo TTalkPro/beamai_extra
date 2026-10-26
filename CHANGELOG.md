@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.1.0] - 2026-10-26
+
+### Added
+
+- `beamai_mcp_client:await_connected/1,2`：保持 `start_link/1` 异步语义的同时，
+  显式等待 initialize 完成并直接拿到连接/握手失败原因。
+- `beamai_mcp_transport` 新增可选 `set_protocol_version/2` 回调；HTTP 传输在
+  initialize 协商后为后续请求携带 `mcp-protocol-version`。
+
+### Fixed
+
+- MCP client 保留连接、initialize 和传输读取失败的原始原因；disconnected 后的调用
+  返回 `{error, {not_connected, Reason}}`，不再把具体错误降级成日志。
+- `connected` 下传输读取失败时，先回复所有 pending 调用方
+  `{error, {connection_failed, Reason}}`，再降级到 disconnected，避免调用方等满超时。
+- Streamable HTTP 非 2xx 响应在 `max_body` 保护下读取 body，错误返回
+  `{http_error, Status, Body}`；超过上限仍立即返回 `response_too_large`。
+- Gun owner 在嵌套等待中响应调用方退出和 close 请求，被取消的调用不再占住连接
+  直到响应或请求超时。
+
 ## [2.0.1] - 2026-10-23
 
 ### Fixed

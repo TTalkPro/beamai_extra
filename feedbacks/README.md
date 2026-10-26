@@ -22,6 +22,7 @@
 | [2026-09-04](2026-09-04-thread-read-surface-off-spec.md) | 线程只读面四处与 AG-UI 对不上：`GET /threads/:id` 忽略路径参数恒回整张表、记录用 `threadId` 而非 `id` 且缺 `name`/`createdAt`、`/messages` 404 而 `/info` 报 `inspect:true`、`/events` 的元素被包成 `{event,seq}` | happy | 🟡 会话抽屉实测一条都列不出（200 但 0 行） | ✅ 已修 |
 | [2026-09-04](2026-09-04-protocol-nits-three.md) | 三条小的：`STEP_FINISHED` 落在**未闭合的**消息/工具生命周期中间；`CUSTOM name:"interrupt"` 与 `outcome.interrupts` 重复一份；`/info` 没有 `multimodal` 能力格（缺席=不知道=关，附件入口不会出现） | happy | 🟢 不挡事 | ✅ 已修 |
 | [2026-10-22](2026-10-22-mcp-http-client-remote-servers.md) | `beamai_mcp_client` 连不上任何远端 streamable-HTTP MCP：轮询用 `recv(0)`，传输层 `after 0 -> gun:cancel` 把刚发出的 initialize 当场取消，迟到的 `gun_error badstate` 落进 `connecting/3`（无兜底 info 子句）⇒ **`function_clause` 崩进程**。顺带：`tls_opts` 无入口（今天靠 gun 2.x + OTP 27 的隐式默认才是验证的）；`beamai_mcp_adapter` 把原始 JSON Schema 塞进 `parameters`、handler 返回裸值，beamai_core 分别 `function_clause` / `case_clause` | beamai_muse | 🔴 远端 MCP 完全不可用，崩而不报错 | ✅ 已修 |
+| [2026-10-26](2026-10-26-mcp-client-swallows-errors.md) | 2.0.1 连通了，但出错时 `beamai_mcp_client` 只转 `disconnected`、原因只进日志；已连接后 HTTP 失败**不回复在途调用**，调用方干等到超时。另：gun owner 在 `recv` 嵌套 receive 里看不见调用方 `DOWN`，连接要等到响应/超时才关；`http_error` 丢响应体 | beamai_muse | 🟡 不崩，但不报错、只是慢 | ✅ 已修 |
 
 > 背景：happy（ClojureScript + UIx 的 AG-UI 客户端）2026-09-04 拿 `beamai_agui/1.1`
 > 做联调后端，逐页对着 CopilotKit 的参照实现比，也与另外两台第三方 AG-UI 运行时
