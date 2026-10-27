@@ -29,6 +29,7 @@ client_test_() ->
       fun transport_failure_reason_is_exposed/0,
       fun await_connected_returns_ok/0,
       fun recv_failure_replies_pending_call/0,
+      fun wait_result_keeps_transport_state/0,
       fun mute_server_times_out_to_disconnected/0,
       fun late_recv_loop_does_not_crash_disconnected/0,
       fun initialize_on_connected_replies_instead_of_crashing/0,
@@ -111,6 +112,16 @@ mute_server_times_out_to_disconnected() ->
     Pid = start(#{init_timeout => 300}),
     ?assertEqual(disconnected, wait_for_state(Pid, disconnected, 2000)),
     ?assert(is_process_alive(Pid)),
+    stop(Pid).
+
+%% 回归（2026-10-27）：传输层 {wait, NewState} 表示“本轮没拼出完整消息，
+%% 但 state 已经推进”。客户端要么保存它继续轮询，要么至少别把它当成
+%% 陌生返回值崩掉——这里用 wait_rounds 计数把它锁死。
+wait_result_keeps_transport_state() ->
+    mock_transport(#{wait_rounds => 5}),
+    Pid = start(),
+    ?assertEqual(ok, beamai_mcp_client:await_connected(Pid, 2000)),
+    ?assertMatch({ok, #{<<"tools">> := [_]}}, beamai_mcp_client:list_tools(Pid)),
     stop(Pid).
 
 %% 回归测试（缺陷 3）：掉到 disconnected 后，在途的 recv_loop 迟到消息

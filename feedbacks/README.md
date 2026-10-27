@@ -23,6 +23,7 @@
 | [2026-09-04](2026-09-04-protocol-nits-three.md) | 三条小的：`STEP_FINISHED` 落在**未闭合的**消息/工具生命周期中间；`CUSTOM name:"interrupt"` 与 `outcome.interrupts` 重复一份；`/info` 没有 `multimodal` 能力格（缺席=不知道=关，附件入口不会出现） | happy | 🟢 不挡事 | ✅ 已修 |
 | [2026-10-22](2026-10-22-mcp-http-client-remote-servers.md) | `beamai_mcp_client` 连不上任何远端 streamable-HTTP MCP：轮询用 `recv(0)`，传输层 `after 0 -> gun:cancel` 把刚发出的 initialize 当场取消，迟到的 `gun_error badstate` 落进 `connecting/3`（无兜底 info 子句）⇒ **`function_clause` 崩进程**。顺带：`tls_opts` 无入口（今天靠 gun 2.x + OTP 27 的隐式默认才是验证的）；`beamai_mcp_adapter` 把原始 JSON Schema 塞进 `parameters`、handler 返回裸值，beamai_core 分别 `function_clause` / `case_clause` | beamai_muse | 🔴 远端 MCP 完全不可用，崩而不报错 | ✅ 已修 |
 | [2026-10-26](2026-10-26-mcp-client-swallows-errors.md) | 2.0.1 连通了，但出错时 `beamai_mcp_client` 只转 `disconnected`、原因只进日志；已连接后 HTTP 失败**不回复在途调用**，调用方干等到超时。另：gun owner 在 `recv` 嵌套 receive 里看不见调用方 `DOWN`，连接要等到响应/超时才关；`http_error` 丢响应体 | beamai_muse | 🟡 不崩，但不报错、只是慢 | ✅ 已修 |
+| [2026-10-27](2026-10-27-mcp-http-recv-poll-drops-body-chunks.md) | 2.1.0 能连通了，但 `recv(0, _)` 每 100 ms 轮询**超时时把本轮已收到的响应体分块连同 state 一起丢掉**（gun 事件已被取走，不会重来）⇒ 分多块到达的大响应（约 40 KB 的 `tools/call`）永远拼不完整，交给客户端的是尾巴一段非法 JSON，调用方干等到 45 s 超时（80 次搜索 32 次挂）；SSE 半个事件同样丢。另：worker 转发事件不按 `StreamRef` 过滤，上个请求迟到的事件会被当成当前请求的 | beamai_muse | 🔴 大响应概率性永远读不到，不报错只超时 | ✅ 已修（2.1.1） |
 
 > 背景：happy（ClojureScript + UIx 的 AG-UI 客户端）2026-09-04 拿 `beamai_agui/1.1`
 > 做联调后端，逐页对着 CopilotKit 的参照实现比，也与另外两台第三方 AG-UI 运行时

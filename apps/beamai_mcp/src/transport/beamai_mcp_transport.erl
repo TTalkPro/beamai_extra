@@ -44,9 +44,18 @@
 %%
 %% @param Timeout 超时时间（毫秒）
 %% @param State 传输状态
-%% @returns {ok, Message, NewState} | {error, Reason}
+%%
+%% 返回 `{wait, NewState}' 表示“这一轮没有读到完整消息”，但 NewState 里
+%% 可能已经攒下了本次到达的分块（body 片段、半个 SSE 事件、半行 stdio）。
+%% 调用方**必须**保存 NewState 再继续轮询：底层事件（gun 事件、port 数据）
+%% 已经从队列里取走，不会再来第二次，丢掉 state 就等于丢掉已到手的字节。
+%%
+%% `{error, Reason}' 只用于真正失败的场景（连接断、worker 死、响应过大）。
+%%
+%% @returns {ok, Message, NewState} | {wait, NewState} | {error, Reason}
 -callback recv(Timeout :: timeout(), State :: term()) ->
     {ok, Message :: binary(), NewState :: term()} |
+    {wait, NewState :: term()} |
     {error, Reason :: term()}.
 
 %% @doc 关闭连接
@@ -145,8 +154,9 @@ send(Module, Message, State) ->
 %% @param Module 传输模块
 %% @param Timeout 超时
 %% @param State 传输状态
-%% @returns {ok, Message, NewState} | {error, Reason}
--spec recv(module(), timeout(), term()) -> {ok, binary(), term()} | {error, term()}.
+%% @returns {ok, Message, NewState} | {wait, NewState} | {error, Reason}
+-spec recv(module(), timeout(), term()) ->
+    {ok, binary(), term()} | {wait, term()} | {error, term()}.
 recv(Module, Timeout, State) ->
     Module:recv(Timeout, State).
 

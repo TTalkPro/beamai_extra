@@ -148,7 +148,11 @@ send(Message, #sse_gun_state{post_conn = _PostConn, post_path = _PostPath,
     end.
 
 %% @doc 接收消息
--spec recv(timeout(), state()) -> {ok, binary(), state()} | {error, term()}.
+%%
+%% `{wait, NewState}' 见 beamai_mcp_transport 行为文档：本轮没拼出完整事件，
+%% 但半截帧已经留在 NewState 的 buffer 里，调用方必须穿着它继续轮询。
+-spec recv(timeout(), state()) ->
+    {ok, binary(), state()} | {wait, state()} | {error, term()}.
 recv(_Timeout, #sse_gun_state{message_queue = [Msg | Rest]} = State) ->
     {ok, Msg, State#sse_gun_state{message_queue = Rest}};
 recv(Timeout, #sse_gun_state{sse_conn = Conn, sse_stream = Stream,
@@ -423,7 +427,7 @@ drain_response_body(Conn, StreamRef, Timeout) ->
 
 %% @private 接收 SSE 事件
 -spec receive_sse_events(pid(), reference(), binary(), timeout(), state()) ->
-    {ok, binary(), state()} | {error, term()}.
+    {ok, binary(), state()} | {wait, state()} | {error, term()}.
 receive_sse_events(Conn, Stream, Buffer, Timeout, State) ->
     receive
         {gun_data, Conn, Stream, fin, _Data} ->
@@ -444,7 +448,9 @@ receive_sse_events(Conn, Stream, Buffer, Timeout, State) ->
         {gun_error, Conn, Reason} ->
             {error, {gun_error, Reason}}
     after Timeout ->
-        {error, timeout}
+        %% 本轮没有新数据（或只到半帧）。把已积累的半帧交回调用方：
+        %% beamai_sse:parse 不会重复投递这些字节，丢掉就永远拼不出事件。
+        {wait, State#sse_gun_state{buffer = Buffer}}
     end.
 
 %% @private 从事件中提取消息

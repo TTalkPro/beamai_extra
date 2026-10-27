@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.1] - 2026-10-27
+
+### Fixed
+
+- MCP streamable-HTTP 传输在 `recv(0, _)` 非阻塞轮询超时时会丢掉本轮已经收到
+  的响应体分块，分多块到达的大响应（下游实测约 40 KB 的 `tools/call`）永远拼不
+  完整，调用方干等到超时。传输层 `recv/2` 契约新增 `{wait, NewState}`：本轮没有
+  完整消息但 state 已推进（body 片段、半个 SSE 事件、半行 stdio、响应头里的
+  session_id）时交回新 state，`beamai_mcp_client` 的两处轮询都保存后继续。
+  Stdio 与 SSE 传输的同类丢数据路径一并修正。
+- HTTP 传输按 `stream_ref` 过滤 gun 事件：不属于当前请求的迟到事件（上一个请求
+  被取消后的响应、`initialized` 通知的 HTTP 确认）被丢弃，不再冒充当前请求的回复。
+- `initialized` 通知的传输 state 不再被丢弃：握手进入 connected 时带上排空确认
+  后的 state，避免下一个请求读到通知的 HTTP 确认。
+
 ## [2.1.0] - 2026-10-26
 
 ### Added

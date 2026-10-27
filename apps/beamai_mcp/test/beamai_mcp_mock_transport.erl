@@ -13,6 +13,8 @@
 connect(Config) ->
     {ok, #{queue => [], mute => maps:get(mute, Config, false),
            fail_next_recv => false,
+           %% 前 N 次 recv 只交回半成品（{wait, NewState}），之后才有完整消息。
+           wait_rounds => maps:get(wait_rounds, Config, 0),
            fail_on_call => maps:get(fail_on_call, Config, 0),
            call_count => 0}}.
 
@@ -55,6 +57,11 @@ send(Message, #{queue := Q} = State) ->
             {ok, State}
     end.
 
+%% 传输层契约：{wait, NewState} = 本轮没有完整消息，但 NewState 里可能已经
+%% 攒下了分块，调用方必须保存它再轮询。丢 state 的客户端在这里会永远读不到
+%% wait_rounds 递减后的那条响应。
+recv(_Timeout, #{wait_rounds := N} = State) when N > 0 ->
+    {wait, State#{wait_rounds => N - 1}};
 recv(_Timeout, #{queue := [H | T]} = State) -> {ok, H, State#{queue => T}};
 recv(_Timeout, #{fail_next_recv := true} = _State) ->
     {error, transport_closed};

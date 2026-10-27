@@ -3,6 +3,10 @@
 %%%
 %%% 锁定 2026-10-26 下游反馈：非 2xx body 被丢弃、超过 max_body 的响应
 %%% 只慢不报、initialize 后缺少 mcp-protocol-version 请求头。
+%%%
+%%% 以及 2026-10-27 下游反馈：响应体分多块到达时，recv(0) 轮询在超时分支
+%%% 丢掉本轮已拼好的 buffer，于是大响应（约 40 KB 的 tools/call）永远拼不完整，
+%%% 调用方干等到超时；SSE 半个事件同理。
 %%% @end
 %%%-------------------------------------------------------------------
 -module(beamai_mcp_transport_http_gun_tests).
@@ -20,6 +24,14 @@ large_response_test_() ->
 protocol_header_test_() ->
     {setup, fun() -> start(raw_protocol) end, fun stop_listener/1,
      {with, [fun requests_after_initialize_carry_protocol_version/1]}}.
+
+chunked_json_test_() ->
+    {setup, fun() -> start(raw_chunked_json) end, fun stop_listener/1,
+     {with, [fun json_body_arriving_in_many_chunks_is_reassembled/1]}}.
+
+chunked_sse_test_() ->
+    {setup, fun() -> start(raw_chunked_sse) end, fun stop_listener/1,
+     {with, [fun sse_event_split_across_writes_is_reassembled/1]}}.
 
 http_error_includes_body({_Mode, Url}) ->
     {ok, Pid} = client(Url),
@@ -41,6 +53,27 @@ requests_after_initialize_carry_protocol_version({_Mode, Url}) ->
                  beamai_mcp_client:list_tools(Pid)),
     beamai_mcp_client:stop(Pid).
 
+%% 回归（2026-10-27）：~25 KB 的 JSON 响应分 7 次 write 送达，
+%% 每一块都必须在后续轮询之间留住，最后拼成一份合法响应。
+json_body_arriving_in_many_chunks_is_reassembled({_Mode, Url}) ->
+    Text = call_and_take_text(Url, <<"chunked-body-payload-"/utf8>>, 25200),
+    ?assertEqual(25200, byte_size(Text)).
+
+%% 同一条契约的 SSE 分支：半个事件（连结束空行都还没到）也不能丢。
+sse_event_split_across_writes_is_reassembled({_Mode, Url}) ->
+    Text = call_and_take_text(Url, <<"sse-half-event-"/utf8>>, 9000),
+    ?assertEqual(9000, byte_size(Text)).
+
+call_and_take_text(Url, ExpectPrefix, ExpectBytes) ->
+    {ok, Pid} = chunked_client(Url),
+    ok = beamai_mcp_client:await_connected(Pid, 10000),
+    {ok, #{<<"content">> := [#{<<"text">> := Text}]}} =
+        beamai_mcp_client:call_tool(Pid, <<"web_search">>, #{}, 10000),
+    beamai_mcp_client:stop(Pid),
+    ?assertEqual(ExpectBytes, byte_size(Text)),
+    ?assertEqual(ExpectPrefix, binary:part(Text, 0, byte_size(ExpectPrefix))),
+    Text.
+
 start(Mode) ->
     {ok, _} = application:ensure_all_started(cowboy),
     {ok, _} = application:ensure_all_started(gun),
@@ -60,6 +93,8 @@ stop_listener({Mode, _Url}) ->
 
 listener_name(raw_unauthorized) -> mcp_http_unauthorized_listener;
 listener_name(raw_large) -> mcp_http_large_listener;
+listener_name(raw_chunked_json) -> mcp_http_chunked_json_listener;
+listener_name(raw_chunked_sse) -> mcp_http_chunked_sse_listener;
 listener_name(raw_protocol) -> mcp_http_protocol_listener.
 
 client(Url) ->
@@ -69,4 +104,13 @@ client(Url) ->
         timeout => 2000,
         init_timeout => 2000,
         max_body => 1024
+    }).
+
+%% 分块响应用的客户端：body 上限放开，请求级截止时间给足流式发送的时间。
+chunked_client(Url) ->
+    beamai_mcp_client:start_link(#{
+        transport => http,
+        url => Url,
+        timeout => 10000,
+        init_timeout => 10000
     }).

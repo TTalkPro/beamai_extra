@@ -166,7 +166,11 @@ send(Message, #http_gun_state{worker = Worker, path = Path,
     end.
 
 %% @doc 接收响应
--spec recv(timeout(), state()) -> {ok, binary(), state()} | {error, term()}.
+%%
+%% `{wait, NewState}' = 这一轮没有完整消息，但 NewState 里可能已经存着
+%% 本轮到达的 body 分块／半个 SSE 事件，调用方必须穿着它继续轮询。
+-spec recv(timeout(), state()) ->
+    {ok, binary(), state()} | {wait, state()} | {error, term()}.
 recv(_Timeout, #http_gun_state{message_queue = [Msg | Rest]} = State) ->
     {ok, Msg, State#http_gun_state{message_queue = Rest}};
 recv(_Timeout, #http_gun_state{stream_ref = undefined}) ->
@@ -196,6 +200,8 @@ recv(Timeout, #http_gun_state{stream_ref = StreamRef, deadline = Deadline} = Sta
             cancel_request(State),
             {error, timeout};
         {_, 0} ->
+            %% 非阻塞：receive_response 内部会把 worker 队列里已经躺着的
+            %% 事件一次读干，只有队列真空了才交回 {wait, State}。
             receive_response(0, WaitState);
         _ ->
             receive_response(Wait, WaitState)
@@ -231,12 +237,14 @@ set_protocol_version(Version, State) ->
 %%====================================================================
 
 %% @doc 发送请求并同步等待响应
--spec request(binary(), state()) -> {ok, binary(), state()} | {error, term()}.
+-spec request(binary(), state()) ->
+    {ok, binary(), state()} | {wait, state()} | {error, term()}.
 request(Message, State) ->
     request(Message, State#http_gun_state.timeout, State).
 
 %% @doc 发送请求并同步等待响应（指定超时）
--spec request(binary(), timeout(), state()) -> {ok, binary(), state()} | {error, term()}.
+-spec request(binary(), timeout(), state()) ->
+    {ok, binary(), state()} | {wait, state()} | {error, term()}.
 request(Message, Timeout, State) ->
     {ok, SentState} = send(Message, State#http_gun_state{timeout = Timeout}),
     recv(Timeout, SentState).
@@ -400,11 +408,15 @@ worker_loop(Parent, ParentMonitor, ConnPid, EventQueue) ->
 
 %% @private 读取由 worker 转发来的当前请求事件
 -spec receive_response(timeout(), state()) ->
-    {ok, binary(), state()} | {error, term()}.
+    {ok, binary(), state()} | {wait, state()} | {error, term()}.
 receive_response(Timeout, State) ->
     case receive_gun_event(Timeout, State) of
         {ok, Event, NewState} ->
             handle_gun_event(Event, NewState);
+        %% 本轮没有新事件。这不一定是失败：非阻塞轮询下“已经收了半截、
+        %% 还没收完”是正常状态，必须把 state 交回调用方，否则本轮
+        %% 已并入 buffer 的分块（以及 session_id 等）随错误返回一起作废。
+        {error, timeout} -> {wait, State};
         {error, _} = Error -> Error
     end.
 
@@ -412,12 +424,17 @@ receive_response(Timeout, State) ->
     {ok, tuple(), state()} | {error, term()}.
 receive_gun_event(Timeout, #http_gun_state{worker = Worker,
                                            worker_monitor = Monitor,
-                                           stream_ref = _StreamRef} = State) ->
+                                           stream_ref = StreamRef} = State) ->
     Tag = make_ref(),
     Worker ! {beamai_mcp_http, self(), Tag, {recv, Timeout}},
     receive
+        %% 上一个请求迟到的事件：不属于当前 stream_ref 的直接丢弃，
+        %% 继续等当前请求的下一个事件（连接级事件没有 StreamRef，照常放行）。
         {beamai_mcp_http, Worker, Tag, {event, Event}} ->
-            {ok, Event, State};
+            case is_stale_event(Event, StreamRef) of
+                true -> receive_gun_event(Timeout, State);
+                false -> {ok, Event, State}
+            end;
         {beamai_mcp_http, Worker, Tag, timeout} ->
             {error, timeout};
         {'DOWN', Monitor, process, Worker, Reason} ->
@@ -426,8 +443,20 @@ receive_gun_event(Timeout, #http_gun_state{worker = Worker,
         {error, timeout}
     end.
 
+%% @private 事件是否属于别的请求。连接级事件（{gun_error, Conn, Reason}、
+%% gun_down）的第 3 元不是 stream reference，照常交给 handle_gun_event；
+%% 没有在途请求（stream_ref=undefined）时一律放行，维持原有的收尾行为。
+-spec is_stale_event(tuple(), reference() | undefined) -> boolean().
+is_stale_event(_Event, undefined) -> false;
+is_stale_event(Event, StreamRef) when tuple_size(Event) >= 3 ->
+    case element(3, Event) of
+        Ref when is_reference(Ref) -> Ref =/= StreamRef;
+        _ -> false
+    end;
+is_stale_event(_Event, _StreamRef) -> false.
+
 -spec handle_gun_event(tuple(), state()) ->
-    {ok, binary(), state()} | {error, term()}.
+    {ok, binary(), state()} | {wait, state()} | {error, term()}.
 handle_gun_event({gun_response, _Worker, StreamRef, fin, Status, _Headers}, State)
   when Status >= 200, Status < 300 ->
     _ = StreamRef,
@@ -500,7 +529,8 @@ append_data(Data, #http_gun_state{buffer = Buffer, max_body = MaxBody} = State) 
     end.
 
 %% @private JSON 与 SSE 响应体都经这里累积；只有 SSE 会被提前分帧。
--spec receive_sse_data(binary(), state()) -> {ok, binary(), state()} | {error, term()}.
+-spec receive_sse_data(binary(), state()) ->
+    {ok, binary(), state()} | {wait, state()} | {error, term()}.
 receive_sse_data(Buffer, #http_gun_state{response_is_sse = false} = State) ->
     case State#http_gun_state.stream_ref of
         undefined -> {ok, Buffer, State};
@@ -584,6 +614,11 @@ drain_notification_response(Timeout, State) ->
     case receive_response(Timeout, State) of
         {ok, _Response, DoneState} ->
             {ok, DoneState};
+        %% 通知发出去就算数。本轮没等到确认也要把推进后的 state 交回去
+        %% （session_id 之类可能就在已到达的响应头里）；剩下的确认留给
+        %% 下一次 recv，由 stream_ref 过滤掉。
+        {wait, WaitState} ->
+            {ok, WaitState};
         {error, no_pending_request} ->
             %% 上一个请求可能留下尾部 fin；继续等真正的 HTTP 通知确认。
             drain_notification_response(Timeout, State);

@@ -40,6 +40,10 @@
 
 -include("beamai_mcp.hrl").
 
+%% 传输层轮询间隔。recv(0) 只取“当前已到”的数据，
+%% 没拼完时靠这个间隔再来一轮。
+-define(MCP_RECV_POLL_INTERVAL, 100).
+
 %%====================================================================
 %% API 导出
 %%====================================================================
@@ -371,8 +375,14 @@ connecting(info, recv_loop, #data{transport_mod = Mod, transport_state = TState}
     case Mod:recv(0, TState) of
         {ok, Message, NewTState} ->
             handle_incoming_message(Message, Data#data{transport_state = NewTState});
+        %% 本轮没拼出完整消息，但传输层可能已经把响应分块收进了 NewTState。
+        %% 必须穿着它继续轮询：gun 事件/port 数据已被取走，不会再来第二次，
+        %% 回到调用前的 TState 等于把已到手的字节扔掉（分块越多越拼不完整）。
+        {wait, NewTState} ->
+            erlang:send_after(?MCP_RECV_POLL_INTERVAL, self(), recv_loop),
+            {keep_state, Data#data{transport_state = NewTState}};
         {error, timeout} ->
-            erlang:send_after(100, self(), recv_loop),
+            erlang:send_after(?MCP_RECV_POLL_INTERVAL, self(), recv_loop),
             {keep_state, Data};
         {error, no_pending_request} ->
             {keep_state, Data};
@@ -389,10 +399,12 @@ connecting(info, {response, ReqId, Response}, #data{pending_requests = Pending} 
             %% 处理 initialize 响应
             case handle_initialize_response(Response, Data) of
                 {ok, NewData} ->
-                    %% 发送 initialized 通知
+                    %% 发送 initialized 通知。返回的 state 必须穿下去：通知的
+                    %% 确认（202/200）就在里面，既不占用在途请求位，也不会让
+                    %% 下一个请求把这条迟到的确认当成自己的响应。
                     ProtocolData = set_transport_protocol(NewData),
-                    send_initialized_notification(ProtocolData),
-                    {next_state, connected, ProtocolData#data{
+                    NotifiedData = send_initialized_notification(ProtocolData),
+                    {next_state, connected, NotifiedData#data{
                         pending_requests = maps:remove(ReqId, Pending)
                     }};
                 {error, Reason} ->
@@ -427,13 +439,17 @@ connected(info, recv_loop, #data{transport_mod = Mod, transport_state = TState} 
         {ok, Message, NewTState} ->
             NewData = Data#data{transport_state = NewTState},
             handle_incoming_message(Message, NewData);
+        %% 同 connecting/3：半成品 state 也要穿线下去，否则大响应永远读不完。
+        {wait, NewTState} ->
+            erlang:send_after(?MCP_RECV_POLL_INTERVAL, self(), recv_loop),
+            {keep_state, Data#data{transport_state = NewTState}};
         {error, timeout} ->
             %% 继续循环
-            erlang:send_after(100, self(), recv_loop),
+            erlang:send_after(?MCP_RECV_POLL_INTERVAL, self(), recv_loop),
             {keep_state, Data};
         {error, no_pending_request} ->
             %% 请求响应已消费完；尾部的空 fin 事件不是连接故障。
-            erlang:send_after(100, self(), recv_loop),
+            erlang:send_after(?MCP_RECV_POLL_INTERVAL, self(), recv_loop),
             {keep_state, Data};
         {error, Reason} ->
             disconnect_with_reason(Reason, Data)
@@ -619,9 +635,16 @@ handle_initialize_response(_, _Data) ->
     {error, invalid_response}.
 
 %% @private 发送 initialized 通知
-send_initialized_notification(Data) ->
+%% 通知没有响应体，发送失败不阻断握手；返回穿过 state 的 Data 供调用方接续。
+-spec send_initialized_notification(#data{}) -> #data{}.
+send_initialized_notification(#data{transport_mod = Mod, transport_state = TState} = Data) ->
     Message = beamai_mcp_jsonrpc:encode_notification(?MCP_NOTIFY_INITIALIZED, #{}),
-    send_message(Message, Data).
+    case Mod:send(Message, TState) of
+        {ok, NewTState} -> Data#data{transport_state = NewTState};
+        {error, Reason} ->
+            logger:debug("MCP initialized notification failed: ~p", [Reason]),
+            Data
+    end.
 
 %% @private 发送请求
 send_request(Method, Params, From, Data) ->
@@ -661,7 +684,7 @@ handle_incoming_message(Message, Data) ->
             process_decoded_message(Decoded, Data);
         {error, _} ->
             %% 忽略无效消息
-            erlang:send_after(100, self(), recv_loop),
+            erlang:send_after(?MCP_RECV_POLL_INTERVAL, self(), recv_loop),
             {keep_state, Data}
     end.
 
@@ -670,15 +693,15 @@ process_decoded_message(#{<<"id">> := Id} = Msg, Data)
   when is_map_key(<<"result">>, Msg); is_map_key(<<"error">>, Msg) ->
     %% 这是响应
     self() ! {response, Id, Msg},
-    erlang:send_after(100, self(), recv_loop),
+    erlang:send_after(?MCP_RECV_POLL_INTERVAL, self(), recv_loop),
     {keep_state, Data};
 process_decoded_message(#{<<"method">> := Method} = Msg, Data) ->
     %% 这是通知或请求
     handle_notification(Method, maps:get(<<"params">>, Msg, #{}), Data),
-    erlang:send_after(100, self(), recv_loop),
+    erlang:send_after(?MCP_RECV_POLL_INTERVAL, self(), recv_loop),
     {keep_state, Data};
 process_decoded_message(_, Data) ->
-    erlang:send_after(100, self(), recv_loop),
+    erlang:send_after(?MCP_RECV_POLL_INTERVAL, self(), recv_loop),
     {keep_state, Data}.
 
 %% @private 处理通知

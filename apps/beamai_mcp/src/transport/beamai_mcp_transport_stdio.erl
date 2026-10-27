@@ -106,8 +106,9 @@ send(Message, #stdio_state{port = Port} = State) ->
 %%
 %% @param Timeout 超时时间
 %% @param State 状态
-%% @returns {ok, Message, NewState} | {error, Reason}
--spec recv(timeout(), state()) -> {ok, binary(), state()} | {error, term()}.
+%% @returns {ok, Message, NewState} | {wait, NewState} | {error, Reason}
+-spec recv(timeout(), state()) ->
+    {ok, binary(), state()} | {wait, state()} | {error, term()}.
 recv(Timeout, #stdio_state{port = Port, buffer = Buffer} = State) ->
     %% 先检查缓冲区是否有完整消息
     case extract_message(Buffer) of
@@ -197,7 +198,7 @@ extract_message(Buffer) ->
 
 %% @private 接收数据
 -spec receive_data(port(), binary(), timeout(), state()) ->
-    {ok, binary(), state()} | {error, term()}.
+    {ok, binary(), state()} | {wait, state()} | {error, term()}.
 receive_data(Port, Buffer, Timeout, State) ->
     receive
         {Port, {data, Data}} ->
@@ -213,5 +214,8 @@ receive_data(Port, Buffer, Timeout, State) ->
         {Port, eof} ->
             {error, eof}
     after Timeout ->
-        {error, timeout}
+        %% 和 HTTP 传输同一个坑：recv(0) 轮询超时不代表没收到东西。
+        %% 一行 JSON 分成两次 port 数据到达时，半行必须随 state 交回，
+        %% 否则调用方下一轮从空 buffer 重新开始，长响应永远拼不完整。
+        {wait, State#stdio_state{buffer = Buffer}}
     end.
